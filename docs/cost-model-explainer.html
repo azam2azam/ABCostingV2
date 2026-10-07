@@ -1,0 +1,564 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>VERITA Cost Model</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@75..125,500..800&family=Source+Sans+3:wght@400;600&family=JetBrains+Mono:wght@400;600&display=swap">
+<style>
+/* Layout: one reading column with wide exhibit panels; each section is one idea with one interactive exhibit. */
+:root {
+  --bg: #f3f6f8;
+  --panel: #ffffff;
+  --ink: #142028;
+  --ink-2: #4b5a66;
+  --line: #d6dee4;
+  --teal: #0b7a75;      /* money that reaches a patient */
+  --teal-soft: #d8efed;
+  --indigo: #3d4db7;    /* allocation stream */
+  --indigo-soft: #e1e4f7;
+  --amber: #b86b00;     /* named residuals */
+  --amber-soft: #f8ead3;
+  --red: #b3261e;
+  --display: "Archivo", "Arial Narrow", system-ui, sans-serif;
+  --body: "Source Sans 3", "Segoe UI", system-ui, sans-serif;
+  --mono: "JetBrains Mono", ui-monospace, Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
+  --bg: #0e151a; --panel: #151f26; --ink: #e6edf2; --ink-2: #9fb0bc; --line: #29363f;
+  --teal: #4cc3bb; --teal-soft: #12302f; --indigo: #8c98f0; --indigo-soft: #1d2346; --amber: #f0a94a; --amber-soft: #352610; --red: #ff8a80;
+  color-scheme: dark; } }
+:root[data-theme="dark"] {
+  --bg: #0e151a; --panel: #151f26; --ink: #e6edf2; --ink-2: #9fb0bc; --line: #29363f;
+  --teal: #4cc3bb; --teal-soft: #12302f; --indigo: #8c98f0; --indigo-soft: #1d2346; --amber: #f0a94a; --amber-soft: #352610; --red: #ff8a80;
+  color-scheme: dark; }
+
+* { box-sizing: border-box; }
+body { background: var(--bg); color: var(--ink); font: 17px/1.55 var(--body); }
+.wrap { max-width: 1080px; margin: 0 auto; padding-inline: 20px; padding-block: 40px 80px; }
+h1, h2, h3 { font-family: var(--display); font-stretch: 85%; text-wrap: balance; margin: 0; }
+h1 { font-size: clamp(34px, 6vw, 60px); font-weight: 800; line-height: 1.02; letter-spacing: -.01em; }
+h2 { font-size: clamp(24px, 3.4vw, 34px); font-weight: 750; margin-bottom: 10px; }
+h3 { font-size: 19px; font-weight: 700; font-stretch: 95%; }
+p { margin: 0 0 12px; max-width: 66ch; }
+.lede { font-size: 20px; color: var(--ink-2); max-width: 60ch; }
+.eyebrow { font: 600 12px/1 var(--mono); letter-spacing: .12em; text-transform: uppercase; color: var(--ink-2); }
+.mono, .num { font-family: var(--mono); font-variant-numeric: tabular-nums; }
+section { margin-top: 64px; display: grid; gap: 14px; }
+.panel { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 20px; min-width: 0; }
+.identity { font: 600 clamp(15px, 2.2vw, 20px)/1.4 var(--mono); padding: 14px 18px; border-left: 4px solid var(--teal); background: var(--panel); border-radius: 0 8px 8px 0; overflow-x: auto; }
+.identity b { color: var(--teal); } .identity i { color: var(--amber); font-style: normal; }
+nav.toc { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 22px; }
+nav.toc a { font: 600 13px var(--mono); color: var(--ink); text-decoration: none; border: 1px solid var(--line); padding: 6px 10px; border-radius: 999px; background: var(--panel); }
+nav.toc a:hover, nav.toc a:focus-visible { border-color: var(--teal); color: var(--teal); }
+:focus-visible { outline: 2px solid var(--teal); outline-offset: 2px; }
+.grid2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 420px), 1fr)); gap: 14px; }
+.scroll { overflow-x: auto; }
+button.chip, .tabs button { font: 600 14px var(--body); border: 1px solid var(--line); background: var(--panel); color: var(--ink); border-radius: 8px; padding: 8px 12px; cursor: pointer; }
+button.chip[aria-pressed="true"], .tabs button[aria-selected="true"] { background: var(--ink); color: var(--bg); border-color: var(--ink); }
+.tabs { display: flex; flex-wrap: wrap; gap: 6px; }
+.note { font-size: 15px; color: var(--ink-2); }
+.k { color: var(--ink-2); font-size: 14px; }
+.big { font: 700 26px/1.1 var(--mono); font-variant-numeric: tabular-nums; }
+.teal { color: var(--teal); } .indigo { color: var(--indigo); } .amber { color: var(--amber); } .red { color: var(--red); }
+
+/* Money flow */
+#flow svg { width: 100%; min-width: 760px; height: auto; display: block; }
+#flow text { fill: var(--ink); font-family: var(--body); font-size: 13px; }
+#flow .val { font-family: var(--mono); font-size: 12px; fill: var(--ink-2); }
+#flow .band { opacity: .55; cursor: pointer; transition: opacity .15s; }
+#flow .band:hover, #flow .band.on { opacity: .9; }
+#flow .node { cursor: pointer; }
+#flowInfo { min-height: 72px; }
+
+/* Levels */
+.levels { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.3fr); gap: 14px; }
+.ladder { display: grid; gap: 4px; }
+.ladder button { display: grid; grid-template-columns: 34px 1fr; gap: 10px; align-items: center; text-align: left; font: 600 15px var(--body); background: var(--panel); color: var(--ink); border: 1px solid var(--line); border-radius: 8px; padding: 9px 12px; cursor: pointer; }
+.ladder button .n { font: 700 14px var(--mono); color: var(--ink-2); }
+.ladder button[aria-pressed="true"] { border-color: var(--teal); background: var(--teal-soft); }
+@media (max-width: 720px) { .levels { grid-template-columns: 1fr; } }
+
+/* Stages */
+.stages { display: grid; grid-template-columns: repeat(11, minmax(0, 1fr)); gap: 4px; }
+.stages button { border: 1px solid var(--line); background: var(--panel); color: var(--ink); border-radius: 6px; padding: 8px 4px; cursor: pointer; font: 700 13px var(--mono); min-width: 0; }
+.stages button.money { border-bottom: 3px solid var(--teal); }
+.stages button[aria-pressed="true"] { background: var(--ink); color: var(--bg); }
+@media (max-width: 640px) { .stages { grid-template-columns: repeat(6, minmax(0, 1fr)); } }
+.moneyrow { display: flex; flex-wrap: wrap; gap: 24px; margin-top: 10px; }
+
+/* Calculators */
+.calc { display: grid; gap: 10px; }
+.calc label { display: grid; grid-template-columns: 1fr auto; gap: 4px 10px; font-size: 15px; align-items: center; }
+.calc input[type=range] { grid-column: 1 / -1; width: 100%; accent-color: var(--teal); }
+.calc output { font: 600 14px var(--mono); }
+.bar { height: 22px; display: flex; border-radius: 5px; overflow: hidden; background: var(--line); }
+.bar span { display: block; height: 100%; }
+.legend { display: flex; flex-wrap: wrap; gap: 14px; font-size: 14px; color: var(--ink-2); }
+.legend i { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 6px; vertical-align: middle; }
+table.t { border-collapse: collapse; width: 100%; font-size: 15px; }
+table.t th, table.t td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--line); vertical-align: top; }
+table.t th { font: 600 12px var(--mono); letter-spacing: .06em; text-transform: uppercase; color: var(--ink-2); }
+table.t td.num { text-align: right; white-space: nowrap; }
+
+/* Reciprocal */
+.recip { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; }
+.centre { border: 1px solid var(--line); border-radius: 8px; padding: 12px; background: var(--panel); }
+.centre .big { font-size: 20px; }
+
+/* Architecture */
+.arch svg { width: 100%; min-width: 680px; height: auto; display: block; }
+.arch .box { cursor: pointer; }
+.arch .box rect { fill: var(--panel); stroke: var(--line); stroke-width: 1.5; transition: stroke .15s; }
+.arch .box:hover rect, .arch .box.on rect { stroke: var(--teal); stroke-width: 2.5; }
+.arch .box text { fill: var(--ink); font-family: var(--body); font-size: 14px; font-weight: 600; }
+.arch .box .sub { font-size: 12px; font-weight: 400; fill: var(--ink-2); font-family: var(--mono); }
+.arch .edge { stroke: var(--ink-2); stroke-width: 1.4; fill: none; marker-end: url(#arrow); }
+.arch .tier { fill: var(--ink-2); font: 600 11px var(--mono); letter-spacing: .1em; }
+#archInfo ul { margin: 6px 0 0; padding-left: 18px; }
+footer { margin-top: 70px; font-size: 14px; color: var(--ink-2); border-top: 1px solid var(--line); padding-top: 16px; }
+@media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+</style>
+<style>body{margin:0}</style>
+</head>
+<body>
+
+
+<div class="wrap">
+  <header>
+    <div class="eyebrow">VERITA · hospital activity-based costing</div>
+    <h1 style="margin-top:12px">Every riyal of the ledger ends up in one of two places.</h1>
+    <p class="lede" style="margin-top:14px">Either it reaches a patient, or it lands in a named bucket that someone owns. This page walks through how the cost model gets it there, using the real August 2026 run for Northgate Specialist Hospital, Riyadh.</p>
+    <div class="identity" style="margin-top:18px">Σ GL postings = <b>Σ patient cost</b> + <i>Σ named residuals</i> + unexplained</div>
+    <nav class="toc" aria-label="Sections">
+      <a href="#flow-s">Money flow</a><a href="#levels-s">Nine levels</a><a href="#streams-s">Two streams</a><a href="#stages-s">Eleven stages</a>
+      <a href="#capacity-s">Capacity</a><a href="#allocation-s">Allocation</a><a href="#variance-s">Variance</a><a href="#residuals-s">Residuals</a><a href="#arch-s">Architecture</a>
+    </nav>
+  </header>
+
+  <!-- 1. Money flow -->
+  <section id="flow-s" aria-labelledby="flow-h">
+    <div class="eyebrow">1 · The whole picture</div>
+    <h2 id="flow-h">Where SAR 7.27 million went in August</h2>
+    <p>Money enters once, from the general ledger, and moves through cost pools to patients. Click any band to see what it is.</p>
+    <div class="panel scroll" id="flow"></div>
+    <div class="panel" id="flowInfo" aria-live="polite"><p class="note">Pick a band in the diagram above.</p></div>
+  </section>
+
+  <!-- 2. Levels -->
+  <section id="levels-s" aria-labelledby="levels-h">
+    <div class="eyebrow">2 · What the model can answer</div>
+    <h2 id="levels-h">Nine costing levels, each built on the one above</h2>
+    <p>A level is a real step in the arithmetic, not a different way of grouping the same rows. Each one reconciles to the level above it.</p>
+    <div class="levels">
+      <div class="ladder" id="ladder" role="group" aria-label="Costing levels"></div>
+      <div class="panel" id="levelInfo" aria-live="polite"></div>
+    </div>
+  </section>
+
+  <!-- 3. Streams -->
+  <section id="streams-s" aria-labelledby="streams-h">
+    <div class="eyebrow">3 · The central design decision</div>
+    <h2 id="streams-h">Two streams, and neither can create money</h2>
+    <p>Cost reaches a patient by exactly one route. Each route has its own limit, which is why the total can never grow on the way down.</p>
+    <div class="grid2">
+      <div class="panel" style="border-top:4px solid var(--teal)">
+        <h3 class="teal">Consumption</h3>
+        <p class="mono" style="margin-top:8px">measured quantity × effective rate</p>
+        <table class="t"><tbody>
+          <tr><th>Bounded by</th><td>the cost pools that pay for the resources</td></tr>
+          <tr><th>Evidence</th><td>a source transaction with a duration or a count</td></tr>
+          <tr><th>Fails as</th><td>a quantity nobody measured</td></tr>
+          <tr><th>Reported as</th><td>direct, or indirect when shared (equipment, rooms)</td></tr>
+          <tr><th>August</th><td class="num">SAR 4,835,313 to patients</td></tr>
+        </tbody></table>
+      </div>
+      <div class="panel" style="border-top:4px solid var(--indigo)">
+        <h3 class="indigo">Allocation</h3>
+        <p class="mono" style="margin-top:8px">pool ÷ driver volume × driver quantity</p>
+        <table class="t"><tbody>
+          <tr><th>Bounded by</th><td>the general ledger</td></tr>
+          <tr><th>Evidence</th><td>an approved, effective-dated rule</td></tr>
+          <tr><th>Fails as</th><td>a driver volume of zero</td></tr>
+          <tr><th>Reported as</th><td>overhead</td></tr>
+          <tr><th>August</th><td class="num">SAR 1,651,746 to patients</td></tr>
+        </tbody></table>
+      </div>
+    </div>
+    <p class="note">A pool belongs to one stream only, and the system works out which: a pool that pays for a resource is consumption, every other pool is allocated by rule (CR-4).</p>
+  </section>
+
+  <!-- 4. Stages -->
+  <section id="stages-s" aria-labelledby="stages-h">
+    <div class="eyebrow">4 · How a run works</div>
+    <h2 id="stages-h">Eleven stages, in strict order</h2>
+    <p>Each stage reads only from the stages before it and records the money that went in and came out. Where the two stop matching is where money went missing. Stages with a teal underline move money.</p>
+    <div class="stages" id="stages" role="group" aria-label="Run stages"></div>
+    <div class="panel" id="stageInfo" aria-live="polite"></div>
+  </section>
+
+  <!-- 5. Capacity -->
+  <section id="capacity-s" aria-labelledby="cap-h">
+    <div class="eyebrow">5 · Time-driven ABC</div>
+    <h2 id="cap-h">Idle capacity is priced, named, and kept away from patients</h2>
+    <p>A theatre running at 62% has a real cost. Charging it to the cases that did happen makes them look expensive for a reason that has nothing to do with them. Move the sliders to see the split.</p>
+    <div class="grid2">
+      <div class="panel calc">
+        <label for="capCost">Annual cost of the resource <output id="capCostO" class="mono"></output><input type="range" id="capCost" min="200000" max="3000000" step="10000" value="1200000"></label>
+        <label for="capTheo">Theoretical minutes a year <output id="capTheoO" class="mono"></output><input type="range" id="capTheo" min="100000" max="525600" step="1000" value="262800"></label>
+        <label for="capRatio">Practical ratio <output id="capRatioO" class="mono"></output><input type="range" id="capRatio" min="0.6" max="1" step="0.01" value="0.82"></label>
+        <label for="capUsed">Minutes used this month <output id="capUsedO" class="mono"></output><input type="range" id="capUsed" min="0" max="25000" step="100" value="11500"></label>
+      </div>
+      <div class="panel">
+        <div class="moneyrow">
+          <div><div class="k">Rate per minute</div><div class="big" id="capRate"></div></div>
+          <div><div class="k">Available this month (30 days)</div><div class="big" id="capAvail"></div></div>
+          <div><div class="k">Utilisation</div><div class="big" id="capUtil"></div></div>
+        </div>
+        <div class="bar" style="margin-top:18px" role="img" id="capBar" aria-label="Capacity split"><span id="capUsedBar" style="background:var(--teal)"></span><span id="capIdleBar" style="background:var(--amber)"></span></div>
+        <div class="legend" style="margin-top:8px"><span><i style="background:var(--teal)"></i>to patients <b class="mono" id="capUsedV"></b></span><span><i style="background:var(--amber)"></i>unused capacity <b class="mono" id="capIdleV"></b></span></div>
+        <p class="note" style="margin-top:14px" id="capNote"></p>
+      </div>
+    </div>
+  </section>
+
+  <!-- 6. Allocation -->
+  <section id="allocation-s" aria-labelledby="alloc-h">
+    <div class="eyebrow">6 · Support services</div>
+    <h2 id="alloc-h">Reciprocal allocation, one iteration at a time</h2>
+    <p>IT serves Facilities and Facilities serves IT. Neither can close first, so their balances are passed back and forth until what circulates is below a halala. Every iteration is a number an auditor can follow. Production centres keep what they receive.</p>
+    <div class="panel">
+      <div class="recip" id="recip"></div>
+      <div class="tabs" style="margin-top:14px">
+        <button type="button" id="recipStep" class="chip">Run one iteration</button>
+        <button type="button" id="recipAll" class="chip">Run to convergence</button>
+        <button type="button" id="recipReset" class="chip">Reset</button>
+      </div>
+      <p class="note" style="margin-top:10px" id="recipNote" aria-live="polite"></p>
+    </div>
+    <p class="note">After the reciprocal pass, everything else is stepped down in service order, then each operating centre's balance goes to its activities by driver. A zero driver volume sends the balance to NO_DRIVER_VOLUME, never to a made-up denominator.</p>
+  </section>
+
+  <!-- 7. Variance -->
+  <section id="variance-s" aria-labelledby="var-h">
+    <div class="eyebrow">7 · Explaining the difference</div>
+    <h2 id="var-h">Rate, quantity and mix always add up to actual minus standard</h2>
+    <p>The overlap between price and practice is kept as its own term, so the answer to "was it price or practice?" never depends on a convention. Try it with nursing on a caesarean section.</p>
+    <div class="grid2">
+      <div class="panel calc">
+        <label for="vSq">Standard minutes per case <output id="vSqO"></output><input type="range" id="vSq" min="20" max="200" step="1" value="75"></label>
+        <label for="vAq">Actual minutes per case <output id="vAqO"></output><input type="range" id="vAq" min="20" max="200" step="1" value="85"></label>
+        <label for="vSr">Standard rate, SAR per minute <output id="vSrO"></output><input type="range" id="vSr" min="0.5" max="4" step="0.05" value="1.55"></label>
+        <label for="vAr">Actual rate, SAR per minute <output id="vArO"></output><input type="range" id="vAr" min="0.5" max="4" step="0.05" value="1.70"></label>
+        <label for="vN">Cases <output id="vNO"></output><input type="range" id="vN" min="1" max="800" step="1" value="120"></label>
+      </div>
+      <div class="panel">
+        <table class="t"><tbody>
+          <tr><th>Rate effect</th><td class="mono">(actual rate − standard rate) × standard qty</td><td class="num" id="vRate"></td></tr>
+          <tr><th>Quantity effect</th><td class="mono">(actual qty − standard qty) × standard rate</td><td class="num" id="vQty"></td></tr>
+          <tr><th>Mix effect</th><td class="mono">(Δ rate) × (Δ qty)</td><td class="num" id="vMix"></td></tr>
+          <tr><th>Total</th><td class="mono">actual − standard</td><td class="num" id="vTot"></td></tr>
+        </tbody></table>
+        <p style="margin-top:12px" id="vNote"></p>
+        <p class="note">Rate belongs to procurement and payroll. Quantity belongs to clinical practice and pathways. Positive numbers are over standard.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- 8. Residuals -->
+  <section id="residuals-s" aria-labelledby="res-h">
+    <div class="eyebrow">8 · What does not reach a patient</div>
+    <h2 id="res-h">Six named buckets, each with an owner</h2>
+    <p>These are findings, not errors. A seventh bucket would need approval, and moving a residual into patient cost to improve the attribution figure is exactly what the model refuses to do.</p>
+    <div class="panel scroll">
+      <table class="t">
+        <thead><tr><th>Bucket</th><th>What it means</th><th>Owner</th><th style="text-align:right">August, SAR</th></tr></thead>
+        <tbody>
+          <tr><td class="mono">UNUSED_CAPACITY</td><td>Practical capacity paid for and not used</td><td>Operations</td><td class="num">749,474</td></tr>
+          <tr><td class="mono">OVER_CAPACITY</td><td>Used beyond practical capacity; already in patient cost, so added back and never netted against idle time</td><td>Operations</td><td class="num">−29,761</td></tr>
+          <tr><td class="mono">NON_PATIENT_ACTIVITY</td><td>Supply bought and not issued; overhead on activities no patient used</td><td>Supply chain, directorates</td><td class="num">33,032</td></tr>
+          <tr><td class="mono">UNMAPPED_GL</td><td>Ledger spend with no cost-pool mapping; blocks publication</td><td>Finance</td><td class="num">34,365</td></tr>
+          <tr><td class="mono">NO_DRIVER_VOLUME</td><td>A rule whose driver measured zero</td><td>Costing</td><td class="num">0</td></tr>
+          <tr><td class="mono">ROUNDING</td><td>Sub-halala drift from storing at four decimal places</td><td>Nobody</td><td class="num">0.01</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p class="note">The remaining SAR −31.32 is shown as unexplained. The capacity stage traces it to one supply pool whose ledger balance is smaller than what was consumed from it.</p>
+  </section>
+
+  <!-- 9. Architecture -->
+  <section id="arch-s" aria-labelledby="arch-h">
+    <div class="eyebrow">9 · How the software is built</div>
+    <h2 id="arch-h">Architecture: Angular, .NET 8, SQL Server</h2>
+    <p>The engine is pure arithmetic with no database, web host or file access, so it can be tested on its own. Everything around it loads data in and writes results out. Click a box.</p>
+    <div class="panel arch scroll" id="arch"></div>
+    <div class="panel" id="archInfo" aria-live="polite"></div>
+  </section>
+
+  <footer>Figures are from run RUN-NSH-RYD-2026-08 (costing version CV-2026-H2) in the ABCostingV2 build. Requirement codes (FR, CR, ARCH) refer to the VERITA business requirements document.</footer>
+</div>
+
+<script>
+const fmt = (n, d = 0) => n.toLocaleString('en-GB', { minimumFractionDigits: d, maximumFractionDigits: d });
+const sar = (n, d = 0) => (n < 0 ? '−' : '') + 'SAR ' + fmt(Math.abs(n), d);
+const css = v => getComputedStyle(document.documentElement).getPropertyValue(v).trim();
+
+/* ── 1. Money flow (to scale) ─────────────────────────────────────────────── */
+const flow = {
+  nodes: [
+    { id: 'gl', col: 0, label: 'General ledger', v: 7274138, c: '--ink-2' },
+    { id: 'cons', col: 1, label: 'Consumption pools', v: 5588027, c: '--teal' },
+    { id: 'alloc', col: 1, label: 'Allocation pools', v: 1651746, c: '--indigo' },
+    { id: 'unm', col: 1, label: 'Unmapped GL', v: 34365, c: '--amber' },
+    { id: 'pat', col: 2, label: 'Patients', v: 6487060, c: '--teal' },
+    { id: 'idle', col: 2, label: 'Unused capacity', v: 749474, c: '--amber' },
+    { id: 'waste', col: 2, label: 'Supply not issued', v: 33032, c: '--amber' },
+    { id: 'unm2', col: 2, label: 'Unmapped GL', v: 34365, c: '--amber' },
+  ],
+  links: [
+    { s: 'gl', t: 'cons', v: 5588027, c: '--teal', title: 'Ledger into consumption pools', text: 'Salaries, drugs, equipment depreciation and other spend that pays for resources a patient consumes. Mapped account by account (GLMapping), weights totalling 1.' },
+    { s: 'gl', t: 'alloc', v: 1651746, c: '--indigo', title: 'Ledger into allocation pools', text: 'Support and overhead: IT, facilities, administration, finance. No resource draws its rate from these pools, so they are allocated by rule.' },
+    { s: 'gl', t: 'unm', v: 34365, c: '--amber', title: 'Ledger with no mapping', text: 'One account at one cost centre has no cost-pool mapping. It is never guessed at: it stays visible as UNMAPPED_GL and blocks publication until finance adds the mapping.' },
+    { s: 'cons', t: 'pat', v: 4835313, c: '--teal', title: 'Measured consumption to patients', text: 'Every minute, dose and item recorded against an encounter, priced at the rate effective on 31 August. SAR 3,441,065 direct (labour, drugs, consumables) and SAR 1,394,249 indirect (equipment, rooms). Over-capacity use of SAR 29,761 is inside this figure.' },
+    { s: 'cons', t: 'idle', v: 749474, c: '--amber', title: 'Unused capacity', text: 'Practical minutes that were paid for and not used, priced at each resource\'s rate. Carved out before allocation, so no case carries the cost of an empty theatre.' },
+    { s: 'cons', t: 'waste', v: 33032, c: '--amber', title: 'Supply bought, not issued', text: 'Each supply pool\'s balance, over the acquisition price, is what was bought. Measured issues are what was used. The difference is wastage, expiry and stock movement.' },
+    { s: 'alloc', t: 'pat', v: 1651746, c: '--indigo', title: 'Overhead to patients', text: 'Reciprocal pass among support centres, step-down to operating centres, then each centre\'s balance to its activities by driver, and each activity\'s overhead to the services that used it, in proportion to their direct cost.' },
+    { s: 'unm', t: 'unm2', v: 34365, c: '--amber', title: 'Unmapped, carried to the statement', text: 'Shown as its own line on the reconciliation, owned by finance.' },
+  ],
+};
+(function drawFlow() {
+  const W = 980, H = 430, top = 30, nodeW = 14, gap = 22, colX = [150, 470, 820];
+  const total = flow.nodes.filter(n => n.col === 0).reduce((s, n) => s + n.v, 0);
+  const scale = (H - top - 40 - gap * 3) / total;
+  const minH = 3;
+  const y = {}, h = {};
+  [0, 1, 2].forEach(col => {
+    let cy = top;
+    flow.nodes.filter(n => n.col === col).forEach(n => { h[n.id] = Math.max(minH, n.v * scale); y[n.id] = cy; cy += h[n.id] + gap; });
+  });
+  const outOff = {}, inOff = {};
+  let svg = `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Money flow from the general ledger to patients and named residuals">`;
+  flow.links.forEach((l, i) => {
+    const s = flow.nodes.find(n => n.id === l.s), t = flow.nodes.find(n => n.id === l.t);
+    const lh = Math.max(minH, l.v * scale);
+    const sy = y[l.s] + (outOff[l.s] || 0), ty = y[l.t] + (inOff[l.t] || 0);
+    outOff[l.s] = (outOff[l.s] || 0) + lh; inOff[l.t] = (inOff[l.t] || 0) + lh;
+    const x0 = colX[s.col] + nodeW, x1 = colX[t.col], mx = (x0 + x1) / 2;
+    svg += `<path class="band" data-i="${i}" tabindex="0" role="button" aria-label="${l.title}" fill="${css(l.c)}" d="M${x0},${sy} C${mx},${sy} ${mx},${ty} ${x1},${ty} L${x1},${ty + lh} C${mx},${ty + lh} ${mx},${sy + lh} ${x0},${sy + lh} Z"/>`;
+  });
+  flow.nodes.forEach(n => {
+    const x = colX[n.col];
+    svg += `<rect class="node" x="${x}" y="${y[n.id]}" width="${nodeW}" height="${h[n.id]}" fill="${css(n.c)}"/>`;
+    const right = n.col === 2, left = n.col === 0;
+    const tx = left ? x - 10 : right ? x + nodeW + 10 : x + nodeW + 10;
+    const anchor = left ? 'end' : 'start';
+    const cy = y[n.id] + h[n.id] / 2;
+    svg += `<text x="${tx}" y="${cy - 2}" text-anchor="${anchor}" font-weight="600">${n.label}</text><text class="val" x="${tx}" y="${cy + 14}" text-anchor="${anchor}">${sar(n.v)}</text>`;
+  });
+  svg += `</svg>`;
+  const host = document.getElementById('flow');
+  host.innerHTML = svg;
+  const info = document.getElementById('flowInfo');
+  const pick = i => {
+    host.querySelectorAll('.band').forEach(b => b.classList.toggle('on', +b.dataset.i === i));
+    const l = flow.links[i];
+    info.innerHTML = `<h3>${l.title} <span class="mono" style="color:${css(l.c)}">${sar(l.v)}</span></h3><p style="margin-top:6px">${l.text}</p>`;
+  };
+  host.querySelectorAll('.band').forEach(b => {
+    b.addEventListener('click', () => pick(+b.dataset.i));
+    b.addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); pick(+b.dataset.i); } });
+  });
+  pick(3);
+})();
+
+/* ── 2. Levels ────────────────────────────────────────────────────────────── */
+const levels = [
+  ['Resource', 'What does one unit of an input cost?', 'A radiographer minute costs SAR 1.96; one dose of gadolinium costs SAR 239.68. Labour, equipment and rooms are priced from annual cost over practical minutes; supplies from their acquisition price.'],
+  ['Cost centre', 'Where does ledger spend land, and where does it go next?', 'Spend lands on the centre it was posted to. Support centres (IT, facilities, administration) close to zero by passing their balance to the centres they serve.'],
+  ['Cost pool', 'How is cost bundled before it is distributed?', 'A pool is a homogeneous bundle with one cause. Consumption pools pay for resources; allocation pools are distributed by an approved rule.'],
+  ['Activity', 'What does one occurrence of this work cost?', 'MRI acquisition: measured resource cost plus SAR 213.46 of overhead per occurrence, from this run\'s own allocation.'],
+  ['Procedure', 'What does this service cost, at standard and at actual?', 'MRI brain with contrast: SAR 1,180.92 at standard under CV-2026-H2. Actual ran SAR 217 per case higher in August, mainly from longer scanner time.'],
+  ['Encounter', 'What did this episode of care cost, line by line?', 'Every resource consumed, priced and traced to the source transaction in the HIS, RIS, pharmacy or theatre system, plus the overhead its services carried.'],
+  ['Patient', 'What has this patient cost across every episode?', 'The sum of the patient\'s encounters. Names and record numbers are masked for anyone without permission to see them.'],
+  ['Package', 'Does the contracted price still cover the work?', 'Actual cost per case against the standard and the contracted price, with the variance per case.'],
+  ['DRG', 'Why are the expensive cases expensive?', 'Mean, median, P25 to P90 and outliers by Tukey\'s rule (above P75 + 1.5 × IQR), with the cost composition of the outliers compared with the rest.'],
+];
+(function () {
+  const lad = document.getElementById('ladder'), info = document.getElementById('levelInfo');
+  levels.forEach(([name], i) => {
+    const b = document.createElement('button');
+    b.type = 'button'; b.innerHTML = `<span class="n">${i + 1}</span><span>${name}</span>`;
+    b.addEventListener('click', () => pick(i)); lad.appendChild(b);
+  });
+  function pick(i) {
+    [...lad.children].forEach((b, j) => b.setAttribute('aria-pressed', String(i === j)));
+    const [name, q, ex] = levels[i];
+    info.innerHTML = `<div class="eyebrow">Level ${i + 1}</div><h3 style="margin-top:6px">${name}</h3><p style="margin-top:8px;font-size:19px">${q}</p><p class="note">${ex}</p>`;
+  }
+  pick(4);
+})();
+
+/* ── 4. Stages (real money in and out from the August run) ────────────────── */
+const stages = [
+  ['VALIDATE', 'Validate source data', false, 0, 0, 'Nineteen data-quality checks before any money moves. A BLOCKING issue (missing or overlapping rate, negative quantity) stops the run. An ERROR lets it proceed, but it can then never be published.', 'In August: 13 of 16 pre-run checks passed; one error (an unmapped GL account) and three warnings.'],
+  ['RESOURCE_RATES', 'Resolve effective rates', false, 0, 0, 'Exactly one rate effective at the period end for every resource, loaded once into memory. A future rate (next year\'s pay award) cannot leak into this month.', '54 of 54 resources had exactly one rate effective on 31 August.'],
+  ['POOL_BUILD', 'Build cost pools from the GL', false, 7274138.08, 7274138.08, 'The only stage that brings money in. Each posting is mapped to pools by its account and cost centre. Pool totals plus unmapped must equal the ledger, to the cent.', 'SAR 34,365 had no mapping and stays visible as UNMAPPED_GL.'],
+  ['CAPACITY', 'Time-driven capacity', true, 5588026.76, 5588058.09, 'Practical capacity, unit cost per minute, idle and over-capacity, and supply wastage. Must run after pool build, because a supply pool\'s balance is what tells it how much was bought.', 'A gap of SAR −31.33 shows up here and is traced to one supply pool (PACS & imaging informatics).'],
+  ['ALLOCATE_SUPPORT', 'Allocate support and overhead', true, 1651746.13, 1651746.13, 'Reciprocal pass among centres that serve each other, then step-down in service order. Every support and overhead centre closes at zero.', 'Converged in 5 iterations; step-down closed 5 centres; nothing created or lost.'],
+  ['ALLOCATE_ACTIVITY', 'Cost centres to activities', true, 1651746.13, 1651746.13, 'Each operating centre\'s balance goes to its activities by driver. A zero driver volume sends the balance to a named residual.', '43 activities received overhead.'],
+  ['COST_STANDARD', 'Standard procedure cost', true, 0, 0, 'Each procedure\'s recipe priced at the effective rates, plus the overhead per activity occurrence from this run\'s own allocation, so standard and actual share a denominator.', '30 procedures costed at standard; 212 cost components written, each with its arithmetic in words.'],
+  ['COST_ACTUAL', 'Actual and patient-level cost', true, 6487059.59, 6487059.59, 'Measured consumption per encounter, traced to the source transaction, plus the overhead pushed down to the services each encounter used.', '863 encounters costed at SAR 6,487,060 against SAR 7,469,945 of revenue.'],
+  ['AGGREGATE', 'Package, DRG and profitability', false, 0, 0, 'Package and DRG roll-ups with percentiles and outliers. Profitability by department, payer, physician and the rest is computed when it is read, not stored.', 'Packages and DRGs summarised from the encounter population.'],
+  ['VARIANCE', 'Variance decomposition', false, 0, 0, 'Actual against standard per procedure, split into rate, quantity and mix, with a written explanation per component.', '30 procedures decomposed; the three effects sum exactly to the difference on every line.'],
+  ['RECONCILE', 'Reconcile to the ledger', false, 7274138.08, 7274138.08, 'The ledger, each named residual, patient cost, then unexplained, with a running balance. The run cannot publish if unexplained exceeds materiality.', 'Attribution 89.2%: SAR 6,487,060 of SAR 7,274,138 reached a patient.'],
+];
+(function () {
+  const host = document.getElementById('stages'), info = document.getElementById('stageInfo');
+  stages.forEach((s, i) => {
+    const b = document.createElement('button');
+    b.type = 'button'; b.textContent = i + 1; b.title = s[1]; b.setAttribute('aria-label', `Stage ${i + 1}: ${s[1]}`);
+    if (s[2]) b.classList.add('money');
+    b.addEventListener('click', () => pick(i)); host.appendChild(b);
+  });
+  function pick(i) {
+    [...host.children].forEach((b, j) => b.setAttribute('aria-pressed', String(i === j)));
+    const [code, name, , mi, mo, what, aug] = stages[i];
+    const money = mi || mo
+      ? `<div class="moneyrow"><div><div class="k">Money in</div><div class="big">${sar(mi, 2)}</div></div><div><div class="k">Money out</div><div class="big">${sar(mo, 2)}</div></div><div><div class="k">Gap</div><div class="big ${Math.abs(mi - mo) >= 0.01 ? 'amber' : 'teal'}">${sar(mi - mo, 2)}</div></div></div>`
+      : '';
+    info.innerHTML = `<div class="eyebrow">Stage ${i + 1} · <span class="mono">${code}</span></div><h3 style="margin-top:6px">${name}</h3><p style="margin-top:8px">${what}</p>${money}<p class="note" style="margin-top:12px">${aug}</p>`;
+  }
+  pick(3);
+})();
+
+/* ── 5. Capacity calculator ───────────────────────────────────────────────── */
+(function () {
+  const $ = id => document.getElementById(id);
+  const ids = ['capCost', 'capTheo', 'capRatio', 'capUsed'];
+  function update() {
+    const cost = +$('capCost').value, theo = +$('capTheo').value, ratio = +$('capRatio').value, used = +$('capUsed').value;
+    const practical = theo * ratio, rate = cost / practical, avail = practical * 30 / 365;
+    const usedC = Math.min(used, avail) * rate, overC = Math.max(0, used - avail) * rate, idleC = Math.max(0, avail - used) * rate;
+    $('capCostO').textContent = sar(cost); $('capTheoO').textContent = fmt(theo); $('capRatioO').textContent = ratio.toFixed(2); $('capUsedO').textContent = fmt(used);
+    $('capRate').textContent = 'SAR ' + rate.toFixed(4);
+    $('capAvail').textContent = fmt(avail) + ' min';
+    $('capUtil').textContent = (used / avail * 100).toFixed(1) + '%';
+    const tot = usedC + idleC + overC || 1;
+    $('capUsedBar').style.width = ((usedC + overC) / tot * 100) + '%';
+    $('capIdleBar').style.width = (idleC / tot * 100) + '%';
+    $('capUsedV').textContent = sar(usedC + overC);
+    $('capIdleV').textContent = sar(idleC);
+    $('capNote').textContent = used > avail
+      ? `Over practical capacity by ${fmt(used - avail)} minutes. The extra SAR ${fmt(overC)} has already reached patients, so it is reported as OVER_CAPACITY and never netted against idle time elsewhere.`
+      : `Dividing by theoretical minutes instead would give SAR ${(cost / theo).toFixed(4)} a minute and hide SAR ${fmt((rate - cost / theo) * used)} of cost. The practical ratio removes breaks, training, maintenance and set-up.`;
+  }
+  ids.forEach(id => $(id).addEventListener('input', update)); update();
+})();
+
+/* ── 6. Reciprocal allocation ─────────────────────────────────────────────── */
+(function () {
+  const $ = id => document.getElementById(id);
+  // Shares: IT serves Facilities 20%, Radiology 50%, Surgery 30%. Facilities serves IT 10%, Radiology 40%, Surgery 50%.
+  const shares = { IT: { FAC: .2, RAD: .5, SURG: .3 }, FAC: { IT: .1, RAD: .4, SURG: .5 } };
+  const names = { IT: 'IT', FAC: 'Facilities', RAD: 'Radiology', SURG: 'Surgery' };
+  let st;
+  function reset() { st = { residual: { IT: 300000, FAC: 500000 }, recv: { IT: 0, FAC: 0, RAD: 0, SURG: 0 }, iter: 0 }; render('Starting balances: IT SAR 300,000, Facilities SAR 500,000.'); }
+  function step() {
+    const tot = st.residual.IT + st.residual.FAC;
+    if (tot <= 0.01) { render('Converged: less than a halala is circulating. Both support centres are closed.'); return false; }
+    const next = { IT: 0, FAC: 0 };
+    for (const src of ['IT', 'FAC']) {
+      const bal = st.residual[src];
+      for (const [t, s] of Object.entries(shares[src])) {
+        const p = bal * s; st.recv[t] += p;
+        if (t in next) next[t] += p;
+      }
+    }
+    st.residual = next; st.iter++;
+    render(`Iteration ${st.iter}: SAR ${fmt(next.IT + next.FAC, 2)} came back to the support centres and goes round again.`);
+    return true;
+  }
+  function render(msg) {
+    const rows = [['IT', st.residual.IT, 'circulating'], ['FAC', st.residual.FAC, 'circulating'], ['RAD', st.recv.RAD, 'received'], ['SURG', st.recv.SURG, 'received']];
+    $('recip').innerHTML = rows.map(([k, v, what]) => `<div class="centre"><div class="k">${names[k]} · ${what}</div><div class="big ${k === 'IT' || k === 'FAC' ? 'indigo' : 'teal'}">${sar(v)}</div></div>`).join('');
+    $('recipNote').textContent = msg + ` Radiology + Surgery now hold ${sar(st.recv.RAD + st.recv.SURG, 2)} of SAR 800,000.`;
+  }
+  $('recipStep').addEventListener('click', step);
+  $('recipAll').addEventListener('click', () => { let n = 0; while (step() && n++ < 100); });
+  $('recipReset').addEventListener('click', reset);
+  reset();
+})();
+
+/* ── 7. Variance calculator ───────────────────────────────────────────────── */
+(function () {
+  const $ = id => document.getElementById(id);
+  const ids = ['vSq', 'vAq', 'vSr', 'vAr', 'vN'];
+  function cell(el, v) { el.textContent = sar(v); el.className = 'num ' + (Math.abs(v) < 0.5 ? '' : v > 0 ? 'red' : 'teal'); }
+  function update() {
+    const sq = +$('vSq').value, aq = +$('vAq').value, sr = +$('vSr').value, ar = +$('vAr').value, n = +$('vN').value;
+    $('vSqO').textContent = sq; $('vAqO').textContent = aq; $('vSrO').textContent = sr.toFixed(2); $('vArO').textContent = ar.toFixed(2); $('vNO').textContent = n;
+    const rate = (ar - sr) * sq * n, qty = (aq - sq) * sr * n, mix = (ar - sr) * (aq - sq) * n, tot = (aq * ar - sq * sr) * n;
+    cell($('vRate'), rate); cell($('vQty'), qty); cell($('vMix'), mix); cell($('vTot'), tot);
+    const main = Math.abs(qty) > Math.abs(rate) * 1.5 ? 'mainly consumption: more minutes per case than the recipe allows'
+      : Math.abs(rate) > Math.abs(qty) * 1.5 ? 'mainly price: the minute cost more than the standard rate'
+      : 'a mix of price and consumption';
+    $('vNote').textContent = Math.abs(tot) < 1 ? 'Nursing is costing what it should.'
+      : `Nursing ran ${sar(Math.abs(tot))} ${tot > 0 ? 'above' : 'below'} standard across ${n} cases, ${main}.`;
+  }
+  ids.forEach(id => $(id).addEventListener('input', update)); update();
+})();
+
+/* ── 9. Architecture ──────────────────────────────────────────────────────── */
+const arch = {
+  web: ['Angular 22 web app', 'web/', ['26 modules: dashboards, cost model, runs, reconciliation, patient costing, simulation, data entry and import', 'The selected run lives in the URL, so every screen can be bookmarked with the exact run behind its numbers', 'Money arrives as text and is formatted from its digits, never as a JavaScript number', 'Types are generated from the API\'s OpenAPI document']],
+  api: ['REST API /api/v1', 'Verita.Api', ['Sign-in, one permission policy per role permission, hospital scope from the user record', 'Every response names its run, run status, costing version, period and hospital', 'Errors come back as a typed envelope with stable codes such as RUN_IMMUTABLE and OUT_OF_SCOPE', 'Runs are queued and executed in the background; the screen polls their stages']],
+  app: ['Application', 'Verita.Application', ['The signed-in user and their scope', 'Error codes and the audit contract', 'Shared by the API and the operator tools']],
+  engine: ['Costing engine', 'Verita.Engine', ['The eleven stages as pure functions over a loaded run context', 'No database, web host or file access, so it is tested on its own with a hand-built hospital', 'Every distribution goes through one largest-remainder routine, so parts always add back to the whole', 'The same pipeline runs what-if scenarios with overrides on a throwaway shadow run']],
+  domain: ['Domain', 'Verita.Domain', ['61 entities, the Money type, and the enumerations', 'Roles, permissions and navigation declared once and read everywhere', 'The data-quality register of nineteen checks']],
+  infra: ['Infrastructure', 'Verita.Infrastructure', ['Loads the run context once: rates, capacity, rules and recipes effective at the period end', 'Streams transactions in pages on the clustered key', 'Writes results with SqlBulkCopy, with constraint checks on', 'Governance, audit, scenarios, read models, and the template-based data import']],
+  db: ['SQL Server 2022', 'Verita database', ['Money as DECIMAL(19,4), rates and quantities DECIMAL(19,6), never float', 'Check constraints on every enumeration and on each cost component\'s arithmetic', 'Master data system-versioned for audit; a database guard stops overlapping rates', 'Published-only views for the warehouse and BI']],
+  src: ['Source systems', 'ERP, HIS, RIS, LIS, pharmacy, RCM', ['Ledger, encounters, measured durations, issues and billing', 'Loaded through templates or files; each bad row is returned with its reason', 'The platform never writes back to them']],
+};
+(function () {
+  const boxes = [
+    ['web', 260, 20], ['api', 260, 110], ['app', 60, 210], ['engine', 260, 210], ['domain', 460, 210], ['infra', 260, 310], ['db', 260, 410], ['src', 520, 410],
+  ];
+  const W = 760, H = 480, bw = 220, bh = 58;
+  const pos = Object.fromEntries(boxes.map(([k, x, y]) => [k, { x, y }]));
+  const edge = (a, b) => {
+    const A = pos[a], B = pos[b];
+    let x1 = A.x + bw / 2, y1 = A.y + bh, x2 = B.x + bw / 2, y2 = B.y;
+    if (A.y === B.y) { y1 = A.y + bh / 2; y2 = B.y + bh / 2; x1 = A.x < B.x ? A.x + bw : A.x; x2 = A.x < B.x ? B.x : B.x + bw; }
+    return `<path class="edge" d="M${x1},${y1} L${x2},${y2}"/>`;
+  };
+  let svg = `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Architecture diagram"><defs><marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="${css('--ink-2')}"/></marker></defs>`;
+  svg += `<text class="tier" x="8" y="52">BROWSER</text><text class="tier" x="8" y="142">HTTP</text><text class="tier" x="8" y="342">DATA ACCESS</text><text class="tier" x="8" y="442">STORAGE</text>`;
+  svg += edge('web', 'api') + edge('api', 'engine') + edge('api', 'app') + edge('engine', 'domain') + edge('api', 'infra') + edge('infra', 'db') + edge('src', 'db');
+  svg += `<path class="edge" d="M${pos.infra.x + bw / 2},${pos.infra.y} L${pos.engine.x + bw / 2},${pos.engine.y + bh}"/>`;
+  boxes.forEach(([k, x, y]) => {
+    const [title, sub] = arch[k];
+    svg += `<g class="box" data-k="${k}" tabindex="0" role="button" aria-label="${title}"><rect x="${x}" y="${y}" width="${bw}" height="${bh}" rx="8"/><text x="${x + 14}" y="${y + 25}">${title}</text><text class="sub" x="${x + 14}" y="${y + 44}">${sub}</text></g>`;
+  });
+  svg += `</svg>`;
+  const host = document.getElementById('arch'), info = document.getElementById('archInfo');
+  host.innerHTML = svg;
+  const pick = k => {
+    host.querySelectorAll('.box').forEach(b => b.classList.toggle('on', b.dataset.k === k));
+    const [title, sub, items] = arch[k];
+    info.innerHTML = `<h3>${title} <span class="mono note">${sub}</span></h3><ul>${items.map(i => `<li>${i}</li>`).join('')}</ul>`;
+  };
+  host.querySelectorAll('.box').forEach(b => {
+    b.addEventListener('click', () => pick(b.dataset.k));
+    b.addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); pick(b.dataset.k); } });
+  });
+  pick('engine');
+})();
+
+/* Redraw SVG colours when the theme changes. */
+matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => location.reload());
+</script>
+
+</body>
+</html>
