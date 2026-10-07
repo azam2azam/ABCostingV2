@@ -1,0 +1,2 @@
+hospitalCode,costCentreCode,costPoolCode,code,name,resourceType,uom,isCapacityDriven
+KFH-DMM,KFH-DMM.CC-RAD,KFH-DMM.POOL-RADSTAFF,KFH-DMM.RES-TECH,Radiographer,LABOR_TECH,MIN,true

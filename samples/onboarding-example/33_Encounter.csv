@@ -1,0 +1,3 @@
+patientMrn,hospitalCode,departmentCode,serviceLineCode,payerCode,encounterNo,encType,admitAt,dischargeAt,lengthOfStay,isSurgical
+KFH-90000001,KFH-DMM,KFH-DMM.RAD,SL-DIAG,PAY-BUPA,KFH-DMM-E0001,OP,2026-09-05 09:00,2026-09-05 10:00,0,false
+KFH-90000002,KFH-DMM,KFH-DMM.RAD,SL-DIAG,PAY-MOH,KFH-DMM-E0002,OP,2026-09-12 11:00,2026-09-12 11:45,0,false

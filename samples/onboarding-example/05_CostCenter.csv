@@ -1,0 +1,3 @@
+hospitalCode,departmentCode,facilityCode,code,name,ccType,stepDownSeq
+KFH-DMM,KFH-DMM.ADMIN,,KFH-DMM.CC-ADMIN,Hospital administration,OVERHEAD,10
+KFH-DMM,KFH-DMM.RAD,,KFH-DMM.CC-RAD,Radiology,PRODUCTION,100

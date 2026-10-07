@@ -1,0 +1,4 @@
+hospitalCode,costCentreCode,primaryDriverCode,code,name,description,classification,allocMethod,status,effectiveFrom
+KFH-DMM,KFH-DMM.CC-RAD,,KFH-DMM.POOL-RADSTAFF,Radiology staff,Technologists,DIRECT,TDABC,PUBLISHED,2026-01-01
+KFH-DMM,KFH-DMM.CC-RAD,KFH-DMM.DRV-MIN,KFH-DMM.POOL-RADOH,Radiology overhead,Department overhead,INDIRECT,ABC,PUBLISHED,2026-01-01
+KFH-DMM,KFH-DMM.CC-ADMIN,KFH-DMM.DRV-HEAD,KFH-DMM.POOL-ADMIN,Administration,Hospital admin,INDIRECT,STEP_DOWN,PUBLISHED,2026-01-01

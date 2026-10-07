@@ -1,0 +1,3 @@
+hospitalCode,costCentreCode,code,catalogCode,name,description,unit,driverType,sourceSystem,sourceField,formula,allocMethodology,effectiveFrom
+KFH-DMM,,KFH-DMM.DRV-HEAD,DRV-HEAD,Headcount,Staff in post,HEADCOUNT,HEADCOUNT,HR-PAYROLL,establishment.fte,FTE in post at month end,STEP_DOWN,2026-01-01
+KFH-DMM,,KFH-DMM.DRV-MIN,DRV-MIN,Procedure minutes,Measured minutes,MIN,TIME,RIS-PACS,exam.duration,sum of measured exam minutes,ABC,2026-01-01

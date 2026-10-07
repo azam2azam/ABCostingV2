@@ -1,0 +1,2 @@
+hospitalCode,departmentCode,costCentreCode,code,catalogCode,name,category,stdDuration,minDuration,maxDuration,variability,directness,effectiveFrom
+KFH-DMM,KFH-DMM.RAD,KFH-DMM.CC-RAD,KFH-DMM.ACT-XRAY,ACT-XRAY,Plain X-ray,Imaging,15,5,45,VARIABLE,DIRECT,2026-01-01

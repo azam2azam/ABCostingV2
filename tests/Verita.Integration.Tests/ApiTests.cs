@@ -210,3 +210,56 @@ public sealed class ApiTests : IClassFixture<WebApplicationFactory<Program>>
         Assert.Equal(expected, published);
     }
 }
+
+public sealed class DataHubTests : IClassFixture<WebApplicationFactory<Program>>
+{
+    private readonly WebApplicationFactory<Program> _factory;
+    public DataHubTests(WebApplicationFactory<Program> factory) => _factory = factory;
+
+    private async Task<HttpClient> Manager()
+    {
+        var client = _factory.CreateClient();
+        var res = await client.PostAsJsonAsync("/api/v1/auth/login", new { email = "costing.manager@verita.health", password = "Demo!Pass123" });
+        var token = (await res.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("token").GetString()!;
+        client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", token);
+        return client;
+    }
+
+    [Fact]
+    public async Task Every_table_has_a_template_with_its_columns()
+    {
+        var client = await Manager();
+        var entities = await client.GetFromJsonAsync<JsonElement>("/api/v1/data/entities");
+        Assert.True(entities.GetArrayLength() >= 36);
+        var csv = await client.GetStringAsync("/api/v1/data/ResourceRate/template");
+        Assert.StartsWith("resourceCode,unitCost", csv.TrimStart('﻿'));
+    }
+
+    [Fact]
+    public async Task Validation_rejects_bad_rows_one_by_one_and_saves_nothing()
+    {
+        var client = await Manager();
+        var csv = "code,name,city,currency,bedCount\nZZ-OK,Fine,Test,SAR,10\nZZ-BAD,Broken,Test,SAR,abc\nZZ-OK,Duplicate,Test,SAR,10\n";
+        using var form = new MultipartFormDataContent
+        {
+            { new ByteArrayContent(System.Text.Encoding.UTF8.GetBytes(csv)), "file", "Hospital.csv" },
+            { new StringContent("true"), "dryRun" },
+        };
+        var res = await client.PostAsync("/api/v1/data/import", form);
+        res.EnsureSuccessStatusCode();
+        var r = (await res.Content.ReadFromJsonAsync<JsonElement>())[0];
+        Assert.Equal(1, r.GetProperty("created").GetInt32());
+        Assert.Equal(2, r.GetProperty("rejected").GetInt32());
+        var hospitals = await client.GetFromJsonAsync<JsonElement>("/api/v1/data/Hospital?search=ZZ-");
+        Assert.Equal(0, hospitals.GetProperty("total").GetInt32()); // the dry run rolled back
+    }
+
+    [Fact]
+    public void Csv_parser_handles_quotes_commas_and_guidance_rows()
+    {
+        var rows = Verita.Infrastructure.DataHub.Csv.Parse("﻿code,name\r\n# required,required\r\nA,\"Smith, \"\"Jr\"\"\"\r\nB,\"two\nlines\"\r\n");
+        Assert.Equal(2, rows.Count);
+        Assert.Equal("Smith, \"Jr\"", rows[0]["name"]);
+        Assert.Equal("two\nlines", rows[1]["name"]);
+    }
+}

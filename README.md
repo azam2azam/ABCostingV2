@@ -51,6 +51,15 @@ scripts/test.sh
 The scripts build into `%TEMP%` and retry, because Windows Smart App Control on this machine sometimes refuses a freshly
 built assembly (error 0x800711C7).
 
+## Adding a hospital or a month of data
+
+Two screens under **Data** in the app (needs `masterdata.edit`; users need `admin.manage`):
+
+- **Data Import:** download the templates (one CSV per table, or all of them numbered in a zip), fill them, and upload one CSV or a zip. **Validate** runs the real load inside a transaction and rolls it back, so a zip is checked in load order exactly as it would load. Rows that fail come back one by one with the reason, and the good rows load. Every upload is recorded with accepted and rejected counts, and rejected rows download as a CSV ready to fix.
+- **Data Entry:** add and edit any table through a form generated from the same rules. References are picked by code. Rates, capacity, GL mappings and list prices are never edited in place: a change is a new version, and the previous one is closed the day before.
+
+`samples/onboarding-example/` is a complete small hospital (King Fahd Hospital — Dammam, one radiology service, two patients) in template form. Zip the folder and upload it on Data Import, then cost `KFH-DMM` for 2026-09; it reconciles with nothing unexplained. The tables and rules are declared once in `src/Verita.Infrastructure/DataHub/EntitySpecs.cs`.
+
 ## Known gaps against the BRD
 
 These are phase-1 gaps in this local build:
@@ -61,4 +70,4 @@ These are phase-1 gaps in this local build:
 - **Resume:** stages are idempotent per run, but a failed run re-executes from the start rather than resuming at the failed stage (NFR-3).
 - **Long tables:** these render in pages of 200 rather than with CDK virtual scroll (NG-8).
 - **Performance:** NFR-1 at one million transactions has not been load-tested. Each fixture run (8–18k transactions) takes 1–2 s.
-- **Write screens:** none, which matches phase-1 scope; master data loads by import.
+- **Data entry approvals:** master-data edits are audited but go live immediately. They do not yet route through four-eye approval, which the BRD asks for in phase 2.

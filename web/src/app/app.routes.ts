@@ -10,6 +10,7 @@ const model = () => import('./features/cost-model');
 const outputs = () => import('./features/outputs');
 const exec = () => import('./features/execution');
 const analysis = () => import('./features/analysis');
+const data = () => import('./features/data');
 
 const r = (path: string, load: () => Promise<any>, name: string, runScoped = true) => ({
   path, canActivate: runScoped ? [moduleGuard, runGuard] : [moduleGuard],
@@ -44,6 +45,8 @@ export const routes: Routes = [
       r('data-quality', analysis, 'DataQuality'),
       r('governance', analysis, 'Governance', false),
       r('audit', analysis, 'Audit', false),
+      r('data-entry', data, 'DataEntry', false),
+      r('data-import', data, 'DataImport', false),
       r('administration', analysis, 'Administration', false),
       r('help', analysis, 'Help', false),
       { path: 'forbidden', component: Forbidden },

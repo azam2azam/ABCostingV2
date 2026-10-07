@@ -1,0 +1,2 @@
+hospitalCode,departmentCode,serviceLineCode,code,catalogCode,name,category,procType,complexity
+KFH-DMM,KFH-DMM.RAD,SL-DIAG,KFH-DMM.PROC-XRAY,RAD-XRAY-CHEST,Chest X-ray,Imaging,IMAGING,1

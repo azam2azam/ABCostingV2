@@ -1,0 +1,3 @@
+encounterNo,procedureCode,payerCode,grossAmount,discount,netAmount,postedAt,sourceSystem,sourceRef
+KFH-DMM-E0001,KFH-DMM.PROC-XRAY,PAY-BUPA,300,18,282,2026-09-06,CYCLUS-RCM,KFH-RCM-0001
+KFH-DMM-E0002,KFH-DMM.PROC-XRAY,PAY-MOH,300,66,234,2026-09-13,CYCLUS-RCM,KFH-RCM-0002

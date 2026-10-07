@@ -25,6 +25,7 @@ public static class DependencyInjection
         services.AddScoped<ScenarioService>();
         services.AddScoped<GovernanceService>();
         services.AddScoped<ReadQueries>();
+        services.AddScoped<DataHub.DataHubService>();
         return services;
     }
 }

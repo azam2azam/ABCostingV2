@@ -1,0 +1,3 @@
+sourcePoolCode,driverCode,code,name,method,methodology,stage,sequence,poolShare,status,effectiveFrom
+KFH-DMM.POOL-ADMIN,KFH-DMM.DRV-HEAD,KFH-DMM.AR-ADMIN,Administration by headcount,VOLUME,STEP_DOWN,2,10,1,PUBLISHED,2026-01-01
+KFH-DMM.POOL-RADOH,KFH-DMM.DRV-MIN,KFH-DMM.AR-RAD,Radiology overhead by minutes,TIME,ABC,3,10,1,PUBLISHED,2026-01-01

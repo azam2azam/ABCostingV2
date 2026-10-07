@@ -78,7 +78,7 @@ public static class Security
     public sealed record NavItem(string Path, string Label, string Permission, string Purpose);
     public sealed record NavGroup(string Label, NavItem[] Items);
 
-    /// <summary>FR-11.4: twenty-four modules grouped by what a person is doing.</summary>
+    /// <summary>FR-11.4: the twenty-four modules, plus data entry and import, grouped by what a person is doing.</summary>
     public static readonly NavGroup[] Navigation =
     [
         new("Overview", [
@@ -114,6 +114,10 @@ public static class Security
             new("data-quality", "Data Quality", "quality.view", "Nineteen automated checks, passes included, gating every run."),
             new("governance", "Governance", "governance.view", "Four-eye approval of costing configuration and runs, with the full lifecycle history."),
             new("audit", "Audit", "audit.view", "Every change, approval, publication and PHI access, with actor, timestamp and before-and-after state."),
+        ]),
+        new("Data", [
+            new("data-entry", "Data Entry", "masterdata.view", "Add and edit hospitals, cost centres, resources, rates, activities, procedures and the rest of the costing model."),
+            new("data-import", "Data Import", "masterdata.edit", "Download templates and upload raw data files; every row is validated and bad rows are returned with the reason."),
         ]),
         new("System", [
             new("administration", "Administration", "admin.view", "Users, roles, hospital and department scopes, and the permission matrix."),

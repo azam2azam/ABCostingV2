@@ -1,0 +1,3 @@
+hospitalCode,serviceLineCode,code,catalogCode,name,deptType,specialty
+KFH-DMM,SL-DIAG,KFH-DMM.RAD,RAD,Radiology,CLINICAL,Radiology
+KFH-DMM,,KFH-DMM.ADMIN,ADMIN,Administration,ADMIN,
