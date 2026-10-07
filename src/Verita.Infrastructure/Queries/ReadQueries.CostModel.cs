@@ -34,7 +34,7 @@ public sealed partial class ReadQueries
     public async Task<CostCentreRow[]> CostCentresAsync(ScopedRun s, Principal p, CancellationToken ct)
     {
         var depts = await db.Departments.AsNoTracking().ToDictionaryAsync(d => d.Id, ct);
-        var deptCodes = depts.ToDictionary(d => d.Key, d => d.Value.Code);
+        var deptCodes = depts.ToDictionary(d => d.Key, d => d.Value.CatalogCode);
         var facs = await db.Facilities.AsNoTracking().ToDictionaryAsync(f => f.Id, f => f.Name, ct);
         var bal = await db.CostCenterBalances.AsNoTracking().Where(b => b.RunId == s.Run.Id).ToDictionaryAsync(b => b.CostCenterId, ct);
         var gl = await db.GLPostings.AsNoTracking().Where(g => g.HospitalId == s.Hospital.Id && g.PeriodId == s.Period.Id)
@@ -178,7 +178,7 @@ public sealed partial class ReadQueries
     public async Task<ActivityRow[]> ActivitiesAsync(ScopedRun s, Principal p, CancellationToken ct)
     {
         var depts = await db.Departments.AsNoTracking().ToDictionaryAsync(d => d.Id, ct);
-        var deptCodes = depts.ToDictionary(d => d.Key, d => d.Value.Code);
+        var deptCodes = depts.ToDictionary(d => d.Key, d => d.Value.CatalogCode);
         var ccs = await db.CostCenters.AsNoTracking().ToDictionaryAsync(c => c.Id, ct);
         var costs = await db.ActivityCosts.AsNoTracking().Where(a => a.RunId == s.Run.Id).ToDictionaryAsync(a => a.ActivityId, ct);
         var closed = await db.CostCenterBalances.AsNoTracking().Where(b => b.RunId == s.Run.Id && b.IsClosed).Select(b => b.CostCenterId).ToListAsync(ct);

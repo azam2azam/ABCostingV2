@@ -42,7 +42,7 @@ public sealed partial class ReadQueries
     public async Task<ProcedureRow[]> ProceduresAsync(ScopedRun s, Principal p, CancellationToken ct)
     {
         var depts = await db.Departments.AsNoTracking().ToDictionaryAsync(d => d.Id, ct);
-        var deptCodes = depts.ToDictionary(d => d.Key, d => d.Value.Code);
+        var deptCodes = depts.ToDictionary(d => d.Key, d => d.Value.CatalogCode);
         var sls = await db.ServiceLines.AsNoTracking().ToDictionaryAsync(x => x.Id, x => x.Name, ct);
         var costs = (await db.ProcedureCosts.AsNoTracking().Where(c => c.RunId == s.Run.Id).ToListAsync(ct)).ToLookup(c => c.ProcedureId);
         var prices = (await db.ProcedureRates.AsNoTracking().Where(r => r.HospitalId == s.Hospital.Id).ToListAsync(ct)).Where(r => r.IsEffective(s.Period.EndDate))

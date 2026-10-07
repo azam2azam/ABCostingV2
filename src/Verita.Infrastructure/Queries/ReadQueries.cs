@@ -122,7 +122,7 @@ public sealed partial class ReadQueries(VeritaDbContext db, IAuditWriter audit)
         if (canRevenue)
         {
             tiles.Insert(2, new("revenue", "Net revenue", revenue, "SAR", "higher-better", "profitability", null));
-            tiles.Insert(3, new("operatingMargin", "Operating margin", Money.R4(revenue - cost), "SAR", "higher-better", "profitability", $"{Share(revenue - cost, revenue)}% of revenue"));
+            tiles.Insert(3, new("operatingMargin", "Operating margin", Money.R4(revenue - cost), "SAR", "higher-better", "profitability", $"{Share(revenue - cost, revenue):N1}% of revenue"));
             tiles.Insert(4, new("fullCostMargin", "Full-cost margin", Money.R4(revenue - cost - idle), "SAR", "higher-better", "profitability", "Operating margin less idle capacity (FR-5.17)"));
         }
 

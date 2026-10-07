@@ -20,6 +20,8 @@ public sealed class ActivityAllocationResult
     public List<object> OrphanDetail { get; } = [];
     public decimal NoDriverVolume { get; set; }
     public List<object> NoDriverDetail { get; } = [];
+    /// <summary>Sub-tolerance balances left on centres after reciprocal convergence: kept, and reported as rounding.</summary>
+    public decimal RoundingCarry { get; set; }
 }
 
 /// <summary>Stages 5 and 6 — allocation (FR-3).</summary>
@@ -263,7 +265,13 @@ public static class Allocate
         foreach (var cc in ctx.CostCenters)
         {
             var balance = support.CcFinal.GetValueOrDefault(cc.Id) * multiplier;
-            if (balance <= Tolerance) continue;
+            if (balance <= Tolerance)
+            {
+                // FR-3.8: whatever survives the reciprocal loop is never force-closed or dropped;
+                // below a halala it cannot be meaningfully allocated, so it is carried to ROUNDING.
+                if (balance != 0m) result.RoundingCarry += balance;
+                continue;
+            }
 
             var rule = ctx.Rules.FirstOrDefault(r => r.Stage == 3 && r.SourceCostCenterId == cc.Id);
             var driver = rule?.DriverId is { } d && ctx.Drivers.TryGetValue(d, out var di) ? di : null;
@@ -360,7 +368,7 @@ public static class Allocate
         var moneyIn = support.CcFinal.Values.Where(v => v > 0m).Sum() * multiplier;
 
         return (result, new StepResult(
-            output.Allocations.Count - startRows + output.ActivityCosts.Count, Money.R4(moneyIn), Money.R4(allocated + noDriver),
+            output.Allocations.Count - startRows + output.ActivityCosts.Count, Money.R4(moneyIn), Money.R4(allocated + noDriver + result.RoundingCarry),
             noDriver > 1m || orphaned > 1m ? "WARNING" : "SUCCESS",
             $"{output.ActivityCosts.Count} activities costed; {Fmt.Sar(allocated)} of overhead attributed" +
             (noDriver > 1m ? $", {Fmt.Sar(noDriver)} held back for want of driver volume" : "") +

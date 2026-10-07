@@ -30,7 +30,7 @@ public sealed partial class ReadQueries
 
     public async Task<EncounterPage> EncountersAsync(ScopedRun s, Principal p, EncounterQuery q, CancellationToken ct, bool auditPhi = true)
     {
-        var deptCodes = await db.Departments.AsNoTracking().ToDictionaryAsync(d => d.Id, d => d.Code, ct);
+        var deptCodes = await db.Departments.AsNoTracking().ToDictionaryAsync(d => d.Id, d => d.CatalogCode, ct);
         var allowedDepts = p.AllDepartments ? null : deptCodes.Where(d => p.HasDepartment(d.Value)).Select(d => d.Key).ToList();
 
         var query = from ec in db.EncounterCosts.AsNoTracking()
@@ -96,7 +96,7 @@ public sealed partial class ReadQueries
         if (!p.HasHospital(hosp.Code)) throw AppError.OutOfScope($"Encounter {enc.EncounterNo}");
         if (enc.HospitalId != s.Hospital.Id) throw AppError.NotCosted($"Encounter {enc.EncounterNo} is not in run {s.Run.Code}.");
         var dept = await db.Departments.AsNoTracking().FirstAsync(d => d.Id == enc.DepartmentId, ct);
-        if (!p.HasDepartment(dept.Code)) throw AppError.OutOfScope($"Encounter {enc.EncounterNo}");
+        if (!p.HasDepartment(dept.CatalogCode)) throw AppError.OutOfScope($"Encounter {enc.EncounterNo}");
 
         var row = (await EncountersAsync(s, p, new EncounterQuery { Search = enc.EncounterNo, PageSize = 5 }, ct, auditPhi: false)).Rows.FirstOrDefault(r => r.Id == id)
             ?? throw AppError.NotCosted($"Encounter {enc.EncounterNo} was not costed in run {s.Run.Code}.");

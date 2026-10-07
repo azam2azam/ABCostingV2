@@ -40,12 +40,20 @@ public static class Reconcile
 
         var residualTotal = residuals.Sum(r => r.Amount);
         var gap = Money.R4(gl - patient - residualTotal);
+        // Sub-halala balances carried out of allocation are rounding by construction.
+        var carry = Money.R4(alloc.RoundingCarry);
         var materiality = Materiality(gl);
 
         // FR-7.4: rounding is reported apart from the unexplained, and only true minor-unit drift
         // qualifies. Anything larger stays visible as unexplained even when within materiality.
         decimal unexplained = gap;
-        if (gap != 0m && Math.Abs(gap) < RoundingCeiling)
+        if (carry != 0m && Math.Abs(gap) >= RoundingCeiling)
+        {
+            residuals.Add(new("ROUNDING", Catalogue.ResidualLabel["ROUNDING"], carry, "Sub-halala balances left on support centres after reciprocal convergence (FR-3.8).", null));
+            residualTotal += carry;
+            unexplained = Money.R4(gap - carry);
+        }
+        else if (gap != 0m && Math.Abs(gap) < RoundingCeiling)
         {
             residuals.Add(new("ROUNDING", Catalogue.ResidualLabel["ROUNDING"], gap,
                 "Accumulated drift from storing distributed amounts at four decimal places.", null));

@@ -1,0 +1,18 @@
+# BRD findings from the build
+
+Building the platform from the BRD surfaced places where the BRD disagrees with itself or with the
+reference implementation (`D:\Claude Projects\verita-abc`). The BRD says the reference wins and the
+BRD should be corrected; each item says what this build did and what the BRD should say.
+
+| # | Where | What the build found | What this build does | Suggested BRD change |
+|---|---|---|---|---|
+| 1 | FR-9.3, FR-7.11 vs the reference | The register declares DQ-GL-UNMAPPED as ERROR and FR-7.11 says it blocks publication. The reference never executes that check, and published every run with an UNMAPPED_GL residual (SAR 19k–34k a month). | Runs the check as declared. Every fixture run therefore needs `force` and cannot be published (FR-9.8). | Decide which is right. If unmapped GL should block, the fixture needs its mapping fixed before any run publishes. If not, lower DQ-GL-UNMAPPED to WARNING. |
+| 2 | AC-1 vs FR-7.2 | AC-1 says unexplained must be ≤ SAR 1.00. FR-7.2 says materiality is the greater of SAR 1 and one basis point of the ledger (about SAR 560 for these hospitals). | Uses FR-7.2 for the publish gate, and shows anything above SAR 1 as "unexplained", not "rounding". | Pick one threshold. Five of eight reference runs fail AC-1 (−SAR 1.23 to −46.36). |
+| 3 | FR-7.4 vs the reference | The reference labels any gap within materiality as ROUNDING, including −SAR 46.33. | ROUNDING only covers true minor-unit drift (< SAR 1). | Say so explicitly. |
+| 4 | Root cause of #2 | The run's stage-level money check (FR-2.4) traces the gap to one place: supply pools where the ledger balance is *less* than what was consumed (for example PACS & imaging informatics, −SAR 31.34). There is no residual bucket for "consumed more supply than the ledger shows was bought", so it lands in unexplained. | Reports the gap on the CAPACITY stage, pool by pool. | Either add that case to a bucket (a design decision under §5.4) or require the ledger to cover consumption as a data-quality check. |
+| 5 | FR-2.2 stage numbering | The reference's step list numbers CAPACITY 3 and POOL_BUILD 4, but executes them in the BRD's order. | Follows the BRD order and numbering (POOL_BUILD 3, CAPACITY 4). | None. The reference's labels are wrong. |
+| 6 | Reciprocal convergence (FR-3.8) | Balances below the SAR 0.01 tolerance left on support centres after convergence were silently dropped in the reference: a few halalas of lost money per run. | Carries them to ROUNDING, so conservation holds. An engine test asserts it. | State that sub-tolerance balances go to ROUNDING. |
+| 7 | FR-10.9 audit actions | The reference writes LOGOUT, which FR-10.9's list does not name. | Accepts LOGOUT. | Add LOGOUT to the action list. |
+| 8 | FR-5.9 (WAU) | The reference applies weighted activity units as a step-down driver (DRV-WAU), not as an encounter-level allocation. | Matches the reference and also stores each encounter's WAU. | Describe WAU as a driver. |
+| 9 | Parity tolerance (23.4) | With DECIMAL storage and four-place distribution, 1,321 of 5,000 encounters differ from the reference by more than SAR 0.01 (max SAR 0.15). On the reference's own rounding path the count drops to 23 (max SAR 0.05, from tie-breaking on equal remainders). | Both passes are in `docs/PARITY.md`. | Allow the documented precision difference, or have parity run on the reference rounding path. |
+| 10 | Smart App Control | Windows Smart App Control on the build machine blocks some freshly built .NET assemblies at random. | `scripts/*.sh` build into `%TEMP%` and retry. | Add a note to the deployment section about developer-machine policy. |
