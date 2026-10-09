@@ -75,7 +75,9 @@ export class Chip {
     </header>
     <ng-content />
   `,
-  styles: `.page-head { display: flex; gap: 12px; align-items: flex-start; justify-content: space-between; flex-wrap: wrap; margin-bottom: 14px; }
+  styles: `.page-head { display: flex; gap: 16px; align-items: flex-end; justify-content: space-between; flex-wrap: wrap; margin-bottom: 20px; }
+           .page-head h1 { font-size: 26px; }
+           .page-head p { max-width: 80ch; margin: 0; }
            .actions { display: flex; gap: 8px; flex-wrap: wrap; }`,
 })
 export class Page {
@@ -97,11 +99,14 @@ export class Page {
       @if (note()) { <div class="note">{{ note() }}</div> }
     </div>
   `,
-  styles: `.tile { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 12px 14px; }
-           .label { color: var(--text-2); font-size: 13px; }
-           .value { font-size: 22px; font-weight: 600; text-align: left; margin-top: 2px; }
+  styles: `.tile { position: relative; overflow: hidden; height: 100%; background: var(--surface); backdrop-filter: blur(14px); border: 1px solid var(--border);
+                   border-radius: var(--radius); padding: 14px 16px 14px 18px; box-shadow: var(--shadow-sm); transition: box-shadow .15s, transform .15s; }
+           .tile::before { content: ""; position: absolute; left: 0; top: 14px; bottom: 14px; width: 3px; border-radius: 0 3px 3px 0; background: linear-gradient(var(--accent), var(--accent-strong)); opacity: .8; }
+           .tile:hover { box-shadow: var(--shadow); transform: translateY(-1px); }
+           .label { color: var(--text-3); font-size: 12px; font-weight: 600; letter-spacing: .04em; text-transform: uppercase; }
+           .value { font-size: 24px; font-weight: 700; letter-spacing: -0.02em; text-align: left; margin-top: 6px; }
            .value a { color: inherit; }
-           .note { color: var(--text-3); font-size: 12.5px; margin-top: 2px; }`,
+           .note { color: var(--text-3); font-size: 12.5px; margin-top: 4px; }`,
 })
 export class Tile {
   label = input.required<string>();
