@@ -1,0 +1,45 @@
+name: Deploy API
+
+on:
+  push:
+    branches:
+      - "deploy-api/**"
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-api
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: azure
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          global-json-file: global.json
+
+      - name: Restore
+        run: dotnet restore Verita.sln
+
+      - name: Test engine
+        run: dotnet test tests/Verita.Engine.Tests/Verita.Engine.Tests.csproj -c Release --no-restore
+
+      - name: Publish
+        run: dotnet publish src/Verita.Api/Verita.Api.csproj -c Release -o publish --no-restore
+
+      - uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - uses: azure/webapps-deploy@v3
+        with:
+          app-name: ${{ secrets.AZURE_WEBAPP_NAME }}
+          package: publish
