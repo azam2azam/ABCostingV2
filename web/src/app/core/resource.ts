@@ -1,6 +1,7 @@
 import { httpResource } from '@angular/common/http';
 import { inject } from '@angular/core';
 import { Envelope, Params } from './api';
+import { apiV1 } from './api-url';
 import { RunContext } from './context';
 
 function clean(p: Params): Record<string, string> {
@@ -19,7 +20,7 @@ export function runResource<T>(path: () => string | null | undefined, extra?: ()
     const run = ctx.runParam();
     const p = path();
     if (!run || !p) return undefined;
-    return { url: `/api/v1/${p}`, params: clean({ ...(extra?.() ?? {}), run }) };
+    return { url: `${apiV1}/${p}`, params: clean({ ...(extra?.() ?? {}), run }) };
   });
 }
 
@@ -28,6 +29,6 @@ export function apiResource<T>(path: () => string | null | undefined, extra?: ()
   return httpResource<T>(() => {
     const p = path();
     if (!p) return undefined;
-    return { url: `/api/v1/${p}`, params: clean(extra?.() ?? {}) };
+    return { url: `${apiV1}/${p}`, params: clean(extra?.() ?? {}) };
   });
 }

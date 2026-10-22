@@ -4,6 +4,7 @@ import { FormsModule } from '@angular/forms';
 import { firstValueFrom } from 'rxjs';
 import type { components } from '../core/api-types';
 import { Api } from '../core/api';
+import { apiV1 } from '../core/api-url';
 import { Auth, toApiError } from '../core/auth';
 import { apiResource } from '../core/resource';
 import { Col, UI } from '../shared/ui';
@@ -378,7 +379,7 @@ export class DataImport {
     this.busy.set(true);
     this.error.set(null);
     try {
-      this.results.set(await firstValueFrom(this.http.post<ImportResult[]>('/api/v1/data/import', body)));
+      this.results.set(await firstValueFrom(this.http.post<ImportResult[]>(`${apiV1}/data/import`, body)));
       this.dryRunShown.set(dryRun);
       if (!dryRun) this.history.reload();
     } catch (e) {
@@ -389,7 +390,7 @@ export class DataImport {
     }
   }
 
-  zip() { return download(this.http, '/api/v1/data/templates.zip', 'verita-templates.zip'); }
-  template() { return download(this.http, `/api/v1/data/${this.templateFor}/template`, `${this.templateFor}.csv`); }
-  rejects(b: ImportBatchDto) { return download(this.http, `/api/v1/data/imports/${b.id}/rejects`, `${b.entity}-rejects.csv`); }
+  zip() { return download(this.http, `${apiV1}/data/templates.zip`, 'verita-templates.zip'); }
+  template() { return download(this.http, `${apiV1}/data/${this.templateFor}/template`, `${this.templateFor}.csv`); }
+  rejects(b: ImportBatchDto) { return download(this.http, `${apiV1}/data/imports/${b.id}/rejects`, `${b.entity}-rejects.csv`); }
 }

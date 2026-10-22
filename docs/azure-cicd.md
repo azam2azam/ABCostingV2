@@ -12,7 +12,7 @@ Deploy by pushing a branch (or **Actions → Run workflow**):
 
 Example: `git checkout -b deploy/pilot && git push -u origin HEAD`. Path filters are not used, so creating that branch is enough to deploy.
 
-The Angular app calls same-origin `/api/v1`. The Static Web App is **Standard** and linked to App Service `app-verita-pilot-api`, so `/api/*` is proxied. No CORS change is required.
+The Angular app always calls the API host directly, so the browser Network tab shows the real URL: `http://localhost:5230/api/v1/...` locally and `https://app-verita-pilot-api.azurewebsites.net/api/v1/...` when deployed. The API allows CORS from the local UI and the Static Web App origin.
 
 ## Live resources (`rg-verita-pilot`)
 
@@ -63,6 +63,6 @@ az login
 scripts/azure-pilot.sh
 ```
 
-Location order is Middle East first, then Europe. Static Web Apps have no Middle East region. The script writes `.env.azure-pilot` and, when it creates a new SWA, uses **Standard** so the App Service backend can be linked.
+Location order is Middle East first, then Europe. Static Web Apps have no Middle East region. The script writes `.env.azure-pilot`. The UI talks to App Service by hostname; do not link a SWA backend or the browser will hide the API URL behind `/api`.
 
 Sign in on the web URL with `cfo@verita.health` / `Demo!Pass123` after bootstrap.

@@ -2,6 +2,7 @@ import { HttpClient, HttpParams } from '@angular/common/http';
 import { Injectable, inject } from '@angular/core';
 import { Observable } from 'rxjs';
 import type { components } from './api-types';
+import { apiV1 } from './api-url';
 
 /**
  * Types come from the API's OpenAPI document (NG-11), regenerated with `npm run api:types`.
@@ -57,7 +58,7 @@ export type Params = Record<string, string | number | boolean | null | undefined
 @Injectable({ providedIn: 'root' })
 export class Api {
   private http = inject(HttpClient);
-  private base = '/api/v1';
+  private base = apiV1;
 
   private params(p?: Params): HttpParams {
     let hp = new HttpParams();

@@ -45,6 +45,15 @@ builder.Services.AddAuthorization(o =>
     o.FallbackPolicy = new AuthorizationPolicyBuilder().RequireAuthenticatedUser().Build();
 });
 
+var corsOrigins = builder.Configuration.GetSection("Cors:Origins").Get<string[]>() ?? [];
+if (corsOrigins.Length > 0)
+{
+    builder.Services.AddCors(o => o.AddDefaultPolicy(p => p
+        .WithOrigins(corsOrigins)
+        .AllowAnyHeader()
+        .AllowAnyMethod()));
+}
+
 builder.Services.AddControllers().AddJsonOptions(o => Json.Configure(o.JsonSerializerOptions));
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen(o =>
@@ -60,6 +69,7 @@ builder.Services.AddSwaggerGen(o =>
 
 var app = builder.Build();
 
+if (corsOrigins.Length > 0) app.UseCors();
 app.UseMiddleware<ErrorEnvelopeMiddleware>();
 app.UseSwagger();
 app.UseSwaggerUI(o => o.SwaggerEndpoint("/swagger/v1/swagger.json", "VERITA v1"));

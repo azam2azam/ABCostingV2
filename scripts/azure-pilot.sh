@@ -96,7 +96,7 @@ az webapp config appsettings set -g "$RG" -n "$WEBAPP" --settings \
 az webapp update -g "$RG" -n "$WEBAPP" --https-only true -o none
 
 SWA_LOC=""
-echo "Creating Static Web App ${SWA} (Standard, so /api can be linked)..."
+echo "Creating Static Web App ${SWA}..."
 for candidate in $SWA_LOCS; do
   echo "  trying ${candidate}..."
   if try_create "SWA in ${candidate}" az staticwebapp create -g "$RG" -n "$SWA" -l "$candidate" --sku Standard -o none; then
@@ -109,10 +109,6 @@ if [ -z "$SWA_LOC" ]; then
   echo "Could not create a Static Web App in a supported region." >&2
   exit 1
 fi
-
-API_ID=$(az webapp show -g "$RG" -n "$WEBAPP" --query id -o tsv)
-az staticwebapp backends link -n "$SWA" -g "$RG" --backend-resource-id "$API_ID" --backend-region "$APP_LOC" -o none
-echo "  linked /api -> ${WEBAPP}"
 
 SWA_TOKEN=$(az staticwebapp secrets list -n "$SWA" -g "$RG" --query properties.apiKey -o tsv)
 SWA_URL=$(az staticwebapp show -n "$SWA" -g "$RG" --query defaultHostname -o tsv)
