@@ -1,0 +1,27 @@
+# SQL Server for the VERITA pilot. Internal only; API reaches it at verita-abc-sql.internal:1433.
+app = "verita-abc-sql"
+primary_region = "fra"
+
+[build]
+  image = "mcr.microsoft.com/mssql/server:2022-latest"
+
+[env]
+  ACCEPT_EULA = "Y"
+  MSSQL_PID = "Developer"
+  MSSQL_MEMORY_LIMIT_MB = "1536"
+
+[mounts]
+  source = "mssql_data"
+  destination = "/var/opt/mssql"
+
+[[vm]]
+  size = "shared-cpu-2x"
+  memory = "2gb"
+
+# No [[services.ports]]: 1433 stays off the public internet. The API uses .internal.
+[[services]]
+  protocol = "tcp"
+  internal_port = 1433
+  auto_stop_machines = "off"
+  auto_start_machines = true
+  min_machines_running = 1

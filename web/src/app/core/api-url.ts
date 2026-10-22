@@ -1,10 +1,13 @@
-/** Always call the API host so the Network tab shows the real URL, not the UI origin. */
+/** Local `ng serve` talks to localhost. Deployed UI calls the API host for that environment. */
 const localApi = 'http://localhost:5230';
-const deployedApi = 'https://app-verita-pilot-api.azurewebsites.net';
+const flyApi = 'https://verita-abc-api.fly.dev';
+const azureApi = 'https://app-verita-pilot-api.azurewebsites.net';
 
-function localHost(): boolean {
+function apiOrigin(): string {
   const host = globalThis.location?.hostname;
-  return !host || host === 'localhost' || host === '127.0.0.1';
+  if (!host || host === 'localhost' || host === '127.0.0.1') return localApi;
+  if (host.endsWith('.fly.dev')) return flyApi;
+  return azureApi;
 }
 
-export const apiV1 = `${localHost() ? localApi : deployedApi}/api/v1`;
+export const apiV1 = `${apiOrigin()}/api/v1`;

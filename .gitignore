@@ -6,6 +6,7 @@
 # dotenv files
 .env
 .env.azure-pilot
+.env.fly-pilot
 
 # User-specific files
 *.rsuser

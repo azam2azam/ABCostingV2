@@ -1,0 +1,18 @@
+FROM mcr.microsoft.com/dotnet/sdk:8.0 AS build
+WORKDIR /src
+COPY Verita.sln global.json ./
+COPY src/Verita.Api/Verita.Api.csproj src/Verita.Api/
+COPY src/Verita.Application/Verita.Application.csproj src/Verita.Application/
+COPY src/Verita.Domain/Verita.Domain.csproj src/Verita.Domain/
+COPY src/Verita.Engine/Verita.Engine.csproj src/Verita.Engine/
+COPY src/Verita.Infrastructure/Verita.Infrastructure.csproj src/Verita.Infrastructure/
+RUN dotnet restore src/Verita.Api/Verita.Api.csproj
+COPY src/ src/
+RUN dotnet publish src/Verita.Api/Verita.Api.csproj -c Release -o /app --no-restore
+
+FROM mcr.microsoft.com/dotnet/aspnet:8.0
+WORKDIR /app
+COPY --from=build /app .
+ENV ASPNETCORE_URLS=http://0.0.0.0:8080
+EXPOSE 8080
+ENTRYPOINT ["dotnet", "Verita.Api.dll"]

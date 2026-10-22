@@ -2,4 +2,6 @@
 *.mjs text eol=lf
 * text=auto
 *.gz binary
+*.zip binary
+*.bak binary
 *.docx binary

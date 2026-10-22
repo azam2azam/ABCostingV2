@@ -1,0 +1,30 @@
+app = "verita-abc-api"
+primary_region = "fra"
+
+[build]
+  dockerfile = "../../../Dockerfile.api"
+
+[env]
+  ASPNETCORE_ENVIRONMENT = "Production"
+  Jwt__Issuer = "verita"
+  Cors__Origins__0 = "https://verita-abc-web.fly.dev"
+  Cors__Origins__1 = "http://localhost:4230"
+
+[http_service]
+  internal_port = 8080
+  force_https = true
+  auto_stop_machines = "off"
+  auto_start_machines = true
+  min_machines_running = 1
+  processes = ["app"]
+
+  [[http_service.checks]]
+    interval = "15s"
+    timeout = "5s"
+    grace_period = "30s"
+    method = "GET"
+    path = "/health"
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "1gb"

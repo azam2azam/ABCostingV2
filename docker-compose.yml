@@ -18,5 +18,30 @@ services:
       retries: 30
       start_period: 15s
 
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile.api
+    container_name: verita-api
+    ports:
+      - "5230:8080"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    environment:
+      ASPNETCORE_ENVIRONMENT: Development
+      ConnectionStrings__Verita: "Server=host.docker.internal,1433;Database=Verita;User Id=sa;Password=Verita!Dev123;TrustServerCertificate=True;Encrypt=False"
+      Jwt__Issuer: verita
+      Jwt__Key: local-development-signing-key-change-me-0123456789abcdef
+      Cors__Origins__0: http://localhost:4230
+      Cors__Origins__1: http://127.0.0.1:4230
+
+  web:
+    build:
+      context: .
+      dockerfile: Dockerfile.web
+    container_name: verita-web
+    ports:
+      - "4230:8080"
+
 volumes:
   verita-sql-data:

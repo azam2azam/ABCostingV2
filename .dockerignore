@@ -1,0 +1,12 @@
+**/bin/
+**/obj/
+**/node_modules/
+**/.angular/
+**/dist/
+**/.git/
+**/.env*
+**/docs/
+**/tests/
+web/dist/
+*.md
+.cursor/
