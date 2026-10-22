@@ -8,8 +8,9 @@ Deploy by pushing a branch (or **Actions → Run workflow**):
 |---|---|
 | `deploy-api/*` | API → App Service |
 | `deploy-ui/*` | Angular → Static Web App |
+| `deploy/*` | Both API and UI |
 
-Example: `git checkout -b deploy-api/pilot && git push -u origin HEAD`. Path filters are not used, so creating that branch is enough to deploy.
+Example: `git checkout -b deploy/pilot && git push -u origin HEAD`. Path filters are not used, so creating that branch is enough to deploy.
 
 The Angular app calls same-origin `/api/v1`. The Static Web App is **Standard** and linked to App Service `app-verita-pilot-api`, so `/api/*` is proxied. No CORS change is required.
 
@@ -41,7 +42,11 @@ GitHub secrets (already on the repo):
 | `AZURE_WEBAPP_NAME` | `app-verita-pilot-api` |
 | `AZURE_STATIC_WEB_APPS_API_TOKEN` | Web workflow |
 
-Entra app `github-verita-cicd` uses a federated credential for GitHub environment `azure` (so `deploy-api/*` branches can log in to Azure). The API workflow sets `environment: azure`.
+Entra app `github-verita-cicd` uses a federated credential for GitHub environment `azure`. GitHub’s OIDC subject includes owner/repo IDs:
+
+`repo:azam2azam@67052343/ABCostingV2@1407141690:environment:azure`
+
+The API workflow sets `environment: azure`.
 
 ## Local SQL (not Azure)
 

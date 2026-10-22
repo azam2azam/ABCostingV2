@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - "deploy-ui/**"
+      - "deploy/**"
   workflow_dispatch:
 
 concurrency:
