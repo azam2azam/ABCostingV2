@@ -21,6 +21,7 @@ public sealed class CsvZipWriter : IDisposable
 
     public string ZipPath { get; }
     public string Dir { get; }
+    public bool Completed { get; set; }
 
     public CsvFile Create(string numberedName, params string[] headers)
     {
@@ -39,6 +40,11 @@ public sealed class CsvZipWriter : IDisposable
         var logText = string.Join("\r\n", _log) + "\r\n";
         File.WriteAllText(Path.Combine(Dir, "extract-log.txt"), logText, Utf8);
         File.WriteAllText(Path.Combine(Dir, "README.txt"), _readme + "\r\n\r\n" + logText, Utf8);
+        if (!Completed)
+        {
+            Console.WriteLine($"  CSV folder left at {Dir} (zip not written because the extract failed).");
+            return;
+        }
         if (File.Exists(ZipPath)) File.Delete(ZipPath);
         ZipFile.CreateFromDirectory(Dir, ZipPath, CompressionLevel.Fastest, includeBaseDirectory: false);
         Console.WriteLine($"  Wrote {ZipPath}");

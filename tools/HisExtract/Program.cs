@@ -85,6 +85,7 @@ static class App
         Console.WriteLine("Catalogue pack");
         using var pack = new CsvZipWriter(zip, Readme(s, "catalogue", null, null));
         await CatalogueExtract.RunAsync(db, s, pack);
+        pack.Completed = true;
     }
 
     private static async Task Facts(HisConnection db, Settings s)
@@ -94,6 +95,7 @@ static class App
         Console.WriteLine("Facts pack");
         using var pack = new CsvZipWriter(zip, Readme(s, "facts", s.From, s.To));
         await FactsExtract.RunAsync(db, s, pack);
+        pack.Completed = true;
     }
 
     private static string Readme(Settings s, string pack, DateTime? from, DateTime? to) =>

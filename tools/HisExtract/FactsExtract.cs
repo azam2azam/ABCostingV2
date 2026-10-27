@@ -198,13 +198,13 @@ public static class FactsExtract
                    m.ClinicID, m.CompanyID, m.PerformedServiceClinicID,
                    d.LineItemNo, d.ProcedureID, d.Price, d.Quantity, d.DiscountAmount, d.WaivedAmount,
                    d.PatientShare, d.CompanyShare, d.CostCenterID, d.PrimaryDoctorID, d.PrimaryClinicID,
-                   d.PerformDate, proc.IsMedicine, er.AssessmentNo
+                   d.PerformDate, hp.IsMedicine, er.AssessmentNo
             FROM dbo.HIS_InvoiceMain m WITH (NOLOCK)
             INNER JOIN dbo.HIS_InvoiceDetail d WITH (NOLOCK)
               ON d.SetupID=m.SetupID AND d.ProjectID=m.ProjectID
              AND d.TransactionType=m.TransactionType AND d.InvoiceNo=m.InvoiceNo
-            LEFT JOIN dbo.HIS_Procedure proc WITH (NOLOCK)
-              ON proc.SetupID=d.SetupID AND proc.ProjectID=d.ProjectID AND proc.ProcedureID=d.ProcedureID
+            LEFT JOIN dbo.HIS_Procedure hp WITH (NOLOCK)
+              ON hp.SetupID=d.SetupID AND hp.ProjectID=d.ProjectID AND hp.ProcedureID=d.ProcedureID
             LEFT JOIN dbo.INP_ERAssessment er WITH (NOLOCK)
               ON er.SetupID=m.SetupID AND er.ProjectID=m.ProjectID AND er.InvoiceNo=m.InvoiceNo
              AND ISNULL(m.AppointmentNo,0)=0 AND ISNULL(m.AdmissionNo,0)=0

@@ -489,3 +489,7 @@ $RECYCLE.BIN/
 web/node_modules/
 web/dist/
 web/.angular/
+
+# HIS extractor output
+his-extract-out/
+publish/HisExtract/
