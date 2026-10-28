@@ -169,9 +169,9 @@ static class App
         Identity is SetupID + ProjectID (every CSV + zip name). Do not treat the zip
         filename as a VERITA hospital. Inner CSV names stay NN_Table.csv.
 
-        These packs are not yet importable into current VERITA Data import (extra
-        setupId/projectId columns + 00_manifest.csv). Copy the zips back for validation
-        before VERITA import is updated.
+        Facts include 35_ActivityTransaction.csv from measured HIS clocks and quantities
+        (visit/ER/OR times, bed-days, floor stock, dispensed qty). Invoice price is not cost.
+        Import remaps SetupID-ProjectID codes onto the VERITA hospital you pick.
         """;
 
     private static int SelfTest()
@@ -203,6 +203,14 @@ static class App
         var one = MonthSlices.Of(new DateTime(2026, 9, 1), new DateTime(2026, 10, 1));
         Check("--month 2026-09 → one zip", one.Count == 1 && one[0].YearMonth == "2026-09");
 
+        var day = new DateTime(2026, 8, 3);
+        Check("clock minutes 08:00-09:30", Maps.ClockMinutes(Maps.Combine(day, "08:00"), Maps.Combine(day, "09:30")) == 90);
+        Check("clock minutes skip empty span", Maps.ClockMinutes(day, day) is null);
+        Check("clock minutes overnight", Maps.ClockMinutes(Maps.Combine(day, "22:00"), Maps.Combine(day, "02:00")) == 240);
+        Check("HIS ArrivalTime HHMMSS", Maps.Combine(day, "143000") == day.Date.AddHours(14).AddMinutes(30));
+        Check("transfer duration hours", Maps.TransferMinutes(2, day, "", "") == 120);
+        Check("transfer duration minutes", Maps.TransferMinutes(180, day, "", "") == 180);
+
         var tmp = Path.Combine(Path.GetTempPath(), "his-extract-selftest-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(tmp);
         var s = new Settings { SetupId = "010266", ProjectId = 15, OutDir = tmp };
@@ -230,6 +238,41 @@ static class App
             var mh = mr.ReadLine();
             Check("manifest has HIS + pack columns", mh is not null && mh.StartsWith("setupId,projectId,pack,"));
         }
+
+        var prevPage = CsvZipWriter.PageRows;
+        CsvZipWriter.PageRows = 2;
+        var pagedZip = Path.Combine(tmp, $"{s.PackPrefix}-paged.zip");
+        try
+        {
+            using (var pack = new CsvZipWriter(pagedZip, "selftest-pages", s))
+            {
+                using (var csv = pack.Create("34_EncounterService.csv", "sourceRef"))
+                {
+                    csv.Write("a");
+                    csv.Write("b");
+                    csv.Write("c");
+                    csv.Write("d");
+                    csv.Write("e");
+                }
+                pack.Completed = true;
+            }
+            using var z = System.IO.Compression.ZipFile.OpenRead(pagedZip);
+            var names = z.Entries.Select(e => e.Name).OrderBy(x => x).ToArray();
+            Check("paging writes p2 and p3, not one overwritten file",
+                names.Contains("34_EncounterService.csv")
+                && names.Contains("34_EncounterService_p2.csv")
+                && names.Contains("34_EncounterService_p3.csv"));
+            static int DataRows(System.IO.Compression.ZipArchive zip, string name)
+            {
+                using var r = new StreamReader(zip.GetEntry(name)!.Open());
+                return r.ReadToEnd().Split('\n', StringSplitOptions.RemoveEmptyEntries).Length - 1;
+            }
+            Check("page 1 keeps first 2 rows", DataRows(z, "34_EncounterService.csv") == 2);
+            Check("page 2 keeps next 2 rows", DataRows(z, "34_EncounterService_p2.csv") == 2);
+            Check("page 3 keeps last row", DataRows(z, "34_EncounterService_p3.csv") == 1);
+        }
+        finally { CsvZipWriter.PageRows = prevPage; }
+
         try { Directory.Delete(tmp, recursive: true); } catch { /* temp */ }
 
         Console.WriteLine(failed == 0 ? "selftest passed" : $"selftest failed ({failed})");
@@ -326,6 +369,11 @@ static class App
               HIS-010266-15-2026-07-facts.zip
               HIS-010266-15-2026-08-facts.zip
               ...
+
+            Facts include 35_ActivityTransaction.csv from measured HIS clocks and
+            quantities. Invoice / floor UnitPrice is never written as cost.
+            Tables over 50,000 rows split to NN_Entity.csv, NN_Entity_p2.csv, … — import
+            concatenates every page. Queries use NOLOCK / READ UNCOMMITTED.
 
             Options:
               --cs         SQL connection string (or env HIS_CONNECTION)

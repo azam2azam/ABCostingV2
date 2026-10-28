@@ -12,6 +12,7 @@ public static class FactsExtract
         await PatientsAsync(db, s, c, pack, asOf);
         await EncountersAsync(db, s, c, pack);
         await BillingAsync(db, s, c, pack);
+        await ActivityTxnExtract.RunAsync(db, s, c, pack);
         pack.Note("Facts extract finished");
     }
 

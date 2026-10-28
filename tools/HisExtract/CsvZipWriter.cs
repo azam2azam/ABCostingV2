@@ -12,6 +12,9 @@ public sealed class CsvZipWriter : IDisposable
     private readonly string _setupId;
     private readonly string _projectId;
 
+    /// <summary>Data rows per CSV page. Later pages are <c>NN_Entity_p2.csv</c> so they are not overwritten.</summary>
+    public static int PageRows { get; set; } = 50_000;
+
     public CsvZipWriter(string zipPath, string readme, Settings s)
     {
         ZipPath = Path.GetFullPath(zipPath);
@@ -29,9 +32,8 @@ public sealed class CsvZipWriter : IDisposable
 
     public CsvFile Create(string numberedName, params string[] headers)
     {
-        var path = Path.Combine(Dir, numberedName);
         string[] all = ["setupId", "projectId", .. headers];
-        return new CsvFile(numberedName, all, path, _log, _setupId, _projectId);
+        return new CsvFile(this, numberedName, all);
     }
 
     public void WriteManifest(string pack, DateTime? fromInclusive, DateTime? toExclusive)
@@ -53,6 +55,15 @@ public sealed class CsvZipWriter : IDisposable
         Console.WriteLine("  " + line);
     }
 
+    internal void NoteInternal(string line) => _log.Add(line);
+
+    internal StreamWriter OpenPage(string numberedName)
+    {
+        var path = Path.Combine(Dir, numberedName);
+        var w = new StreamWriter(path, false, Utf8);
+        return w;
+    }
+
     public void Dispose()
     {
         var logText = string.Join("\r\n", _log) + "\r\n";
@@ -70,42 +81,75 @@ public sealed class CsvZipWriter : IDisposable
 
     public sealed class CsvFile : IDisposable
     {
-        private readonly string _name;
-        private readonly StreamWriter _w;
-        private readonly List<string> _log;
-        private readonly string _setupId;
-        private readonly string _projectId;
+        private readonly CsvZipWriter _pack;
+        private readonly string _baseName;
+        private readonly string[] _headers;
+        private StreamWriter _w;
+        private string _currentName;
+        private int _page = 1;
+        private int _pageRows;
         public int Rows { get; private set; }
 
-        public CsvFile(string name, string[] headers, string path, List<string> log, string setupId, string projectId)
+        internal CsvFile(CsvZipWriter pack, string numberedName, string[] headers)
         {
-            _name = name;
-            _log = log;
-            _setupId = setupId;
-            _projectId = projectId;
-            _w = new StreamWriter(path, false, Utf8);
+            _pack = pack;
+            _baseName = numberedName;
+            _headers = headers;
+            _currentName = numberedName;
+            _w = pack.OpenPage(numberedName);
             _w.WriteLine(string.Join(",", headers.Select(Csv.Escape)));
         }
 
         public void Write(params string?[] cells)
         {
-            string?[] row = [_setupId, _projectId, .. cells];
+            if (_pageRows >= PageRows) Rotate();
+            string?[] row = [_pack._setupId, _pack._projectId, .. cells];
             _w.WriteLine(string.Join(",", row.Select(Csv.Escape)));
             Rows++;
-            if (Rows % 50_000 == 0)
+            _pageRows++;
+        }
+
+        private void Rotate()
+        {
+            CloseCurrent(log: true);
+            _page++;
+            _pageRows = 0;
+            _currentName = PageName(_baseName, _page);
+            _w = _pack.OpenPage(_currentName);
+            _w.WriteLine(string.Join(",", _headers.Select(Csv.Escape)));
+            Console.WriteLine($"    {_currentName}: page {_page}...");
+        }
+
+        private void CloseCurrent(bool log)
+        {
+            _w.Flush();
+            _w.Dispose();
+            if (log)
             {
-                _w.Flush();
-                Console.WriteLine($"    {_name}: {Rows:N0} rows...");
+                var line = $"{_currentName}: {_pageRows:N0} rows";
+                _pack.NoteInternal(line);
+                Console.WriteLine($"    {line}");
             }
         }
 
         public void Dispose()
         {
-            _w.Flush();
-            _w.Dispose();
-            _log.Add($"{_name}: {Rows:N0} rows");
-            Console.WriteLine($"    {_name}: {Rows:N0} rows");
+            CloseCurrent(log: true);
+            if (_page > 1)
+            {
+                var line = $"{_baseName}: {Rows:N0} rows in {_page} files";
+                _pack.NoteInternal(line);
+                Console.WriteLine($"    {line}");
+            }
         }
+    }
+
+    public static string PageName(string numberedName, int page)
+    {
+        if (page <= 1) return numberedName;
+        var ext = Path.GetExtension(numberedName);
+        var stem = Path.GetFileNameWithoutExtension(numberedName);
+        return $"{stem}_p{page}{ext}";
     }
 }
 

@@ -26,6 +26,8 @@ public sealed class Codes(Settings s)
     public string OpEncounter(object appointmentNo) => $"{s.H}-OP-{appointmentNo}";
     public string IpEncounter(object admissionNo) => $"{s.H}-IP-{admissionNo}";
     public string ErEncounter(object assessmentNo) => $"{s.H}-ER-{assessmentNo}";
+    public string Activity(string token) => $"{s.H}.ACT-{token}";
+    public string Resource(string token) => $"{s.H}.RES-{token}";
 
     /// <summary>HIS PatientID as MRN — never PatientUID, never a SetupID/ProjectID token.</summary>
     public string Mrn(object patientId)

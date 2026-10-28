@@ -50,6 +50,7 @@ public static class Probe
                     WHERE d.SetupID=@SetupId AND d.ProjectID=@ProjectId
                       AND m.InvoiceDate >= @From AND m.InvoiceDate < @To AND m.CancelledOn IS NULL
                     """);
+                await db.DirtyReadAsync();
                 s.BindPeriod(cmd);
                 Console.WriteLine($"  {"HIS_InvoiceDetail (via invoice date)",-44} {Convert.ToInt64(await cmd.ExecuteScalarAsync()),12:N0}");
             }
@@ -58,6 +59,28 @@ public static class Probe
                 Console.WriteLine($"  {"HIS_InvoiceDetail",-44}  ERROR: {ex.Message}");
             }
             await PeriodRow(db, s, "INP_OTReservation", string.Format(period, "OperationDate"));
+            await PeriodRow(db, s, "INP_Transfer", string.Format(period, "TransferDate"));
+            try
+            {
+                await using var ot = db.Cmd("""
+                    SELECT COUNT_BIG(1)
+                    FROM dbo.INP_OTReservation WITH (NOLOCK)
+                    WHERE SetupID=@SetupId AND ProjectID=@ProjectId
+                      AND OperationDate >= @From AND OperationDate < @To
+                      AND NULLIF(LTRIM(ActualSugeryStartTime),'') IS NOT NULL
+                      AND NULLIF(LTRIM(ActualSurgeryEndTime),'') IS NOT NULL
+                    """);
+                await db.DirtyReadAsync();
+                s.BindPeriod(ot);
+                Console.WriteLine($"  {"INP_OTReservation  with actual surgery times",-44} {Convert.ToInt64(await ot.ExecuteScalarAsync()),12:N0}");
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"  {"INP_OTReservation  actual times",-44}  ERROR: {ex.Message}");
+            }
+            await PeriodRow(db, s, "HIS_FloorConsumption", string.Format(period, "CreatedOn"));
+            await PeriodRow(db, s, "INP_PatientConsumedItem", string.Format(period, "CreatedOn"));
+            await PeriodRow(db, s, "HIS_ProgNoteMedicine", string.Format(period, "StartDate"));
         }
         else
         {
@@ -121,6 +144,7 @@ public static class Probe
             var sql = $"SELECT COUNT_BIG(1) FROM dbo.{from} WITH (NOLOCK) WHERE SetupID = @SetupId AND ProjectID = @ProjectId {extra}";
             if (from.Contains("INNER JOIN", StringComparison.OrdinalIgnoreCase))
                 sql = $"SELECT COUNT_BIG(1) FROM dbo.{from} WHERE d.SetupID = @SetupId AND d.ProjectID = @ProjectId {extra}";
+            await db.DirtyReadAsync();
             await using var cmd = db.Cmd(sql);
             s.BindPeriod(cmd);
             var n = Convert.ToInt64(await cmd.ExecuteScalarAsync());

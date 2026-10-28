@@ -12,16 +12,23 @@ public sealed class HisConnection : IAsyncDisposable
     public async Task OpenAsync()
     {
         await _conn.OpenAsync();
+        await DirtyReadAsync();
+    }
+
+    /// <summary>Dirty reads, no shared locks — extract must not block HIS writers on prod.</summary>
+    public async Task DirtyReadAsync()
+    {
         await using var cmd = _conn.CreateCommand();
-        cmd.CommandText = "SET TRANSACTION ISOLATION LEVEL READ UNCOMMITTED; SET ARITHABORT ON;";
+        cmd.CommandTimeout = 15;
+        cmd.CommandText = "SET TRANSACTION ISOLATION LEVEL READ UNCOMMITTED; SET ARITHABORT ON; SET DEADLOCK_PRIORITY LOW;";
         await cmd.ExecuteNonQueryAsync();
     }
 
     public SqlCommand Cmd(string sql)
     {
         var cmd = _conn.CreateCommand();
-        cmd.CommandText = sql;
         cmd.CommandTimeout = 0;
+        cmd.CommandText = sql;
         return cmd;
     }
 
@@ -30,6 +37,7 @@ public sealed class HisConnection : IAsyncDisposable
         var sql = byProject
             ? $"SELECT COUNT_BIG(1) FROM dbo.{table} WITH (NOLOCK) WHERE SetupID = @SetupId AND ProjectID = @ProjectId {extraWhere}"
             : $"SELECT COUNT_BIG(1) FROM dbo.{table} WITH (NOLOCK) WHERE SetupID = @SetupId {extraWhere}";
+        await DirtyReadAsync();
         await using var cmd = Cmd(sql);
         s.BindTenant(cmd);
         var v = await cmd.ExecuteScalarAsync();
@@ -38,6 +46,7 @@ public sealed class HisConnection : IAsyncDisposable
 
     public async Task ScalarAsync(string sql, Action<SqlCommand> bind, Action<object?> use)
     {
+        await DirtyReadAsync();
         await using var cmd = Cmd(sql);
         bind(cmd);
         use(await cmd.ExecuteScalarAsync());
@@ -45,6 +54,7 @@ public sealed class HisConnection : IAsyncDisposable
 
     public async Task QueryAsync(string sql, Action<SqlCommand> bind, Action<SqlDataReader> each)
     {
+        await DirtyReadAsync();
         await using var cmd = Cmd(sql);
         bind(cmd);
         await using var r = await cmd.ExecuteReaderAsync();
@@ -53,6 +63,7 @@ public sealed class HisConnection : IAsyncDisposable
 
     public async Task QueryAsync(string sql, Action<SqlCommand> bind, Func<SqlDataReader, Task> each)
     {
+        await DirtyReadAsync();
         await using var cmd = Cmd(sql);
         bind(cmd);
         await using var r = await cmd.ExecuteReaderAsync();

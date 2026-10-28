@@ -4,7 +4,7 @@ namespace HisExtract;
 public sealed class Settings
 {
     public const string DefaultConnection =
-        "Server=RAY-VIDA-UAT;Database=HISGENX;User Id=HmgDbUser;Password=HmgDbUser123;TrustServerCertificate=True;Application Name=VeritaHisExtract";
+        "Server=RAY-VIDA-UAT;Database=HISGENX;User Id=HmgDbUser;Password=HmgDbUser123;TrustServerCertificate=True;Application Name=VeritaHisExtract;Pooling=true";
 
     public string ConnectionString { get; set; } = DefaultConnection;
     public string SetupId { get; set; } = "010266";

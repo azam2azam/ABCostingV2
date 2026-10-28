@@ -93,9 +93,45 @@ public static class Maps
     {
         if (string.IsNullOrWhiteSpace(time)) return date;
         var t = time.Trim();
+        if (t.Length is 4 or 6 && t.All(char.IsDigit))
+        {
+            var h = int.Parse(t[..2], CultureInfo.InvariantCulture);
+            var m = int.Parse(t[2..4], CultureInfo.InvariantCulture);
+            var s = t.Length == 6 ? int.Parse(t[4..6], CultureInfo.InvariantCulture) : 0;
+            if (h is >= 0 and < 24 && m is >= 0 and < 60 && s is >= 0 and < 60)
+                return date.Date.Add(new TimeSpan(h, m, s));
+        }
         if (TimeSpan.TryParse(t, CultureInfo.InvariantCulture, out var ts)) return date.Date.Add(ts);
         if (System.DateTime.TryParse(t, CultureInfo.InvariantCulture, DateTimeStyles.None, out var dt))
             return date.Date.Add(dt.TimeOfDay);
         return date;
+    }
+
+    /// <summary>Positive clock minutes, allowing one overnight wrap. Null when stamps are missing or unusable.</summary>
+    public static int? ClockMinutes(DateTime start, DateTime end, int maxMinutes = 24 * 60)
+    {
+        var m = (int)Math.Round((end - start).TotalMinutes);
+        if (m == 0) return null;
+        if (m < 0)
+        {
+            if (m <= -maxMinutes) return null;
+            m += 24 * 60;
+        }
+        if (m <= 0 || m > maxMinutes) return null;
+        return m;
+    }
+
+    /// <summary>
+    /// Transfer occupancy: prefer Start/End clock; else Duration. HIS Duration is untyped —
+    /// ≥1440 or &gt;48 treated as minutes, otherwise hours.
+    /// </summary>
+    public static int? TransferMinutes(int duration, DateTime date, string? start, string? end)
+    {
+        var clock = ClockMinutes(Combine(date, start), Combine(date, end), 14 * 24 * 60);
+        if (clock is > 0 && !string.IsNullOrWhiteSpace(start) && !string.IsNullOrWhiteSpace(end))
+            return clock;
+        if (duration <= 0) return null;
+        if (duration >= 1440 || duration > 48) return duration;
+        return duration * 60;
     }
 }
