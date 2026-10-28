@@ -9,12 +9,12 @@ public sealed class Settings
     public string ConnectionString { get; set; } = DefaultConnection;
     public string SetupId { get; set; } = "010266";
     public short ProjectId { get; set; } = 15;
-    public string HospitalCode { get; set; } = "RYN-UAT";
     public DateTime? From { get; set; }
     public DateTime? To { get; set; }
     public string OutDir { get; set; } = Path.Combine(Environment.CurrentDirectory, "his-extract-out");
 
-    public string H => HospitalCode;
+    /// <summary>HIS tenant token used in row codes. Not a VERITA Hospital.Code — import maps that.</summary>
+    public string H => $"{SetupId}-{ProjectId}";
 
     /// <summary>Filename token for HIS identity. SetupID/ProjectID are the extract identity, not VERITA Hospital.Code.</summary>
     public string PackPrefix
@@ -37,7 +37,9 @@ public sealed class Settings
     public void BindPeriod(Microsoft.Data.SqlClient.SqlCommand cmd)
     {
         BindTenant(cmd);
-        cmd.Parameters.AddWithValue("@From", From ?? throw new InvalidOperationException("Period From is required."));
-        cmd.Parameters.AddWithValue("@To", To ?? throw new InvalidOperationException("Period To is required."));
+        var from = From ?? throw new InvalidOperationException("Period From is required.");
+        var to = To ?? throw new InvalidOperationException("Period To is required.");
+        cmd.Parameters.Add(new Microsoft.Data.SqlClient.SqlParameter("@From", System.Data.SqlDbType.DateTime2) { Value = from.Date });
+        cmd.Parameters.Add(new Microsoft.Data.SqlClient.SqlParameter("@To", System.Data.SqlDbType.DateTime2) { Value = to.Date });
     }
 }

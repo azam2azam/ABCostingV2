@@ -34,18 +34,17 @@ public sealed class CsvZipWriter : IDisposable
         return new CsvFile(numberedName, all, path, _log, _setupId, _projectId);
     }
 
-    public void WriteManifest(string pack, DateTime? fromInclusive, DateTime? toExclusive, string veritaHospitalCode)
+    public void WriteManifest(string pack, DateTime? fromInclusive, DateTime? toExclusive)
     {
         using var csv = Create("00_manifest.csv",
-            "pack", "from", "toInclusive", "toExclusive", "extractedAtUtc", "veritaHospitalCode");
+            "pack", "from", "toInclusive", "toExclusive", "extractedAtUtc");
         var toInc = toExclusive is { } t ? t.AddDays(-1).ToString("yyyy-MM-dd") : "";
         csv.Write(
             pack,
             fromInclusive?.ToString("yyyy-MM-dd") ?? "",
             toInc,
             toExclusive?.ToString("yyyy-MM-dd") ?? "",
-            DateTime.UtcNow.ToString("u"),
-            veritaHospitalCode);
+            DateTime.UtcNow.ToString("u"));
     }
 
     public void Note(string line)

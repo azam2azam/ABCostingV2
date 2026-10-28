@@ -1,6 +1,6 @@
 namespace HisExtract;
 
-/// <summary>Stable VERITA codes derived from HIS keys. Re-importing the same zip updates rather than duplicates.</summary>
+/// <summary>Stable HIS codes from SetupID/ProjectID and HIS keys. VERITA Hospital.Code is chosen on import.</summary>
 public sealed class Codes(Settings s)
 {
     public string Hospital => s.H;

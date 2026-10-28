@@ -6,7 +6,7 @@ public static class CatalogueExtract
     {
         var c = new Codes(s);
         var asOf = DateTime.Today;
-        pack.WriteManifest("catalogue", null, null, s.HospitalCode);
+        pack.WriteManifest("catalogue", null, null);
 
         await HospitalAsync(db, s, c, pack);
         await FacilityAsync(db, s, c, pack);
@@ -44,7 +44,7 @@ public static class CatalogueExtract
         {
             var name = HisConnection.S(r, "Name");
             if (name.Length == 0) name = HisConnection.S(r, "Alias");
-            if (name.Length == 0) name = s.HospitalCode;
+            if (name.Length == 0) name = s.H;
             var currency = HisConnection.S(r, "ISOCurrencyID3");
             if (currency.Length == 0) currency = "SAR";
             csv.Write(c.Hospital, name, HisConnection.S(r, "CityName"), currency, Maps.Int(beds),
@@ -52,7 +52,7 @@ public static class CatalogueExtract
             n++;
         });
         if (n == 0)
-            csv.Write(c.Hospital, s.HospitalCode, "", "SAR", Maps.Int(beds), "true");
+            csv.Write(c.Hospital, s.H, "", "SAR", Maps.Int(beds), "true");
     }
 
     private static async Task FacilityAsync(HisConnection db, Settings s, Codes c, CsvZipWriter pack)

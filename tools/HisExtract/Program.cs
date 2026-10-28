@@ -11,7 +11,18 @@ static class App
         Console.WriteLine("Read-only. Identity is HIS SetupID + ProjectID. One facts zip per calendar month.");
         Console.WriteLine();
 
-        var s = Parse(args);
+        var s = new Settings();
+        var monthRaw = Flag(args, "--month");
+        if (monthRaw is not null)
+        {
+            if (!Dates.TryMonth(monthRaw, out var monthStart))
+            {
+                Console.Error.WriteLine($"Could not parse --month '{monthRaw}'. Use yyyy-MM.");
+                return 1;
+            }
+            s.From = monthStart;
+            s.To = monthStart.AddMonths(1);
+        }
         if (args.Any(a => a is "-h" or "--help"))
         {
             Help();
@@ -28,26 +39,41 @@ static class App
         s.SetupId = Flag(args, "--setup") ?? (Interactive(args) ? Ask("SetupId", s.SetupId) : s.SetupId);
         if (short.TryParse(Flag(args, "--project") ?? (Interactive(args) ? Ask("ProjectId", s.ProjectId.ToString()) : s.ProjectId.ToString()), out var pid))
             s.ProjectId = pid;
-        s.HospitalCode = Flag(args, "--hospital") ?? (Interactive(args) ? Ask("Hospital code", s.HospitalCode) : s.HospitalCode);
+        if (Flag(args, "--hospital") is not null)
+            Console.WriteLine("Note: --hospital is ignored. Identity is SetupID + ProjectID. Choose the VERITA hospital on import.");
         s.OutDir = Flag(args, "--out") ?? s.OutDir;
 
-        s.From = ParseDate(Flag(args, "--from")) ?? s.From;
-        var toInclusive = ParseDate(Flag(args, "--to"));
-        if (toInclusive is not null)
-            s.To = toInclusive.Value.AddDays(1);
-        if (command is "facts" or "all")
+        var fromRaw = Flag(args, "--from");
+        var toRaw = Flag(args, "--to");
+        if (fromRaw is not null)
         {
-            s.From ??= Interactive(args) ? AskDate("From (yyyy-MM-dd)", PreviousMonthStart()) : PreviousMonthStart();
-            if (s.To is null)
+            s.From = Dates.TryDay(fromRaw) ?? FailDate("--from", fromRaw);
+            if (s.From is null) return 1;
+            if (toRaw is null) s.To = null;
+        }
+        if (toRaw is not null)
+        {
+            var toInclusive = Dates.TryDay(toRaw, endOfMonthIfYearMonth: true);
+            if (toInclusive is null) { FailDate("--to", toRaw); return 1; }
+            s.To = Dates.ExclusiveEnd(toInclusive.Value);
+        }
+        if (command is "facts" or "all" or "probe")
+        {
+            var needPeriod = command is "facts" or "all" || fromRaw is not null || toRaw is not null || s.From is not null;
+            if (needPeriod)
             {
-                var defaultTo = LastDayOfMonth(s.From.Value);
-                var asked = Interactive(args) ? AskDate("To inclusive (yyyy-MM-dd)", defaultTo) : defaultTo;
-                s.To = asked.AddDays(1);
-            }
-            if (s.To <= s.From)
-            {
-                Console.Error.WriteLine($"Empty period: from {s.From:yyyy-MM-dd} to inclusive {s.To.Value.AddDays(-1):yyyy-MM-dd}.");
-                return 1;
+                s.From ??= AskDate("From (yyyy-MM-dd)", PreviousMonthStart());
+                if (s.To is null)
+                {
+                    var asked = AskDate("To inclusive (yyyy-MM-dd)", DateTime.Today, asEnd: true);
+                    s.To = Dates.ExclusiveEnd(asked);
+                }
+                if (s.To <= s.From)
+                {
+                    Console.Error.WriteLine($"Empty period: from {s.From:yyyy-MM-dd} to inclusive {s.To.Value.AddDays(-1):yyyy-MM-dd}.");
+                    return 1;
+                }
+                Console.WriteLine($"Period {s.From:yyyy-MM-dd} .. {s.To.Value.AddDays(-1):yyyy-MM-dd} inclusive ({MonthSlices.Of(s.From.Value, s.To.Value).Count} month file(s) for facts).");
             }
         }
 
@@ -136,7 +162,6 @@ static class App
         Pack: {pack}
         HIS SetupID: {s.SetupId}
         HIS ProjectID: {s.ProjectId}
-        VERITA hospitalCode still stamped on rows: {s.HospitalCode}
         Period: {(from is null ? "n/a" : $"{from:yyyy-MM-dd} .. {toExclusive!.Value.AddDays(-1):yyyy-MM-dd} inclusive")}
         Extracted (UTC): {DateTime.UtcNow:u}
         Server: {ServerOf(s.ConnectionString)}
@@ -158,6 +183,12 @@ static class App
             if (!ok) failed++;
         }
 
+        Check("yyyy-MM-dd from", Dates.TryDay("2026-07-01") == new DateTime(2026, 7, 1));
+        Check("yyyy-MM from = first of month", Dates.TryDay("2026-07") == new DateTime(2026, 7, 1));
+        Check("yyyy-MM to = last of month", Dates.TryDay("2026-10", endOfMonthIfYearMonth: true) == new DateTime(2026, 10, 31));
+        Check("--to 2026-10-31 → exclusive 2026-11-01", Dates.ExclusiveEnd(new DateTime(2026, 10, 31)) == new DateTime(2026, 11, 1));
+        Check("Jul–Oct via --from/--to yyyy-MM", MonthSlices.Of(Dates.TryDay("2026-07")!.Value, Dates.ExclusiveEnd(Dates.TryDay("2026-10", true)!.Value)).Count == 4);
+
         var four = MonthSlices.Of(new DateTime(2026, 7, 1), new DateTime(2026, 11, 1));
         Check("Jul–Oct inclusive → 4 month files", four.Count == 4
             && four[0].YearMonth == "2026-07" && four[0].From == new DateTime(2026, 7, 1) && four[0].ToExclusive == new DateTime(2026, 8, 1)
@@ -174,14 +205,15 @@ static class App
 
         var tmp = Path.Combine(Path.GetTempPath(), "his-extract-selftest-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(tmp);
-        var s = new Settings { SetupId = "010266", ProjectId = 15, HospitalCode = "RYN-UAT", OutDir = tmp };
+        var s = new Settings { SetupId = "010266", ProjectId = 15, OutDir = tmp };
         Check("zip prefix HIS-010266-15", s.PackPrefix == "HIS-010266-15");
+        Check("row codes use HIS tenant, not VERITA hospital", s.H == "010266-15");
         var zip = Path.Combine(tmp, $"{s.PackPrefix}-catalogue.zip");
         using (var pack = new CsvZipWriter(zip, "selftest", s))
         {
             using (var csv = pack.Create("01_Hospital.csv", "code", "name"))
-                csv.Write("RYN-UAT", "Rayan");
-            pack.WriteManifest("catalogue", null, null, s.HospitalCode);
+                csv.Write(s.H, "Rayan");
+            pack.WriteManifest("catalogue", null, null);
             pack.Completed = true;
         }
         using (var z = System.IO.Compression.ZipFile.OpenRead(zip))
@@ -193,7 +225,7 @@ static class App
             var header = r.ReadLine();
             var row = r.ReadLine();
             Check("CSV header starts setupId,projectId", header == "setupId,projectId,code,name");
-            Check("CSV row stamps HIS tenant", row == "010266,15,RYN-UAT,Rayan");
+            Check("CSV row stamps HIS tenant", row == "010266,15,010266-15,Rayan");
             using var mr = new StreamReader(manifest!.Open());
             var mh = mr.ReadLine();
             Check("manifest has HIS + pack columns", mh is not null && mh.StartsWith("setupId,projectId,pack,"));
@@ -207,18 +239,6 @@ static class App
     private static string? Command(string[] args) =>
         args.Select(a => a.Trim().ToLowerInvariant()).FirstOrDefault(a => a is "probe" or "catalogue" or "facts" or "all" or "selftest");
 
-    private static Settings Parse(string[] args)
-    {
-        var s = new Settings();
-        var month = Flag(args, "--month");
-        if (month is not null && DateTime.TryParse(month + "-01", out var m))
-        {
-            s.From = m;
-            s.To = m.AddMonths(1);
-        }
-        return s;
-    }
-
     private static bool Interactive(string[] args) =>
         !args.Any(a => a is "probe" or "catalogue" or "facts" or "all");
 
@@ -229,12 +249,23 @@ static class App
         return string.IsNullOrWhiteSpace(line) ? def : line.Trim();
     }
 
-    private static DateTime AskDate(string label, DateTime def)
+    private static DateTime AskDate(string label, DateTime def, bool asEnd = false)
     {
-        Console.Write($"{label} [{def:yyyy-MM-dd}]: ");
-        var line = Console.ReadLine();
-        if (string.IsNullOrWhiteSpace(line)) return def;
-        return DateTime.Parse(line.Trim());
+        while (true)
+        {
+            Console.Write($"{label} [{def:yyyy-MM-dd}]: ");
+            var line = Console.ReadLine();
+            if (string.IsNullOrWhiteSpace(line)) return def.Date;
+            var d = Dates.TryDay(line, endOfMonthIfYearMonth: asEnd);
+            if (d is not null) return d.Value;
+            Console.WriteLine("  Use yyyy-MM-dd, or yyyy-MM for a whole month.");
+        }
+    }
+
+    private static DateTime? FailDate(string flag, string raw)
+    {
+        Console.Error.WriteLine($"Could not parse {flag} '{raw}'. Use yyyy-MM-dd or yyyy-MM.");
+        return null;
     }
 
     private static DateTime PreviousMonthStart()
@@ -243,9 +274,6 @@ static class App
         return new DateTime(d.Year, d.Month, 1);
     }
 
-    private static DateTime LastDayOfMonth(DateTime d) =>
-        new(d.Year, d.Month, DateTime.DaysInMonth(d.Year, d.Month));
-
     private static string? Flag(string[] args, string name)
     {
         for (var i = 0; i < args.Length - 1; i++)
@@ -253,9 +281,6 @@ static class App
         var prefixed = args.FirstOrDefault(a => a.StartsWith(name + "=", StringComparison.OrdinalIgnoreCase));
         return prefixed?[(name.Length + 1)..];
     }
-
-    private static DateTime? ParseDate(string? v) =>
-        DateTime.TryParse(v, out var d) ? d.Date : null;
 
     private static string? Env(string name)
     {
@@ -292,6 +317,7 @@ static class App
               HisExtract probe
               HisExtract catalogue
               HisExtract facts --from 2026-07-01 --to 2026-10-31
+              HisExtract facts --from 2026-07 --to 2026-10
               HisExtract all --month 2026-09
               HisExtract selftest
 
@@ -305,9 +331,8 @@ static class App
               --cs         SQL connection string (or env HIS_CONNECTION)
               --setup      HIS SetupID          default 010266
               --project    HIS ProjectID        default 15
-              --hospital   VERITA hospital code still stamped on row codes (next slice removes this)
-              --from       period start yyyy-MM-dd (facts)
-              --to         period end inclusive yyyy-MM-dd
+              --from       period start yyyy-MM-dd or yyyy-MM (facts)
+              --to         period end inclusive yyyy-MM-dd or yyyy-MM
               --month      yyyy-MM shorthand for one full month
               --out        output directory     default ./his-extract-out
 

@@ -6,7 +6,7 @@ public static class FactsExtract
     {
         var c = new Codes(s);
         var asOf = s.To ?? DateTime.Today;
-        pack.WriteManifest("facts", s.From, s.To, s.HospitalCode);
+        pack.WriteManifest("facts", s.From, s.To);
         pack.Note($"Facts {s.From:yyyy-MM-dd} .. {s.To:yyyy-MM-dd} (SQL end exclusive)");
 
         await PatientsAsync(db, s, c, pack, asOf);

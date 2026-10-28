@@ -7,7 +7,7 @@ public static class Probe
     public static async Task RunAsync(HisConnection db, Settings s)
     {
         Console.WriteLine();
-        Console.WriteLine($"SetupID={s.SetupId}  ProjectID={s.ProjectId}  Hospital={s.HospitalCode}");
+        Console.WriteLine($"SetupID={s.SetupId}  ProjectID={s.ProjectId}");
         await PrintProjectAsync(db, s);
 
         Console.WriteLine();
@@ -33,7 +33,7 @@ public static class Probe
         if (s.From is { } from && s.To is { } to)
         {
             Console.WriteLine();
-            Console.WriteLine($"Facts  {from:yyyy-MM-dd} .. {to:yyyy-MM-dd}  (exclusive end)");
+            Console.WriteLine($"Facts  {from:yyyy-MM-dd} .. {to.AddDays(-1):yyyy-MM-dd} inclusive");
             var period = "AND {0} >= @From AND {0} < @To";
             await PeriodRow(db, s, "HIS_Appointment", string.Format(period, "AppointmentDate"));
             await PeriodRow(db, s, "INP_Admission", string.Format(period, "AdmissionDate"));
