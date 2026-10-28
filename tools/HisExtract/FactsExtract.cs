@@ -21,7 +21,7 @@ public static class FactsExtract
             "hospitalCode", "mrn", "fullName", "birthYear", "sex", "segment", "nationalIdMasked");
         var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         await db.QueryAsync("""
-            SELECT p.PatientType, p.PatientID, p.PatientUID, p.FirstName, p.MiddleName, p.LastName,
+            SELECT p.PatientType, p.PatientID, p.FirstName, p.MiddleName, p.LastName,
                    p.Gender, p.DateofBirth, p.PatientIdentificationNo, p.IsPregnant
             FROM dbo.HIS_Patient p WITH (NOLOCK)
             INNER JOIN (
@@ -44,8 +44,8 @@ public static class FactsExtract
             WHERE p.SetupID=@SetupId AND p.ProjectID=@ProjectId
             """, s.BindPeriod, r =>
         {
-            var mrn = c.Mrn(HisConnection.S(r, "PatientUID"), HisConnection.I(r, "PatientType"), HisConnection.I(r, "PatientID"));
-            if (!seen.Add(mrn)) return;
+            var mrn = c.Mrn(HisConnection.I(r, "PatientID"));
+            if (mrn.Length == 0 || !seen.Add(mrn)) return;
             var dob = HisConnection.Dt(r, "DateofBirth");
             var year = dob?.Year ?? 1900;
             csv.Write(c.Hospital, mrn,
@@ -81,26 +81,24 @@ public static class FactsExtract
         await db.QueryAsync("""
             SELECT a.AppointmentNo, a.PatientType, a.PatientID, a.ClinicID, a.DoctorID, a.CompanyID,
                    a.AppointmentDate, a.StartTime, a.EndTime, a.ActualVisitStartTime, a.ActualVisitEndTime,
-                   a.EndDate, p.PatientUID
+                   a.EndDate
             FROM dbo.HIS_Appointment a WITH (NOLOCK)
-            LEFT JOIN dbo.HIS_Patient p WITH (NOLOCK)
-              ON p.SetupID=a.SetupID AND p.ProjectID=a.ProjectID AND p.PatientType=a.PatientType AND p.PatientID=a.PatientID
             WHERE a.SetupID=@SetupId AND a.ProjectID=@ProjectId AND a.PatientID > 0
               AND a.AppointmentDate >= @From AND a.AppointmentDate < @To
             UNION ALL
             SELECT a.AppointmentNo, a.PatientType, a.PatientID, a.ClinicID, a.DoctorID, a.CompanyID,
                    a.AppointmentDate, a.StartTime, a.EndTime, a.ActualVisitStartTime, a.ActualVisitEndTime,
-                   a.EndDate, p.PatientUID
+                   a.EndDate
             FROM dbo.HIS_InvoiceMain m WITH (NOLOCK)
             INNER JOIN dbo.HIS_Appointment a WITH (NOLOCK)
               ON a.SetupID=m.SetupID AND a.ProjectID=m.ProjectID AND a.AppointmentNo=m.AppointmentNo
-            LEFT JOIN dbo.HIS_Patient p WITH (NOLOCK)
-              ON p.SetupID=a.SetupID AND p.ProjectID=a.ProjectID AND p.PatientType=a.PatientType AND p.PatientID=a.PatientID
             WHERE m.SetupID=@SetupId AND m.ProjectID=@ProjectId AND m.AppointmentNo > 0
               AND m.InvoiceDate >= @From AND m.InvoiceDate < @To AND m.CancelledOn IS NULL
               AND (a.AppointmentDate < @From OR a.AppointmentDate >= @To)
             """, s.BindPeriod, r =>
         {
+            var mrn = c.Mrn(HisConnection.I(r, "PatientID"));
+            if (mrn.Length == 0) return;
             var no = c.OpEncounter(HisConnection.I(r, "AppointmentNo"));
             if (!seen.Add(no)) return;
             var day = HisConnection.Dt(r, "AppointmentDate") ?? s.From!.Value;
@@ -108,7 +106,7 @@ public static class FactsExtract
             var endSrc = HisConnection.Dt(r, "EndDate");
             var end = Maps.Combine(endSrc ?? day, FirstTime(HisConnection.S(r, "ActualVisitEndTime"), HisConnection.S(r, "EndTime")));
             csv.Write(
-                c.Mrn(HisConnection.S(r, "PatientUID"), HisConnection.I(r, "PatientType"), HisConnection.I(r, "PatientID")),
+                mrn,
                 c.Hospital, c.DeptFromClinic(HisConnection.Ni(r, "ClinicID")), SlFromClinic(HisConnection.Ni(r, "ClinicID")),
                 c.PayerOrSelf(HisConnection.Ni(r, "CompanyID")),
                 "", "", c.ProviderOrEmpty(HisConnection.Ni(r, "DoctorID")),
@@ -118,14 +116,12 @@ public static class FactsExtract
         await db.QueryAsync("""
             SELECT i.AdmissionNo, i.PatientType, i.PatientID, i.ClinicID, i.AdmittingClinicID, i.DoctorID,
                    i.AdmittingDoctorID, i.CompanyId, i.AdmissionDate, i.DischargeDate,
-                   ds.DaysStayed, p.PatientUID,
+                   ds.DaysStayed,
                    CAST(CASE WHEN EXISTS (
                         SELECT 1 FROM dbo.INP_OTReservation ot WITH (NOLOCK)
                         WHERE ot.SetupID=i.SetupID AND ot.ProjectID=i.ProjectID AND ot.AdmissionNo=i.AdmissionNo)
                      THEN 1 ELSE 0 END AS bit) AS IsSurgical
             FROM dbo.INP_Admission i WITH (NOLOCK)
-            LEFT JOIN dbo.HIS_Patient p WITH (NOLOCK)
-              ON p.SetupID=i.SetupID AND p.ProjectID=i.ProjectID AND p.PatientType=i.PatientType AND p.PatientID=i.PatientID
             LEFT JOIN dbo.INP_DischargeSummary ds WITH (NOLOCK)
               ON ds.SetupID=i.SetupID AND ds.ProjectID=i.ProjectID AND ds.AdmissionNo=i.AdmissionNo
             WHERE i.SetupID=@SetupId AND i.ProjectID=@ProjectId AND i.PatientID > 0
@@ -133,7 +129,7 @@ public static class FactsExtract
             UNION ALL
             SELECT i.AdmissionNo, i.PatientType, i.PatientID, i.ClinicID, i.AdmittingClinicID, i.DoctorID,
                    i.AdmittingDoctorID, i.CompanyId, i.AdmissionDate, i.DischargeDate,
-                   ds.DaysStayed, p.PatientUID,
+                   ds.DaysStayed,
                    CAST(CASE WHEN EXISTS (
                         SELECT 1 FROM dbo.INP_OTReservation ot WITH (NOLOCK)
                         WHERE ot.SetupID=i.SetupID AND ot.ProjectID=i.ProjectID AND ot.AdmissionNo=i.AdmissionNo)
@@ -141,8 +137,6 @@ public static class FactsExtract
             FROM dbo.HIS_InvoiceMain m WITH (NOLOCK)
             INNER JOIN dbo.INP_Admission i WITH (NOLOCK)
               ON i.SetupID=m.SetupID AND i.ProjectID=m.ProjectID AND i.AdmissionNo=m.AdmissionNo
-            LEFT JOIN dbo.HIS_Patient p WITH (NOLOCK)
-              ON p.SetupID=i.SetupID AND p.ProjectID=i.ProjectID AND p.PatientType=i.PatientType AND p.PatientID=i.PatientID
             LEFT JOIN dbo.INP_DischargeSummary ds WITH (NOLOCK)
               ON ds.SetupID=i.SetupID AND ds.ProjectID=i.ProjectID AND ds.AdmissionNo=i.AdmissionNo
             WHERE m.SetupID=@SetupId AND m.ProjectID=@ProjectId AND m.AdmissionNo > 0
@@ -150,6 +144,8 @@ public static class FactsExtract
               AND (i.AdmissionDate < @From OR i.AdmissionDate >= @To)
             """, s.BindPeriod, r =>
         {
+            var mrn = c.Mrn(HisConnection.I(r, "PatientID"));
+            if (mrn.Length == 0) return;
             var no = c.IpEncounter(HisConnection.I(r, "AdmissionNo"));
             if (!seen.Add(no)) return;
             var admit = HisConnection.Dt(r, "AdmissionDate") ?? s.From!.Value;
@@ -159,7 +155,7 @@ public static class FactsExtract
             var clinic = HisConnection.Ni(r, "AdmittingClinicID") ?? HisConnection.Ni(r, "ClinicID");
             var doc = HisConnection.Ni(r, "AdmittingDoctorID") ?? HisConnection.Ni(r, "DoctorID");
             csv.Write(
-                c.Mrn(HisConnection.S(r, "PatientUID"), HisConnection.I(r, "PatientType"), HisConnection.I(r, "PatientID")),
+                mrn,
                 c.Hospital, c.DeptFromClinic(clinic), SlFromClinic(clinic),
                 c.PayerOrSelf(HisConnection.Ni(r, "CompanyId")),
                 "", "", c.ProviderOrEmpty(doc),
@@ -169,32 +165,30 @@ public static class FactsExtract
 
         await db.QueryAsync("""
             SELECT e.AssessmentNo, e.PatientType, e.PatientID, e.ClinicID, e.DoctorID, e.AssessmentDate,
-                   e.ArrivalTime, e.DischargeTime, e.SignInTime, e.SignOutTime, p.PatientUID
+                   e.ArrivalTime, e.DischargeTime, e.SignInTime, e.SignOutTime
             FROM dbo.INP_ERAssessment e WITH (NOLOCK)
-            LEFT JOIN dbo.HIS_Patient p WITH (NOLOCK)
-              ON p.SetupID=e.SetupID AND p.ProjectID=e.ProjectID AND p.PatientType=e.PatientType AND p.PatientID=e.PatientID
             WHERE e.SetupID=@SetupId AND e.ProjectID=@ProjectId AND e.PatientID > 0
               AND e.AssessmentDate >= @From AND e.AssessmentDate < @To
             UNION ALL
             SELECT e.AssessmentNo, e.PatientType, e.PatientID, e.ClinicID, e.DoctorID, e.AssessmentDate,
-                   e.ArrivalTime, e.DischargeTime, e.SignInTime, e.SignOutTime, p.PatientUID
+                   e.ArrivalTime, e.DischargeTime, e.SignInTime, e.SignOutTime
             FROM dbo.HIS_InvoiceMain m WITH (NOLOCK)
             INNER JOIN dbo.INP_ERAssessment e WITH (NOLOCK)
               ON e.SetupID=m.SetupID AND e.ProjectID=m.ProjectID AND e.InvoiceNo=m.InvoiceNo
-            LEFT JOIN dbo.HIS_Patient p WITH (NOLOCK)
-              ON p.SetupID=e.SetupID AND p.ProjectID=e.ProjectID AND p.PatientType=e.PatientType AND p.PatientID=e.PatientID
             WHERE m.SetupID=@SetupId AND m.ProjectID=@ProjectId AND e.InvoiceNo > 0
               AND m.InvoiceDate >= @From AND m.InvoiceDate < @To AND m.CancelledOn IS NULL
               AND (e.AssessmentDate < @From OR e.AssessmentDate >= @To)
             """, s.BindPeriod, r =>
         {
+            var mrn = c.Mrn(HisConnection.I(r, "PatientID"));
+            if (mrn.Length == 0) return;
             var no = c.ErEncounter(HisConnection.I(r, "AssessmentNo"));
             if (!seen.Add(no)) return;
             var day = HisConnection.Dt(r, "AssessmentDate") ?? s.From!.Value;
             var start = HisConnection.Dt(r, "SignInTime") ?? Maps.Combine(day, HisConnection.S(r, "ArrivalTime"));
             var end = HisConnection.Dt(r, "SignOutTime") ?? HisConnection.Dt(r, "DischargeTime") ?? start;
             csv.Write(
-                c.Mrn(HisConnection.S(r, "PatientUID"), HisConnection.I(r, "PatientType"), HisConnection.I(r, "PatientID")),
+                mrn,
                 c.Hospital, c.DeptFromClinic(HisConnection.Ni(r, "ClinicID")), SlFromClinic(HisConnection.Ni(r, "ClinicID")),
                 c.SelfPayer, "", "", c.ProviderOrEmpty(HisConnection.Ni(r, "DoctorID")),
                 no, "ER", Maps.DateTime(start), Maps.DateTime(end), "0", "false", "ROUTINE");

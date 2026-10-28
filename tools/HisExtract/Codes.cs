@@ -27,10 +27,11 @@ public sealed class Codes(Settings s)
     public string IpEncounter(object admissionNo) => $"{s.H}-IP-{admissionNo}";
     public string ErEncounter(object assessmentNo) => $"{s.H}-ER-{assessmentNo}";
 
-    public string Mrn(string? patientUid, object patientType, object patientId)
+    /// <summary>HIS PatientID as MRN — never PatientUID, never a SetupID/ProjectID token.</summary>
+    public string Mrn(object patientId)
     {
-        if (!string.IsNullOrWhiteSpace(patientUid)) return patientUid.Trim();
-        return $"{s.H}-{patientType}-{patientId}";
+        var id = Convert.ToInt64(patientId, System.Globalization.CultureInfo.InvariantCulture);
+        return id > 0 ? id.ToString(System.Globalization.CultureInfo.InvariantCulture) : "";
     }
 
     public string DeptFromClinic(object? clinicId) =>
