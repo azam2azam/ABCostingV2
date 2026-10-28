@@ -26,11 +26,6 @@ public static class CatalogueExtract
     private static async Task HospitalAsync(HisConnection db, Settings s, Codes c, CsvZipWriter pack)
     {
         using var csv = pack.Create("01_Hospital.csv", "code", "name", "city", "currency", "bedCount", "isActive");
-        var beds = 0;
-        await db.ScalarAsync(
-            "SELECT COUNT(1) FROM dbo.INP_Bed WITH (NOLOCK) WHERE SetupID=@SetupId AND ProjectID=@ProjectId AND ISNULL(IsActive,1)=1",
-            s.BindTenant, v => beds = Convert.ToInt32(v ?? 0));
-
         var n = 0;
         await db.QueryAsync("""
             SELECT p.Name, p.Alias, p.IsActive, c.CityName, cur.ISOCurrencyID3
@@ -47,12 +42,12 @@ public static class CatalogueExtract
             if (name.Length == 0) name = s.H;
             var currency = HisConnection.S(r, "ISOCurrencyID3");
             if (currency.Length == 0) currency = "SAR";
-            csv.Write(c.Hospital, name, HisConnection.S(r, "CityName"), currency, Maps.Int(beds),
+            csv.Write(c.Hospital, name, HisConnection.S(r, "CityName"), currency, "",
                 Maps.Bool(HisConnection.B(r, "IsActive")));
             n++;
         });
         if (n == 0)
-            csv.Write(c.Hospital, s.H, "", "SAR", Maps.Int(beds), "true");
+            csv.Write(c.Hospital, s.H, "", "SAR", "", "true");
     }
 
     private static async Task FacilityAsync(HisConnection db, Settings s, Codes c, CsvZipWriter pack)
