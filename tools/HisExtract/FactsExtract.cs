@@ -55,6 +55,32 @@ public static class FactsExtract
                 Maps.Segment(year, HisConnection.B(r, "IsPregnant"), asOf),
                 Maps.MaskId(HisConnection.S(r, "PatientIdentificationNo")));
         });
+
+        var stubs = 0;
+        await db.QueryAsync("""
+            SELECT PatientID FROM dbo.HIS_Appointment WITH (NOLOCK)
+            WHERE SetupID=@SetupId AND ProjectID=@ProjectId AND PatientID > 0
+              AND AppointmentDate >= @From AND AppointmentDate < @To
+            UNION
+            SELECT PatientID FROM dbo.INP_Admission WITH (NOLOCK)
+            WHERE SetupID=@SetupId AND ProjectID=@ProjectId AND PatientID > 0
+              AND AdmissionDate >= @From AND AdmissionDate < @To
+            UNION
+            SELECT PatientID FROM dbo.INP_ERAssessment WITH (NOLOCK)
+            WHERE SetupID=@SetupId AND ProjectID=@ProjectId AND PatientID > 0
+              AND AssessmentDate >= @From AND AssessmentDate < @To
+            UNION
+            SELECT PatientID FROM dbo.HIS_InvoiceMain WITH (NOLOCK)
+            WHERE SetupID=@SetupId AND ProjectID=@ProjectId AND PatientID > 0
+              AND InvoiceDate >= @From AND InvoiceDate < @To AND CancelledOn IS NULL
+            """, s.BindPeriod, r =>
+        {
+            var mrn = c.Mrn(HisConnection.I(r, "PatientID"));
+            if (mrn.Length == 0 || !seen.Add(mrn)) return;
+            stubs++;
+            csv.Write(c.Hospital, mrn, "Unknown patient", "1900", "M", "ADULT", "");
+        });
+        if (stubs > 0) pack.Note($"Patient: {stubs} encounter PatientIDs had no HIS_Patient row and were added as stubs.");
     }
 
     private static async Task EncountersAsync(HisConnection db, Settings s, Codes c, CsvZipWriter pack)

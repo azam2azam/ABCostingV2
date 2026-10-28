@@ -92,21 +92,46 @@ public static class CatalogueExtract
             "hospitalCode", "serviceLineCode", "code", "catalogCode", "name", "deptType", "specialty");
         csv.Write(c.Hospital, c.UnmappedSl, c.UnmappedDept, "UNMAPPED", "Unmapped", "ADMIN", "");
 
+        var clinics = new HashSet<int>();
         await db.QueryAsync("""
             SELECT ClinicID, ClinicDescription, Alias, GroupID, MappingCode, IsActive
             FROM dbo.HIS_Clinic WITH (NOLOCK)
-            WHERE SetupID=@SetupId AND ProjectID=@ProjectId AND ISNULL(IsActive,1)=1
+            WHERE SetupID=@SetupId AND ProjectID=@ProjectId
             """, s.BindTenant, r =>
         {
             var id = HisConnection.I(r, "ClinicID");
+            if (!clinics.Add(id)) return;
             var name = HisConnection.S(r, "ClinicDescription");
             if (name.Length == 0) name = HisConnection.S(r, "Alias");
             if (name.Length == 0) name = c.ClinicDept(id);
+            if (!HisConnection.B(r, "IsActive")) name += " (inactive)";
             var map = HisConnection.S(r, "MappingCode");
             var g = HisConnection.Ni(r, "GroupID");
             csv.Write(c.Hospital, g is null ? c.UnmappedSl : c.ServiceLine(g.Value),
                 c.ClinicDept(id), map.Length == 0 ? $"CLN-{id}" : map, name, "CLINICAL", name);
         });
+
+        var extra = 0;
+        await db.QueryAsync("""
+            SELECT ClinicID FROM dbo.HIS_Appointment WITH (NOLOCK)
+            WHERE SetupID=@SetupId AND ProjectID=@ProjectId AND ClinicID > 0
+            UNION
+            SELECT ClinicID FROM dbo.INP_Admission WITH (NOLOCK)
+            WHERE SetupID=@SetupId AND ProjectID=@ProjectId AND ClinicID > 0
+            UNION
+            SELECT AdmittingClinicID FROM dbo.INP_Admission WITH (NOLOCK)
+            WHERE SetupID=@SetupId AND ProjectID=@ProjectId AND AdmittingClinicID > 0
+            UNION
+            SELECT ClinicID FROM dbo.INP_ERAssessment WITH (NOLOCK)
+            WHERE SetupID=@SetupId AND ProjectID=@ProjectId AND ClinicID > 0
+            """, s.BindTenant, r =>
+        {
+            var id = HisConnection.I(r, "ClinicID");
+            if (!clinics.Add(id)) return;
+            extra++;
+            csv.Write(c.Hospital, c.UnmappedSl, c.ClinicDept(id), $"CLN-{id}", $"Clinic {id}", "CLINICAL", "");
+        });
+        if (extra > 0) pack.Note($"Department: {extra} clinics referenced by encounters were missing from HIS_Clinic and were added.");
 
         await db.QueryAsync("""
             SELECT NursingStationID, Description, Alias, MappingCode
@@ -153,15 +178,38 @@ public static class CatalogueExtract
             "hospitalCode", "departmentCode", "facilityCode", "code", "name", "ccType", "stepDownSeq", "isActive");
         csv.Write(c.Hospital, c.UnmappedDept, "", c.UnmappedCc, "Unmapped", "OVERHEAD", "10", "true");
 
+        var clinics = new HashSet<int>();
         await db.QueryAsync("""
-            SELECT ClinicID, ClinicDescription FROM dbo.HIS_Clinic WITH (NOLOCK)
-            WHERE SetupID=@SetupId AND ProjectID=@ProjectId AND ISNULL(IsActive,1)=1
+            SELECT ClinicID, ClinicDescription, IsActive FROM dbo.HIS_Clinic WITH (NOLOCK)
+            WHERE SetupID=@SetupId AND ProjectID=@ProjectId
             """, s.BindTenant, r =>
         {
             var id = HisConnection.I(r, "ClinicID");
+            if (!clinics.Add(id)) return;
             var name = HisConnection.S(r, "ClinicDescription");
             csv.Write(c.Hospital, c.ClinicDept(id), "", c.ClinicCc(id),
-                (name.Length == 0 ? c.ClinicCc(id) : name) + " CC", "PRODUCTION", "100", "true");
+                (name.Length == 0 ? c.ClinicCc(id) : name) + " CC", "PRODUCTION", "100",
+                Maps.Bool(HisConnection.B(r, "IsActive")));
+        });
+
+        await db.QueryAsync("""
+            SELECT ClinicID FROM dbo.HIS_Appointment WITH (NOLOCK)
+            WHERE SetupID=@SetupId AND ProjectID=@ProjectId AND ClinicID > 0
+            UNION
+            SELECT ClinicID FROM dbo.INP_Admission WITH (NOLOCK)
+            WHERE SetupID=@SetupId AND ProjectID=@ProjectId AND ClinicID > 0
+            UNION
+            SELECT AdmittingClinicID FROM dbo.INP_Admission WITH (NOLOCK)
+            WHERE SetupID=@SetupId AND ProjectID=@ProjectId AND AdmittingClinicID > 0
+            UNION
+            SELECT ClinicID FROM dbo.INP_ERAssessment WITH (NOLOCK)
+            WHERE SetupID=@SetupId AND ProjectID=@ProjectId AND ClinicID > 0
+            """, s.BindTenant, r =>
+        {
+            var id = HisConnection.I(r, "ClinicID");
+            if (!clinics.Add(id)) return;
+            csv.Write(c.Hospital, c.ClinicDept(id), "", c.ClinicCc(id),
+                $"Clinic {id} CC", "PRODUCTION", "100", "true");
         });
 
         await db.QueryAsync("""
@@ -199,7 +247,7 @@ public static class CatalogueExtract
         await db.QueryAsync("""
             SELECT CostCenterID, CostCenterName, IsActive
             FROM dbo.HIS_CostCenterSetup WITH (NOLOCK)
-            WHERE SetupID=@SetupId AND ISNULL(IsActive,1)=1
+            WHERE SetupID=@SetupId
             """, cmd => cmd.Parameters.AddWithValue("@SetupId", s.SetupId), r =>
         {
             var raw = HisConnection.S(r, "CostCenterID");
@@ -209,6 +257,24 @@ public static class CatalogueExtract
             csv.Write(c.Hospital, c.UnmappedDept, "", c.OracleCc(raw), name, "PRODUCTION", "100",
                 Maps.Bool(HisConnection.B(r, "IsActive")));
         });
+
+        var billed = 0;
+        await db.QueryAsync("""
+            SELECT DISTINCT d.CostCenterID
+            FROM dbo.HIS_InvoiceDetail d WITH (NOLOCK)
+            INNER JOIN dbo.HIS_InvoiceMain m WITH (NOLOCK)
+              ON m.SetupID=d.SetupID AND m.ProjectID=d.ProjectID
+             AND m.TransactionType=d.TransactionType AND m.InvoiceNo=d.InvoiceNo
+            WHERE m.SetupID=@SetupId AND m.ProjectID=@ProjectId
+              AND NULLIF(LTRIM(RTRIM(d.CostCenterID)), '') IS NOT NULL
+            """, s.BindTenant, r =>
+        {
+            var raw = HisConnection.S(r, "CostCenterID");
+            if (raw.Length == 0 || !seen.Add(raw)) return;
+            billed++;
+            csv.Write(c.Hospital, c.UnmappedDept, "", c.OracleCc(raw), raw, "PRODUCTION", "100", "true");
+        });
+        if (billed > 0) pack.Note($"CostCenter: {billed} Oracle codes appear on invoices but not in HIS_CostCenterSetup and were added.");
     }
 
     private static Task ResourceAsync(Codes c, CsvZipWriter pack)
