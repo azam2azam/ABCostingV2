@@ -16,6 +16,18 @@ public sealed class Settings
 
     public string H => HospitalCode;
 
+    /// <summary>Filename token for HIS identity. SetupID/ProjectID are the extract identity, not VERITA Hospital.Code.</summary>
+    public string PackPrefix
+    {
+        get
+        {
+            var setup = SetupId;
+            foreach (var c in Path.GetInvalidFileNameChars())
+                setup = setup.Replace(c, '_');
+            return $"HIS-{setup}-{ProjectId}";
+        }
+    }
+
     public void BindTenant(Microsoft.Data.SqlClient.SqlCommand cmd)
     {
         cmd.Parameters.AddWithValue("@SetupId", SetupId);

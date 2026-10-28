@@ -6,7 +6,8 @@ public static class FactsExtract
     {
         var c = new Codes(s);
         var asOf = s.To ?? DateTime.Today;
-        pack.Note($"Facts {s.From:yyyy-MM-dd} .. {s.To:yyyy-MM-dd} (exclusive end)");
+        pack.WriteManifest("facts", s.From, s.To, s.HospitalCode);
+        pack.Note($"Facts {s.From:yyyy-MM-dd} .. {s.To:yyyy-MM-dd} (SQL end exclusive)");
 
         await PatientsAsync(db, s, c, pack, asOf);
         await EncountersAsync(db, s, c, pack);
@@ -62,6 +63,20 @@ public static class FactsExtract
             "drgCode", "packageCode", "providerCode", "encounterNo", "encType",
             "admitAt", "dischargeAt", "lengthOfStay", "isSurgical", "acuity");
         var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        // Mapping §9.2: service line comes from the performing clinic's HIS_ClinicGroup, same as Department.
+        var slByClinic = new Dictionary<int, string>();
+        await db.QueryAsync("""
+            SELECT ClinicID, GroupID
+            FROM dbo.HIS_Clinic WITH (NOLOCK)
+            WHERE SetupID=@SetupId AND ProjectID=@ProjectId
+            """, s.BindTenant, r =>
+        {
+            var id = HisConnection.I(r, "ClinicID");
+            var g = HisConnection.Ni(r, "GroupID");
+            slByClinic[id] = g is null ? c.UnmappedSl : c.ServiceLine(g.Value);
+        });
+        string SlFromClinic(int? clinicId) =>
+            clinicId is { } id && slByClinic.TryGetValue(id, out var sl) ? sl : c.UnmappedSl;
 
         await db.QueryAsync("""
             SELECT a.AppointmentNo, a.PatientType, a.PatientID, a.ClinicID, a.DoctorID, a.CompanyID,
@@ -94,7 +109,7 @@ public static class FactsExtract
             var end = Maps.Combine(endSrc ?? day, FirstTime(HisConnection.S(r, "ActualVisitEndTime"), HisConnection.S(r, "EndTime")));
             csv.Write(
                 c.Mrn(HisConnection.S(r, "PatientUID"), HisConnection.I(r, "PatientType"), HisConnection.I(r, "PatientID")),
-                c.Hospital, c.DeptFromClinic(HisConnection.Ni(r, "ClinicID")), c.UnmappedSl,
+                c.Hospital, c.DeptFromClinic(HisConnection.Ni(r, "ClinicID")), SlFromClinic(HisConnection.Ni(r, "ClinicID")),
                 c.PayerOrSelf(HisConnection.Ni(r, "CompanyID")),
                 "", "", c.ProviderOrEmpty(HisConnection.Ni(r, "DoctorID")),
                 no, "OP", Maps.DateTime(start), Maps.DateTime(end), "0", "false", "ROUTINE");
@@ -145,7 +160,7 @@ public static class FactsExtract
             var doc = HisConnection.Ni(r, "AdmittingDoctorID") ?? HisConnection.Ni(r, "DoctorID");
             csv.Write(
                 c.Mrn(HisConnection.S(r, "PatientUID"), HisConnection.I(r, "PatientType"), HisConnection.I(r, "PatientID")),
-                c.Hospital, c.DeptFromClinic(clinic), c.UnmappedSl,
+                c.Hospital, c.DeptFromClinic(clinic), SlFromClinic(clinic),
                 c.PayerOrSelf(HisConnection.Ni(r, "CompanyId")),
                 "", "", c.ProviderOrEmpty(doc),
                 no, "IP", Maps.DateTime(admit), disch is null ? "" : Maps.DateTime(disch.Value),
@@ -180,7 +195,7 @@ public static class FactsExtract
             var end = HisConnection.Dt(r, "SignOutTime") ?? HisConnection.Dt(r, "DischargeTime") ?? start;
             csv.Write(
                 c.Mrn(HisConnection.S(r, "PatientUID"), HisConnection.I(r, "PatientType"), HisConnection.I(r, "PatientID")),
-                c.Hospital, c.DeptFromClinic(HisConnection.Ni(r, "ClinicID")), c.UnmappedSl,
+                c.Hospital, c.DeptFromClinic(HisConnection.Ni(r, "ClinicID")), SlFromClinic(HisConnection.Ni(r, "ClinicID")),
                 c.SelfPayer, "", "", c.ProviderOrEmpty(HisConnection.Ni(r, "DoctorID")),
                 no, "ER", Maps.DateTime(start), Maps.DateTime(end), "0", "false", "ROUTINE");
         });

@@ -7,7 +7,6 @@ public sealed class Codes(Settings s)
     public string UnmappedDept => $"{s.H}.UNMAPPED";
     public string UnmappedCc => $"{s.H}.CC-UNMAPPED";
     public string UnmappedSl => "SL-UNMAPPED";
-    public string PhysResource => $"{s.H}.RES-PHYS";
     public string SelfPayer => "PAY-SELF";
 
     public string Facility(object id) => $"{s.H}.FAC-{id}";

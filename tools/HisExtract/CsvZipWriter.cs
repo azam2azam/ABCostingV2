@@ -9,14 +9,18 @@ public sealed class CsvZipWriter : IDisposable
     private static readonly UTF8Encoding Utf8 = new(encoderShouldEmitUTF8Identifier: true);
     private readonly List<string> _log = [];
     private readonly string _readme;
+    private readonly string _setupId;
+    private readonly string _projectId;
 
-    public CsvZipWriter(string zipPath, string readme)
+    public CsvZipWriter(string zipPath, string readme, Settings s)
     {
         ZipPath = Path.GetFullPath(zipPath);
         Directory.CreateDirectory(Path.GetDirectoryName(ZipPath)!);
         Dir = Path.Combine(Path.GetDirectoryName(ZipPath)!, Path.GetFileNameWithoutExtension(ZipPath));
         Directory.CreateDirectory(Dir);
         _readme = readme;
+        _setupId = s.SetupId;
+        _projectId = s.ProjectId.ToString();
     }
 
     public string ZipPath { get; }
@@ -26,7 +30,22 @@ public sealed class CsvZipWriter : IDisposable
     public CsvFile Create(string numberedName, params string[] headers)
     {
         var path = Path.Combine(Dir, numberedName);
-        return new CsvFile(numberedName, headers, path, _log);
+        string[] all = ["setupId", "projectId", .. headers];
+        return new CsvFile(numberedName, all, path, _log, _setupId, _projectId);
+    }
+
+    public void WriteManifest(string pack, DateTime? fromInclusive, DateTime? toExclusive, string veritaHospitalCode)
+    {
+        using var csv = Create("00_manifest.csv",
+            "pack", "from", "toInclusive", "toExclusive", "extractedAtUtc", "veritaHospitalCode");
+        var toInc = toExclusive is { } t ? t.AddDays(-1).ToString("yyyy-MM-dd") : "";
+        csv.Write(
+            pack,
+            fromInclusive?.ToString("yyyy-MM-dd") ?? "",
+            toInc,
+            toExclusive?.ToString("yyyy-MM-dd") ?? "",
+            DateTime.UtcNow.ToString("u"),
+            veritaHospitalCode);
     }
 
     public void Note(string line)
@@ -55,19 +74,24 @@ public sealed class CsvZipWriter : IDisposable
         private readonly string _name;
         private readonly StreamWriter _w;
         private readonly List<string> _log;
+        private readonly string _setupId;
+        private readonly string _projectId;
         public int Rows { get; private set; }
 
-        public CsvFile(string name, string[] headers, string path, List<string> log)
+        public CsvFile(string name, string[] headers, string path, List<string> log, string setupId, string projectId)
         {
             _name = name;
             _log = log;
+            _setupId = setupId;
+            _projectId = projectId;
             _w = new StreamWriter(path, false, Utf8);
             _w.WriteLine(string.Join(",", headers.Select(Csv.Escape)));
         }
 
         public void Write(params string?[] cells)
         {
-            _w.WriteLine(string.Join(",", cells.Select(Csv.Escape)));
+            string?[] row = [_setupId, _projectId, .. cells];
+            _w.WriteLine(string.Join(",", row.Select(Csv.Escape)));
             Rows++;
             if (Rows % 50_000 == 0)
             {

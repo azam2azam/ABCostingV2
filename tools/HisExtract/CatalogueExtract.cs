@@ -6,6 +6,7 @@ public static class CatalogueExtract
     {
         var c = new Codes(s);
         var asOf = DateTime.Today;
+        pack.WriteManifest("catalogue", null, null, s.HospitalCode);
 
         await HospitalAsync(db, s, c, pack);
         await FacilityAsync(db, s, c, pack);
@@ -219,7 +220,9 @@ public static class CatalogueExtract
     {
         using var csv = pack.Create("11_Resource.csv",
             "hospitalCode", "costCentreCode", "costPoolCode", "code", "name", "resourceType", "uom", "isCapacityDriven", "isActive");
-        csv.Write(c.Hospital, c.UnmappedCc, "", c.PhysResource, "Physician", "LABOR_PHYSICIAN", "MIN", "true", "true");
+        foreach (var role in PhysicianRoles.All)
+            csv.Write(c.Hospital, PhysicianRoles.CostCentre(c, role), "",
+                PhysicianRoles.ResourceCode(c, role.Token), role.Name, "LABOR_PHYSICIAN", "MIN", "true", "true");
         return Task.CompletedTask;
     }
 
@@ -246,7 +249,9 @@ public static class CatalogueExtract
             if (name.Length == 0) name = HisConnection.S(r, "Alias");
             if (name.Length == 0) name = c.Provider(id);
             var spec = HisConnection.Ni(r, "SpecialityID");
-            csv.Write(c.PhysResource, c.DeptFromClinic(HisConnection.Ni(r, "ClinicID")),
+            var clinicId = HisConnection.Ni(r, "ClinicID");
+            csv.Write(PhysicianRoles.ResourceCode(c, PhysicianRoles.TokenFromClinic(clinicId)),
+                c.DeptFromClinic(clinicId),
                 c.Provider(id), name, spec is null ? "" : $"SPEC-{spec}",
                 "ET-" + HisConnection.I(r, "EmploymentType"));
         });
