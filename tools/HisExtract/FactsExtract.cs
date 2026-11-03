@@ -88,7 +88,8 @@ public static class FactsExtract
         using var csv = pack.Create("33_Encounter.csv",
             "patientMrn", "hospitalCode", "departmentCode", "serviceLineCode", "payerCode",
             "drgCode", "packageCode", "providerCode", "encounterNo", "encType",
-            "admitAt", "dischargeAt", "lengthOfStay", "isSurgical", "acuity");
+            "admitAt", "dischargeAt", "lengthOfStay", "isSurgical", "acuity", "sourceAssessmentNo",
+            "hisStatus", "hisErStatus", "hisVisitClosed", "hisArrivedAt");
         var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         // Mapping §9.2: service line comes from the performing clinic's HIS_ClinicGroup, same as Department.
         var slByClinic = new Dictionary<int, string>();
@@ -105,44 +106,12 @@ public static class FactsExtract
         string SlFromClinic(int? clinicId) =>
             clinicId is { } id && slByClinic.TryGetValue(id, out var sl) ? sl : c.UnmappedSl;
 
-        await db.QueryAsync("""
-            SELECT a.AppointmentNo, a.PatientType, a.PatientID, a.ClinicID, a.DoctorID, a.CompanyID,
-                   a.AppointmentDate, a.StartTime, a.EndTime, a.ActualVisitStartTime, a.ActualVisitEndTime,
-                   a.EndDate
-            FROM dbo.HIS_Appointment a WITH (NOLOCK)
-            WHERE a.SetupID=@SetupId AND a.ProjectID=@ProjectId AND a.PatientID > 0
-              AND a.AppointmentDate >= @From AND a.AppointmentDate < @To
-            UNION ALL
-            SELECT a.AppointmentNo, a.PatientType, a.PatientID, a.ClinicID, a.DoctorID, a.CompanyID,
-                   a.AppointmentDate, a.StartTime, a.EndTime, a.ActualVisitStartTime, a.ActualVisitEndTime,
-                   a.EndDate
-            FROM dbo.HIS_InvoiceMain m WITH (NOLOCK)
-            INNER JOIN dbo.HIS_Appointment a WITH (NOLOCK)
-              ON a.SetupID=m.SetupID AND a.ProjectID=m.ProjectID AND a.AppointmentNo=m.AppointmentNo
-            WHERE m.SetupID=@SetupId AND m.ProjectID=@ProjectId AND m.AppointmentNo > 0
-              AND m.InvoiceDate >= @From AND m.InvoiceDate < @To AND m.CancelledOn IS NULL
-              AND (a.AppointmentDate < @From OR a.AppointmentDate >= @To)
-            """, s.BindPeriod, r =>
-        {
-            var mrn = c.Mrn(HisConnection.I(r, "PatientID"));
-            if (mrn.Length == 0) return;
-            var no = c.OpEncounter(HisConnection.I(r, "AppointmentNo"));
-            if (!seen.Add(no)) return;
-            var day = HisConnection.Dt(r, "AppointmentDate") ?? s.From!.Value;
-            var start = Maps.Combine(day, FirstTime(HisConnection.S(r, "ActualVisitStartTime"), HisConnection.S(r, "StartTime")));
-            var endSrc = HisConnection.Dt(r, "EndDate");
-            var end = Maps.Combine(endSrc ?? day, FirstTime(HisConnection.S(r, "ActualVisitEndTime"), HisConnection.S(r, "EndTime")));
-            csv.Write(
-                mrn,
-                c.Hospital, c.DeptFromClinic(HisConnection.Ni(r, "ClinicID")), SlFromClinic(HisConnection.Ni(r, "ClinicID")),
-                c.PayerOrSelf(HisConnection.Ni(r, "CompanyID")),
-                "", "", c.ProviderOrEmpty(HisConnection.Ni(r, "DoctorID")),
-                no, "OP", Maps.DateTime(start), Maps.DateTime(end), "0", "false", "ROUTINE");
-        });
+        var ipDrg = await DrgExtract.ByAdmissionAsync(db, s, pack);
+        var opDrg = await DrgExtract.ByAppointmentAsync(db, s, pack);
 
         await db.QueryAsync("""
             SELECT i.AdmissionNo, i.PatientType, i.PatientID, i.ClinicID, i.AdmittingClinicID, i.DoctorID,
-                   i.AdmittingDoctorID, i.CompanyId, i.AdmissionDate, i.DischargeDate,
+                   i.AdmittingDoctorID, i.CompanyId, i.AdmissionDate, i.DischargeDate, i.Status,
                    ds.DaysStayed,
                    CAST(CASE WHEN EXISTS (
                         SELECT 1 FROM dbo.INP_OTReservation ot WITH (NOLOCK)
@@ -155,7 +124,7 @@ public static class FactsExtract
               AND i.AdmissionDate >= @From AND i.AdmissionDate < @To
             UNION ALL
             SELECT i.AdmissionNo, i.PatientType, i.PatientID, i.ClinicID, i.AdmittingClinicID, i.DoctorID,
-                   i.AdmittingDoctorID, i.CompanyId, i.AdmissionDate, i.DischargeDate,
+                   i.AdmittingDoctorID, i.CompanyId, i.AdmissionDate, i.DischargeDate, i.Status,
                    ds.DaysStayed,
                    CAST(CASE WHEN EXISTS (
                         SELECT 1 FROM dbo.INP_OTReservation ot WITH (NOLOCK)
@@ -185,40 +154,143 @@ public static class FactsExtract
                 mrn,
                 c.Hospital, c.DeptFromClinic(clinic), SlFromClinic(clinic),
                 c.PayerOrSelf(HisConnection.Ni(r, "CompanyId")),
-                "", "", c.ProviderOrEmpty(doc),
+                DrgExtract.Lookup(ipDrg, HisConnection.I(r, "AdmissionNo")), "", c.ProviderOrEmpty(doc),
                 no, "IP", Maps.DateTime(admit), disch is null ? "" : Maps.DateTime(disch.Value),
-                Maps.Int(los), Maps.Bool(HisConnection.B(r, "IsSurgical")), "ROUTINE");
+                Maps.Int(los), Maps.Bool(HisConnection.B(r, "IsSurgical")), "ROUTINE", "",
+                HisConnection.S(r, "Status"), "", "", "");
         });
 
-        await db.QueryAsync("""
-            SELECT e.AssessmentNo, e.PatientType, e.PatientID, e.ClinicID, e.DoctorID, e.AssessmentDate,
-                   e.ArrivalTime, e.DischargeTime, e.SignInTime, e.SignOutTime
+        // ER before OP: an assessment linked to an appointment claims that encounter number, so the
+        // appointment is not written again as OP. Its invoice lines already point at that number.
+        const string ErColumns = """
+            e.AssessmentNo, e.PatientType, e.PatientID, e.ClinicID, e.DoctorID, e.AssessmentDate,
+            e.ArrivalTime, e.DischargeTime, e.SignInTime, e.SignOutTime,
+            e.Status, e.ERStatus, ap.IsVisitClosed, ap.ArrivedOn,
+            ap.AppointmentNo AS LinkedAppointment, ap.CompanyID AS AppointmentCompany,
+            inv.AppointmentNo AS InvoiceAppointment, inv.CompanyID AS InvoiceCompany,
+            CAST(CASE WHEN e.AppointmentID > 0 AND ap.AppointmentNo IS NULL THEN 1 ELSE 0 END AS bit) AS AppointmentRefused
+            """;
+        const string ErLinks = """
+            LEFT JOIN dbo.HIS_Appointment ap WITH (NOLOCK)
+              ON ap.SetupID=e.SetupID AND ap.ProjectID=e.ProjectID AND ap.AppointmentNo=e.AppointmentID AND e.AppointmentID > 0
+              AND ap.PatientID=e.PatientID
+            OUTER APPLY (
+              SELECT TOP 1 iv.AppointmentNo, iv.CompanyID FROM dbo.HIS_InvoiceMain iv WITH (NOLOCK)
+              WHERE iv.SetupID=e.SetupID AND iv.ProjectID=e.ProjectID AND iv.InvoiceNo=e.InvoiceNo AND e.InvoiceNo > 0 AND iv.CancelledOn IS NULL
+                AND iv.PatientID=e.PatientID
+              ORDER BY iv.AppointmentNo DESC) inv
+            """;
+        // Packs are one month each, and a visit can span two. Links are read for the months around
+        // this one, so a pack knows an appointment is an ER visit even when the assessment is dated elsewhere.
+        const string ErNearby = "e.AssessmentDate >= DATEADD(month,-3,@From) AND e.AssessmentDate < DATEADD(month,3,@To)";
+        await db.QueryAsync($"""
+            SELECT e.AssessmentNo, ap.AppointmentNo AS LinkedAppointment, inv.AppointmentNo AS InvoiceAppointment
             FROM dbo.INP_ERAssessment e WITH (NOLOCK)
+            {ErLinks}
+            WHERE e.SetupID=@SetupId AND e.ProjectID=@ProjectId AND e.PatientID > 0 AND {ErNearby}
+            """, s.BindPeriod, r =>
+        {
+            var linked = HisConnection.Ni(r, "LinkedAppointment") ?? HisConnection.Ni(r, "InvoiceAppointment");
+            if (linked is > 0) c.LinkErToAppointment(HisConnection.I(r, "AssessmentNo"), linked.Value);
+        });
+        int erByAppointment = 0, erByInvoice = 0, erStandalone = 0, erRefused = 0, erSharing = 0;
+        await db.QueryAsync($"""
+            SELECT {ErColumns}
+            FROM dbo.INP_ERAssessment e WITH (NOLOCK)
+            {ErLinks}
             WHERE e.SetupID=@SetupId AND e.ProjectID=@ProjectId AND e.PatientID > 0
               AND e.AssessmentDate >= @From AND e.AssessmentDate < @To
             UNION ALL
-            SELECT e.AssessmentNo, e.PatientType, e.PatientID, e.ClinicID, e.DoctorID, e.AssessmentDate,
-                   e.ArrivalTime, e.DischargeTime, e.SignInTime, e.SignOutTime
+            SELECT {ErColumns}
             FROM dbo.HIS_InvoiceMain m WITH (NOLOCK)
             INNER JOIN dbo.INP_ERAssessment e WITH (NOLOCK)
               ON e.SetupID=m.SetupID AND e.ProjectID=m.ProjectID AND e.InvoiceNo=m.InvoiceNo
+            {ErLinks}
             WHERE m.SetupID=@SetupId AND m.ProjectID=@ProjectId AND e.InvoiceNo > 0
               AND m.InvoiceDate >= @From AND m.InvoiceDate < @To AND m.CancelledOn IS NULL
               AND (e.AssessmentDate < @From OR e.AssessmentDate >= @To)
+            UNION ALL
+            SELECT {ErColumns}
+            FROM dbo.INP_ERAssessment e WITH (NOLOCK)
+            {ErLinks}
+            INNER JOIN dbo.HIS_Appointment a WITH (NOLOCK)
+              ON a.SetupID=e.SetupID AND a.ProjectID=e.ProjectID AND a.AppointmentNo=COALESCE(ap.AppointmentNo, NULLIF(inv.AppointmentNo,0))
+            WHERE e.SetupID=@SetupId AND e.ProjectID=@ProjectId AND e.PatientID > 0 AND {ErNearby}
+              AND (e.AssessmentDate < @From OR e.AssessmentDate >= @To)
+              AND (
+                    (a.AppointmentDate >= @From AND a.AppointmentDate < @To)
+                 OR EXISTS (
+                        SELECT 1 FROM dbo.HIS_InvoiceMain m WITH (NOLOCK)
+                        WHERE m.SetupID=a.SetupID AND m.ProjectID=a.ProjectID AND m.AppointmentNo=a.AppointmentNo
+                          AND m.InvoiceDate >= @From AND m.InvoiceDate < @To AND m.CancelledOn IS NULL)
+                  )
             """, s.BindPeriod, r =>
         {
             var mrn = c.Mrn(HisConnection.I(r, "PatientID"));
             if (mrn.Length == 0) return;
-            var no = c.ErEncounter(HisConnection.I(r, "AssessmentNo"));
-            if (!seen.Add(no)) return;
+            var assessment = HisConnection.I(r, "AssessmentNo");
+            var byAppointment = HisConnection.Ni(r, "LinkedAppointment") is > 0 ? HisConnection.Ni(r, "LinkedAppointment") : null;
+            var byInvoice = HisConnection.Ni(r, "InvoiceAppointment") is > 0 ? HisConnection.Ni(r, "InvoiceAppointment") : null;
+            var appointment = byAppointment ?? byInvoice;
+            if (appointment is { } linked) c.LinkErToAppointment(assessment, linked);
+            var no = c.ErEncounter(assessment);
+            if (HisConnection.B(r, "AppointmentRefused")) erRefused++;
+            if (!seen.Add(no))
+            {
+                if (appointment is not null) erSharing++;
+                return;
+            }
+            if (byAppointment is not null) erByAppointment++;
+            else if (byInvoice is not null) erByInvoice++;
+            else erStandalone++;
             var day = HisConnection.Dt(r, "AssessmentDate") ?? s.From!.Value;
             var start = HisConnection.Dt(r, "SignInTime") ?? Maps.Combine(day, HisConnection.S(r, "ArrivalTime"));
             var end = HisConnection.Dt(r, "SignOutTime") ?? HisConnection.Dt(r, "DischargeTime") ?? start;
+            var company = HisConnection.Ni(r, "AppointmentCompany") ?? HisConnection.Ni(r, "InvoiceCompany");
+            var drg = appointment is { } a ? DrgExtract.Lookup(opDrg, a) : "";
             csv.Write(
                 mrn,
                 c.Hospital, c.DeptFromClinic(HisConnection.Ni(r, "ClinicID")), SlFromClinic(HisConnection.Ni(r, "ClinicID")),
-                c.SelfPayer, "", "", c.ProviderOrEmpty(HisConnection.Ni(r, "DoctorID")),
-                no, "ER", Maps.DateTime(start), Maps.DateTime(end), "0", "false", "ROUTINE");
+                c.PayerOrSelf(company), drg, "", c.ProviderOrEmpty(HisConnection.Ni(r, "DoctorID")),
+                no, "ER", Maps.DateTime(start), Maps.DateTime(end), "0", "false", "ROUTINE", $"{assessment}",
+                HisConnection.S(r, "Status"), HisConnection.S(r, "ERStatus"), Flag(r, "IsVisitClosed"), When(HisConnection.Dt(r, "ArrivedOn")));
+        });
+        pack.Note($"ER encounters: {erByAppointment} linked by AppointmentID, {erByInvoice} linked by InvoiceNo, {erStandalone} with no appointment. {erRefused} AppointmentID values had no appointment for the same patient; {erSharing} assessments shared an appointment with another.");
+
+        await db.QueryAsync("""
+            SELECT a.AppointmentNo, a.PatientType, a.PatientID, a.ClinicID, a.DoctorID, a.CompanyID,
+                   a.AppointmentDate, a.StartTime, a.EndTime, a.ActualVisitStartTime, a.ActualVisitEndTime,
+                   a.EndDate, a.Status, a.IsVisitClosed, a.ArrivedOn
+            FROM dbo.HIS_Appointment a WITH (NOLOCK)
+            WHERE a.SetupID=@SetupId AND a.ProjectID=@ProjectId AND a.PatientID > 0
+              AND a.AppointmentDate >= @From AND a.AppointmentDate < @To
+            UNION ALL
+            SELECT a.AppointmentNo, a.PatientType, a.PatientID, a.ClinicID, a.DoctorID, a.CompanyID,
+                   a.AppointmentDate, a.StartTime, a.EndTime, a.ActualVisitStartTime, a.ActualVisitEndTime,
+                   a.EndDate, a.Status, a.IsVisitClosed, a.ArrivedOn
+            FROM dbo.HIS_InvoiceMain m WITH (NOLOCK)
+            INNER JOIN dbo.HIS_Appointment a WITH (NOLOCK)
+              ON a.SetupID=m.SetupID AND a.ProjectID=m.ProjectID AND a.AppointmentNo=m.AppointmentNo
+            WHERE m.SetupID=@SetupId AND m.ProjectID=@ProjectId AND m.AppointmentNo > 0
+              AND m.InvoiceDate >= @From AND m.InvoiceDate < @To AND m.CancelledOn IS NULL
+              AND (a.AppointmentDate < @From OR a.AppointmentDate >= @To)
+            """, s.BindPeriod, r =>
+        {
+            var mrn = c.Mrn(HisConnection.I(r, "PatientID"));
+            if (mrn.Length == 0) return;
+            var no = c.OpEncounter(HisConnection.I(r, "AppointmentNo"));
+            if (!seen.Add(no)) return;
+            var day = HisConnection.Dt(r, "AppointmentDate") ?? s.From!.Value;
+            var start = Maps.Combine(day, FirstTime(HisConnection.S(r, "ActualVisitStartTime"), HisConnection.S(r, "StartTime")));
+            var endSrc = HisConnection.Dt(r, "EndDate");
+            var end = Maps.Combine(endSrc ?? day, FirstTime(HisConnection.S(r, "ActualVisitEndTime"), HisConnection.S(r, "EndTime")));
+            csv.Write(
+                mrn,
+                c.Hospital, c.DeptFromClinic(HisConnection.Ni(r, "ClinicID")), SlFromClinic(HisConnection.Ni(r, "ClinicID")),
+                c.PayerOrSelf(HisConnection.Ni(r, "CompanyID")),
+                DrgExtract.Lookup(opDrg, HisConnection.I(r, "AppointmentNo")), "", c.ProviderOrEmpty(HisConnection.Ni(r, "DoctorID")),
+                no, "OP", Maps.DateTime(start), Maps.DateTime(end), "0", "false", "ROUTINE", "",
+                HisConnection.S(r, "Status"), "", Flag(r, "IsVisitClosed"), When(HisConnection.Dt(r, "ArrivedOn")));
         });
     }
 
@@ -227,14 +299,23 @@ public static class FactsExtract
         using var svc = pack.Create("34_EncounterService.csv",
             "encounterNo", "procedureCode", "costCentreCode", "providerCode", "quantity", "performedAt", "sourceSystem", "sourceRef");
         using var rev = pack.Create("36_RevenueTransaction.csv",
-            "encounterNo", "procedureCode", "payerCode", "grossAmount", "discount", "netAmount", "postedAt", "sourceSystem", "sourceRef");
+            "encounterNo", "procedureCode", "payerCode", "grossAmount", "discount", "netAmount", "postedAt", "sourceSystem", "sourceRef",
+            "hisLineStatus", "isPerformed", "performType", "isReturned", "isRefunded", "refundedAmount",
+            "hisUnitPrice", "hisQuantity", "discountType", "hisDiscountAmount", "waivedAmount", "waiverId", "patientShare", "companyShare",
+            "taxAmount", "patientTaxAmount", "companyTaxAmount", "outlierPayment", "claimedAmount", "settledAmount", "rejectedAmount",
+            "isZeroPrice", "isPackageSelected", "packageProcedureId", "packageSequenceNo", "isPackageInvoice", "billType", "isAcceptedWithDrg");
+        var noEncounter = 0;
 
         await db.QueryAsync("""
             SELECT m.TransactionType, m.InvoiceNo, m.InvoiceDate, m.AppointmentNo, m.AdmissionNo,
                    m.ClinicID, m.CompanyID, m.PerformedServiceClinicID,
                    d.LineItemNo, d.ProcedureID, d.Price, d.Quantity, d.DiscountAmount, d.WaivedAmount,
                    d.PatientShare, d.CompanyShare, d.CostCenterID, d.PrimaryDoctorID, d.PrimaryClinicID,
-                   d.PerformDate, hp.IsMedicine, er.AssessmentNo
+                   d.PerformDate, d.Status, d.IsPerformed, d.PerformType, d.IsReturned, d.IsRefunded, d.RefundedAmount,
+                   d.DiscountType, d.WaiverID, d.TaxAmount, d.PatientTaxAmount, d.CompanyTaxAmount, d.OutlierPayment,
+                   d.ClaimedAmount, d.SettledAmount, d.RejectedAmount, d.IsZeroPrice, d.IsPackageSelected,
+                   d.PackageProcedureID, d.PackageSequenceNo, m.IsPackageInvoice, m.BillType, m.IsAcceptedWithDRG,
+                   hp.IsMedicine, er.AssessmentNo
             FROM dbo.HIS_InvoiceMain m WITH (NOLOCK)
             INNER JOIN dbo.HIS_InvoiceDetail d WITH (NOLOCK)
               ON d.SetupID=m.SetupID AND d.ProjectID=m.ProjectID
@@ -250,7 +331,11 @@ public static class FactsExtract
             """, s.BindPeriod, r =>
         {
             var enc = EncounterOf(c, HisConnection.Ni(r, "AdmissionNo"), HisConnection.Ni(r, "AppointmentNo"), HisConnection.Ni(r, "AssessmentNo"));
-            if (enc is null) return;
+            if (enc is null)
+            {
+                noEncounter++;
+                return;
+            }
             var posted = HisConnection.Dt(r, "InvoiceDate") ?? s.From!.Value;
             var performed = HisConnection.Dt(r, "PerformDate") ?? posted;
             var qty = Math.Max(1, HisConnection.I(r, "Quantity"));
@@ -276,36 +361,125 @@ public static class FactsExtract
             }
 
             rev.Write(enc, procCode, payer, Maps.Money(gross), Maps.Money(discount), Maps.Money(net),
-                Maps.DateTime(posted), "VIDA-HIS", $"REV-{tt}-{inv}-{line}");
+                Maps.DateTime(posted), "VIDA-HIS", $"REV-{tt}-{inv}-{line}",
+                HisConnection.S(r, "Status"), Flag(r, "IsPerformed"), HisConnection.S(r, "PerformType"), Flag(r, "IsReturned"), Flag(r, "IsRefunded"),
+                Maps.Money(Maps.Round4(HisConnection.F(r, "RefundedAmount"))),
+                // As HIS holds them, for reference: gross, discount and net above stay what they are.
+                Maps.Money(price), HisConnection.S(r, "Quantity"), HisConnection.S(r, "DiscountType"),
+                Stored(r, "DiscountAmount"), Stored(r, "WaivedAmount"), HisConnection.S(r, "WaiverID"),
+                Stored(r, "PatientShare"), Stored(r, "CompanyShare"), Stored(r, "TaxAmount"), Stored(r, "PatientTaxAmount"), Stored(r, "CompanyTaxAmount"),
+                Stored(r, "OutlierPayment"), Stored(r, "ClaimedAmount"), Stored(r, "SettledAmount"), Stored(r, "RejectedAmount"),
+                Flag(r, "IsZeroPrice"), Flag(r, "IsPackageSelected"), HisConnection.S(r, "PackageProcedureID"), HisConnection.S(r, "PackageSequenceNo"),
+                Flag(r, "IsPackageInvoice"), HisConnection.S(r, "BillType"), Flag(r, "IsAcceptedWithDRG"));
         });
+        pack.Note($"Invoice lines with no appointment, admission or ER assessment, not loaded: {noEncounter}.");
+        await RefundsAsync(db, s, c, pack);
+        await PackageItemsAsync(db, s, c, pack);
+    }
 
+    /// <summary>Package components on the period's invoices, as HIS holds them. Not services and not revenue.</summary>
+    private static async Task PackageItemsAsync(HisConnection db, Settings s, Codes c, CsvZipWriter pack)
+    {
+        using var csv = pack.Create("38_InvoicePackageItem.csv",
+            "hospitalCode", "encounterNo", "hisEncounterNo", "procedureCode", "hisProcedureId", "packageProcedureId", "packageLineItemNo", "packageSequence",
+            "transactionType", "invoiceNo", "lineItemNo", "invoiceDate", "price", "discountedCharge", "patientShare", "patientPaid", "companyShare", "companyPaid",
+            "childInvoiceNo", "childInvoiceLineItemNo", "isCompleted", "isRefunded", "sourceSystem", "sourceRef");
+        int lines = 0, noEncounter = 0;
         await db.QueryAsync("""
-            SELECT r.RefundNo, r.RefundDate, r.OriginalTransactionType, r.OriginalTransactionRef,
-                   d.InvoiceLineItemNo, d.ProcedureID, d.RefundAmount, d.PatientShare, d.CompanyShare,
-                   m.AppointmentNo, m.AdmissionNo, m.CompanyID
+            SELECT p.TransactionType, p.InvoiceNo, p.LineItemNo, p.ProcedureID, p.ProcedurePackageID, p.ProcedurePackageLineItemNo, p.ProcedurePackageSequence,
+                   p.Price, p.DiscountedCharge, p.PatientShare, p.PatientPaid, p.CompanyShare, p.CompanyPaid,
+                   p.ChildInvoiceNo, p.ChildInvoiceLineItemNo, p.IsCompleted, p.IsRefunded,
+                   m.InvoiceDate, m.AppointmentNo, m.AdmissionNo, er.AssessmentNo
+            FROM dbo.HIS_InvoiceMain m WITH (NOLOCK)
+            INNER JOIN dbo.HIS_InvoicePackageItem p WITH (NOLOCK)
+              ON p.SetupID=m.SetupID AND p.ProjectID=m.ProjectID
+             AND p.TransactionType=m.TransactionType AND p.InvoiceNo=m.InvoiceNo
+            LEFT JOIN dbo.INP_ERAssessment er WITH (NOLOCK)
+              ON er.SetupID=m.SetupID AND er.ProjectID=m.ProjectID AND er.InvoiceNo=m.InvoiceNo
+             AND ISNULL(m.AppointmentNo,0)=0 AND ISNULL(m.AdmissionNo,0)=0
+            WHERE m.SetupID=@SetupId AND m.ProjectID=@ProjectId
+              AND m.InvoiceDate >= @From AND m.InvoiceDate < @To
+              AND m.CancelledOn IS NULL
+            """, s.BindPeriod, r =>
+        {
+            var enc = EncounterOf(c, HisConnection.Ni(r, "AdmissionNo"), HisConnection.Ni(r, "AppointmentNo"), HisConnection.Ni(r, "AssessmentNo")) ?? "";
+            var procId = HisConnection.S(r, "ProcedureID");
+            var tt = HisConnection.I(r, "TransactionType");
+            var inv = HisConnection.I(r, "InvoiceNo");
+            var line = HisConnection.I(r, "LineItemNo");
+            lines++;
+            if (enc.Length == 0) noEncounter++;
+            csv.Write(
+                c.Hospital, enc, enc, procId.Length == 0 ? "" : c.Procedure(procId), procId, HisConnection.S(r, "ProcedurePackageID"),
+                HisConnection.S(r, "ProcedurePackageLineItemNo"), HisConnection.S(r, "ProcedurePackageSequence"),
+                $"{tt}", $"{inv}", Maps.Int(line), When(HisConnection.Dt(r, "InvoiceDate")),
+                Stored(r, "Price"), Stored(r, "DiscountedCharge"), Stored(r, "PatientShare"), Stored(r, "PatientPaid"), Stored(r, "CompanyShare"), Stored(r, "CompanyPaid"),
+                HisConnection.S(r, "ChildInvoiceNo"), HisConnection.S(r, "ChildInvoiceLineItemNo"), Flag(r, "IsCompleted"), Flag(r, "IsRefunded"),
+                "VIDA-HIS", $"PKG-{tt}-{inv}-{line}");
+        });
+        pack.Note($"InvoicePackageItem {lines} lines: {noEncounter} with no encounter. Not written as services or revenue.");
+    }
+
+    /// <summary>Every refund in the period as HIS holds it, with its status. These are not revenue lines.</summary>
+    private static async Task RefundsAsync(HisConnection db, Settings s, Codes c, CsvZipWriter pack)
+    {
+        using var csv = pack.Create("37_RefundTransaction.csv",
+            "hospitalCode", "encounterNo", "hisEncounterNo", "patientMrn", "procedureCode", "hisProcedureId", "payerCode",
+            "refundNo", "refundType", "refundDate", "originalTransactionType", "originalInvoiceNo", "originalInvoiceDate", "invoiceLineNo", "invoiceCancelledAt",
+            "refundAmount", "patientShare", "companyShare", "patientPaid", "taxAmount", "headerRefundAmount", "headerAmountPaid",
+            "status", "approvalStatus", "approvedAt", "cancelledAt", "reasonId", "sourceSystem", "sourceRef");
+        int lines = 0, cancelled = 0, noEncounter = 0;
+        await db.QueryAsync("""
+            SELECT r.RefundNo, r.RefundType, r.RefundDate, r.PatientID, r.RefundAmount AS HeaderRefundAmount, r.AmountPaid,
+                   r.OriginalTransactionType, r.OriginalTransactionRef, r.OriginalTransactionDate, r.ReasonID,
+                   r.Status, r.ApprovalStatus, r.ApprovedDate, r.CancelledOn,
+                   d.InvoiceLineItemNo, d.ProcedureID, d.RefundAmount, d.PatientShare, d.CompanyShare, d.PatientPaid, d.TaxAmount,
+                   m.AppointmentNo, m.AdmissionNo, m.CompanyID, m.CancelledOn AS InvoiceCancelledOn, er.AssessmentNo
             FROM dbo.HIS_RefundMain r WITH (NOLOCK)
-            INNER JOIN dbo.HIS_RefundDetail d WITH (NOLOCK)
+            LEFT JOIN dbo.HIS_RefundDetail d WITH (NOLOCK)
               ON d.SetupID=r.SetupID AND d.ProjectID=r.ProjectID AND d.RefundNo=r.RefundNo
             LEFT JOIN dbo.HIS_InvoiceMain m WITH (NOLOCK)
               ON m.SetupID=r.SetupID AND m.ProjectID=r.ProjectID
              AND m.TransactionType=r.OriginalTransactionType AND m.InvoiceNo=r.OriginalTransactionRef
+            OUTER APPLY (
+              SELECT TOP 1 e.AssessmentNo FROM dbo.INP_ERAssessment e WITH (NOLOCK)
+              WHERE e.SetupID=r.SetupID AND e.ProjectID=r.ProjectID AND e.InvoiceNo=r.OriginalTransactionRef
+                AND e.InvoiceNo > 0 AND ISNULL(m.AppointmentNo,0)=0 AND ISNULL(m.AdmissionNo,0)=0) er
             WHERE r.SetupID=@SetupId AND r.ProjectID=@ProjectId
               AND r.RefundDate >= @From AND r.RefundDate < @To
-              AND r.CancelledOn IS NULL
             """, s.BindPeriod, r =>
         {
-            var enc = EncounterOf(c, HisConnection.Ni(r, "AdmissionNo"), HisConnection.Ni(r, "AppointmentNo"), null);
-            if (enc is null) return;
-            var amt = Maps.Round4(HisConnection.F(r, "RefundAmount"));
-            if (amt == 0) amt = Maps.Round4(HisConnection.F(r, "PatientShare") + HisConnection.F(r, "CompanyShare"));
+            var enc = EncounterOf(c, HisConnection.Ni(r, "AdmissionNo"), HisConnection.Ni(r, "AppointmentNo"), HisConnection.Ni(r, "AssessmentNo")) ?? "";
+            var refundNo = HisConnection.I(r, "RefundNo");
+            var line = HisConnection.I(r, "InvoiceLineItemNo");
             var procId = HisConnection.S(r, "ProcedureID");
-            var posted = HisConnection.Dt(r, "RefundDate") ?? s.From!.Value;
-            rev.Write(enc, procId.Length == 0 ? "" : c.Procedure(procId),
-                c.PayerOrSelf(HisConnection.Ni(r, "CompanyID")),
-                Maps.Money(-amt), "0", Maps.Money(-amt), Maps.DateTime(posted), "VIDA-HIS",
-                $"REF-{HisConnection.I(r, "RefundNo")}-{HisConnection.I(r, "InvoiceLineItemNo")}");
+            static string Money(double v) => Maps.Money(Maps.Round4(v));
+            var cancelledOn = HisConnection.Dt(r, "CancelledOn");
+            lines++;
+            if (cancelledOn is not null) cancelled++;
+            if (enc.Length == 0) noEncounter++;
+            csv.Write(
+                c.Hospital, enc, enc, c.Mrn(HisConnection.I(r, "PatientID")),
+                procId.Length == 0 ? "" : c.Procedure(procId), procId, c.PayerOrSelf(HisConnection.Ni(r, "CompanyID")),
+                $"{refundNo}", HisConnection.S(r, "RefundType"), When(HisConnection.Dt(r, "RefundDate")),
+                HisConnection.S(r, "OriginalTransactionType"), $"{HisConnection.I(r, "OriginalTransactionRef")}", When(HisConnection.Dt(r, "OriginalTransactionDate")),
+                Maps.Int(line), When(HisConnection.Dt(r, "InvoiceCancelledOn")),
+                Money(HisConnection.F(r, "RefundAmount")), Money(HisConnection.F(r, "PatientShare")), Money(HisConnection.F(r, "CompanyShare")),
+                Money(HisConnection.F(r, "PatientPaid")), Money(HisConnection.F(r, "TaxAmount")),
+                Money(HisConnection.F(r, "HeaderRefundAmount")), Money(HisConnection.F(r, "AmountPaid")),
+                HisConnection.S(r, "Status"), HisConnection.S(r, "ApprovalStatus"), When(HisConnection.Dt(r, "ApprovedDate")), When(cancelledOn),
+                HisConnection.S(r, "ReasonID"), "VIDA-HIS", $"REF-{refundNo}-{line}");
         });
+        pack.Note($"RefundTransaction {lines} lines: {cancelled} on cancelled refunds, {noEncounter} with no encounter. Not written as revenue.");
     }
+
+    private static string Stored(Microsoft.Data.SqlClient.SqlDataReader r, string col) => Maps.Money(Maps.Round4(HisConnection.F(r, col)));
+
+    private static string When(DateTime? d) => d is null ? "" : Maps.DateTime(d.Value);
+
+    /// <summary>A HIS yes/no as stored: blank when HIS holds nothing, which is not the same as no.</summary>
+    private static string Flag(Microsoft.Data.SqlClient.SqlDataReader r, string col) =>
+        HisConnection.S(r, col).Length == 0 ? "" : Maps.Bool(HisConnection.B(r, col));
 
     private static string? EncounterOf(Codes c, int? admissionNo, int? appointmentNo, int? assessmentNo)
     {

@@ -18,7 +18,7 @@ public static class CatalogueExtract
         await ProcedureAsync(db, s, c, pack);
         await ProcedureRateAsync(db, s, c, pack);
         await PackageAsync(db, s, c, pack);
-        await DrgAsync(db, s, pack);
+        await DrgExtract.CatalogueAsync(db, s, pack);
         await PayerAsync(db, s, c, pack);
         pack.Note($"Catalogue extract finished {asOf:u}");
     }
@@ -178,71 +178,6 @@ public static class CatalogueExtract
             "hospitalCode", "departmentCode", "facilityCode", "code", "name", "ccType", "stepDownSeq", "isActive");
         csv.Write(c.Hospital, c.UnmappedDept, "", c.UnmappedCc, "Unmapped", "OVERHEAD", "10", "true");
 
-        var clinics = new HashSet<int>();
-        await db.QueryAsync("""
-            SELECT ClinicID, ClinicDescription, IsActive FROM dbo.HIS_Clinic WITH (NOLOCK)
-            WHERE SetupID=@SetupId AND ProjectID=@ProjectId
-            """, s.BindTenant, r =>
-        {
-            var id = HisConnection.I(r, "ClinicID");
-            if (!clinics.Add(id)) return;
-            var name = HisConnection.S(r, "ClinicDescription");
-            csv.Write(c.Hospital, c.ClinicDept(id), "", c.ClinicCc(id),
-                (name.Length == 0 ? c.ClinicCc(id) : name) + " CC", "PRODUCTION", "100",
-                Maps.Bool(HisConnection.B(r, "IsActive")));
-        });
-
-        await db.QueryAsync("""
-            SELECT ClinicID FROM dbo.HIS_Appointment WITH (NOLOCK)
-            WHERE SetupID=@SetupId AND ProjectID=@ProjectId AND ClinicID > 0
-            UNION
-            SELECT ClinicID FROM dbo.INP_Admission WITH (NOLOCK)
-            WHERE SetupID=@SetupId AND ProjectID=@ProjectId AND ClinicID > 0
-            UNION
-            SELECT AdmittingClinicID FROM dbo.INP_Admission WITH (NOLOCK)
-            WHERE SetupID=@SetupId AND ProjectID=@ProjectId AND AdmittingClinicID > 0
-            UNION
-            SELECT ClinicID FROM dbo.INP_ERAssessment WITH (NOLOCK)
-            WHERE SetupID=@SetupId AND ProjectID=@ProjectId AND ClinicID > 0
-            """, s.BindTenant, r =>
-        {
-            var id = HisConnection.I(r, "ClinicID");
-            if (!clinics.Add(id)) return;
-            csv.Write(c.Hospital, c.ClinicDept(id), "", c.ClinicCc(id),
-                $"Clinic {id} CC", "PRODUCTION", "100", "true");
-        });
-
-        await db.QueryAsync("""
-            SELECT NursingStationID, Description FROM dbo.INP_NursingStation WITH (NOLOCK)
-            WHERE SetupID=@SetupId AND ProjectID=@ProjectId AND ISNULL(IsActive,1)=1
-            """, s.BindTenant, r =>
-        {
-            var id = HisConnection.I(r, "NursingStationID");
-            var name = HisConnection.S(r, "Description");
-            csv.Write(c.Hospital, c.WardDept(id), "", c.WardCc(id),
-                (name.Length == 0 ? c.WardCc(id) : name) + " CC", "PRODUCTION", "100", "true");
-        });
-
-        await db.QueryAsync("""
-            SELECT OTID, Description FROM dbo.INP_OTMain WITH (NOLOCK)
-            WHERE SetupID=@SetupId AND ProjectID=@ProjectId AND ISNULL(IsActive,1)=1
-            """, s.BindTenant, r =>
-        {
-            var id = HisConnection.I(r, "OTID");
-            csv.Write(c.Hospital, c.OtDept(id), "", c.OtCc(id),
-                HisConnection.S(r, "Description") + " CC", "PRODUCTION", "80", "true");
-        });
-
-        await db.QueryAsync("""
-            SELECT DivisionID, DivisionName FROM dbo.LAB_Division WITH (NOLOCK)
-            WHERE SetupID=@SetupId AND ProjectID=@ProjectId AND ISNULL(IsActive,1)=1
-            """, s.BindTenant, r =>
-        {
-            var id = HisConnection.I(r, "DivisionID");
-            csv.Write(c.Hospital, c.LabDept(id), "", c.LabCc(id),
-                HisConnection.S(r, "DivisionName") + " CC", "ANCILLARY", "90", "true");
-        });
-
         var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         await db.QueryAsync("""
             SELECT CostCenterID, CostCenterName, IsActive
@@ -275,6 +210,7 @@ public static class CatalogueExtract
             csv.Write(c.Hospital, c.UnmappedDept, "", c.OracleCc(raw), raw, "PRODUCTION", "100", "true");
         });
         if (billed > 0) pack.Note($"CostCenter: {billed} Oracle codes appear on invoices but not in HIS_CostCenterSetup and were added.");
+        pack.Note("CostCenter: HIS_CostCenterSetup + invoice CostCenterID only, all on Unmapped. No dummy CC-CLN/NS/OT/LAB.");
     }
 
     private static Task ResourceAsync(Codes c, CsvZipWriter pack)
@@ -424,27 +360,6 @@ public static class CatalogueExtract
             var child = HisConnection.S(r, "ChildProcedureID");
             if (parent.Length == 0 || child.Length == 0) return;
             comp.Write(c.Procedure(parent), c.Procedure(child), "1");
-        });
-    }
-
-    private static async Task DrgAsync(HisConnection db, Settings s, CsvZipWriter pack)
-    {
-        using var csv = pack.Create("26_Drg.csv", "code", "name", "mdc", "relativeWt", "expectedLOS", "baseRate");
-        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        await db.QueryAsync("""
-            SELECT DRGCode, DRGDescription, DRGWeight, AverageLOS, DRGBaseRate, DRGCodeSpecialty
-            FROM dbo.HIS_DRGSpecification WITH (NOLOCK)
-            WHERE SetupID=@SetupId AND ProjectID=@ProjectId AND ISNULL(IsActive,1)=1
-            """, s.BindTenant, r =>
-        {
-            var code = HisConnection.S(r, "DRGCode");
-            if (code.Length == 0 || !seen.Add(code)) return;
-            var name = HisConnection.S(r, "DRGDescription");
-            if (name.Length == 0) name = code;
-            csv.Write(code, name, HisConnection.S(r, "DRGCodeSpecialty"),
-                Maps.Dec(Maps.Round4(HisConnection.F(r, "DRGWeight"))),
-                Maps.Dec(Maps.Round4(HisConnection.F(r, "AverageLOS"))),
-                Maps.Money(Maps.Round4(HisConnection.F(r, "DRGBaseRate"))));
         });
     }
 

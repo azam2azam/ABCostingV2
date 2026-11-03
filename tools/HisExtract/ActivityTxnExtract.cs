@@ -19,7 +19,7 @@ public static class ActivityTxnExtract
         await Safe(pack, "IP bed-days", () => Counted(pack, "IP bed-days", o, () => BedsAsync(db, s, c, o)));
         await Safe(pack, "Floor consumption qty", () => Counted(pack, "Floor consumption qty", o, () => FloorAsync(db, s, c, o)));
         await Safe(pack, "IP consumed items qty", () => Counted(pack, "IP consumed items qty", o, () => ConsumedAsync(db, s, c, o)));
-        await Safe(pack, "OP dispensed meds qty", () => Counted(pack, "OP dispensed meds qty", o, () => MedsAsync(db, s, c, o)));
+        await Safe(pack, "OP dispensed meds qty", () => Counted(pack, "OP dispensed meds qty", o, () => MedsAsync(db, s, c, o, pack)));
         pack.Note($"ActivityTransaction {o.Written} measured rows (VIDA-HIS). UnitPrice / invoice price is not written.");
     }
 
@@ -73,6 +73,8 @@ public static class ActivityTxnExtract
             var min = Maps.ClockMinutes(start, Maps.Combine(day, endRaw));
             if (min is null) return;
             var no = HisConnection.I(r, "AppointmentNo");
+            // An ER visit's time is measured from its assessment, not counted again as a clinic visit.
+            if (c.IsErAppointment(no)) return;
             var dental = HisConnection.Ni(r, "GroupID") == 17;
             var act = dental ? "DENT-VISIT" : "CONSULT";
             var res = dental ? "MD-DENT" : "MD-MED";
@@ -143,9 +145,7 @@ public static class ActivityTxnExtract
             var day = HisConnection.Dt(r, "OperationDate") ?? s.From!.Value;
             var id = HisConnection.I(r, "OTReservationID");
             var enc = c.IpEncounter(HisConnection.I(r, "AdmissionNo"));
-            var cc = HisConnection.Ni(r, "OTID") is { } ot
-                ? c.OtCc(ot)
-                : c.CcFromClinic(HisConnection.Ni(r, "ClinicID"));
+            var cc = c.UnmappedCc;
             var surgS = HisConnection.S(r, "ActualSugeryStartTime");
             var surgE = HisConnection.S(r, "ActualSurgeryEndTime");
             if (surgS.Length > 0 && surgE.Length > 0)
@@ -273,7 +273,7 @@ public static class ActivityTxnExtract
             if (qty <= 0) return;
             var id = Convert.ToInt64(r.GetValue(r.GetOrdinal("SQL_ID")), System.Globalization.CultureInfo.InvariantCulture);
             var ns = HisConnection.Ni(r, "NursingStationID");
-            var cc = ns is null ? c.UnmappedCc : c.WardCc(ns.Value);
+            var cc = c.UnmappedCc;
             var at = HisConnection.Dt(r, "CreatedOn") ?? s.From!.Value;
             o.Add(enc, "WOUND-CARE", "CON-PPE", cc, qty, "UNIT", at, $"FLR-{id}-WOUND-CARE-CON-PPE");
         });
@@ -303,11 +303,15 @@ public static class ActivityTxnExtract
         });
     }
 
-    private static async Task MedsAsync(HisConnection db, Settings s, Codes c, Writer o)
+    private static async Task MedsAsync(HisConnection db, Settings s, Codes c, Writer o, CsvZipWriter pack)
     {
+        // DoseDailyQuantity is the prescribed daily dose. DispensedQuantity / Quantity / Qty are
+        // pack, IU or course counts — not the UOM of RES-DRG-IP (DOSE). Using them as doses
+        // prices a consult at thousands of class-doses (e.g. 6,400 × SAR 13).
+        var packOnly = 0;
         await db.QueryAsync("""
             SELECT m.EpisodeID, m.AppointmentNo, m.MedicineCode, a.ClinicID, m.StartDate,
-                   m.DispensedQuantity, m.Quantity, m.Qty
+                   m.DoseDailyQuantity, m.DispensedQuantity, m.Quantity, m.Qty
             FROM dbo.HIS_ProgNoteMedicine m WITH (NOLOCK)
             INNER JOIN dbo.HIS_Appointment a WITH (NOLOCK)
               ON a.SetupID=m.SetupID AND a.ProjectID=m.ProjectID AND a.AppointmentNo=m.AppointmentNo
@@ -315,17 +319,24 @@ public static class ActivityTxnExtract
               AND a.AppointmentDate >= @From AND a.AppointmentDate < @To
             """, s.BindPeriod, r =>
         {
-            var qty = HisConnection.I(r, "DispensedQuantity");
-            if (qty <= 0) qty = HisConnection.I(r, "Quantity");
-            if (qty <= 0) qty = HisConnection.I(r, "Qty");
-            if (qty <= 0) return;
+            var daily = HisConnection.F(r, "DoseDailyQuantity");
+            if (daily <= 0)
+            {
+                if (HisConnection.I(r, "DispensedQuantity") > 0
+                    || HisConnection.I(r, "Quantity") > 0
+                    || HisConnection.I(r, "Qty") > 0)
+                    packOnly++;
+                return;
+            }
             var appt = HisConnection.I(r, "AppointmentNo");
             var at = HisConnection.Dt(r, "StartDate") ?? s.From!.Value;
             var ep = HisConnection.I(r, "EpisodeID");
             var med = HisConnection.I(r, "MedicineCode");
             o.Add(c.OpEncounter(appt), "PHARM-DISPENSE", "DRG-IP", c.CcFromClinic(HisConnection.Ni(r, "ClinicID")),
-                qty, "DOSE", at, $"MED-{ep}-{appt}-{med}-PHARM-DISPENSE-DRG-IP");
+                Maps.Round4(daily), "DOSE", at, $"MED-{ep}-{appt}-{med}-PHARM-DISPENSE-DRG-IP");
         });
+        if (packOnly > 0)
+            pack.Note($"OP meds: {packOnly} prescription(s) had only pack/course qty (DispensedQuantity/Quantity/Qty) and were not written as DOSE.");
     }
 
     private static string? EncounterOf(Codes c, int encounterType, int encounterNo)

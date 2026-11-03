@@ -25,6 +25,12 @@ public static class Probe
         await Row(db, s, "HIS_Procedure", extra: "AND ISNULL(IsPackage,0)=1", label: "HIS_Procedure  IsPackage=1");
         await Row(db, s, "HIS_ProcedurePrice");
         await Row(db, s, "HIS_DRGSpecification");
+        await Row(db, s, "HIS_DRGSpecification", byProject: false, label: "HIS_DRGSpecification  SetupID (any project)");
+        await Row(db, s, "INP_AdmissionDRGList");
+        await Row(db, s, "HIS_DRGLog");
+        await Row(db, s, "HIS_DRGDayCare");
+        await Row(db, s, "HIS_ApprovalDRG");
+        await Row(db, s, "HIS_ProcedureDRGMapping");
         await Row(db, s, "HIS_CostCenterSetup", byProject: false);
         await Row(db, s, "HIS_RuleCostCenterNew");
         await Row(db, s, "LAB_TestMain");

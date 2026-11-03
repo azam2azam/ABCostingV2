@@ -30,8 +30,7 @@ internal static class PhysicianRoles
 
     internal static string ResourceCode(Codes c, string token) => $"{c.Hospital}.RES-MD-{token}";
 
-    internal static string CostCentre(Codes c, Role role) =>
-        role.Token == "OTHER" || string.IsNullOrEmpty(role.ClinicCcId) ? c.UnmappedCc : c.ClinicCc(role.ClinicCcId);
+    internal static string CostCentre(Codes c, Role _) => c.UnmappedCc;
 
     internal static string TokenFromClinic(int? clinicId)
     {
