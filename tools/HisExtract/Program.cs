@@ -35,7 +35,7 @@ static class App
         if (command is null) command = Ask("Command  probe / catalogue / facts / all", "probe");
 
         s.ConnectionString = Env("HIS_CONNECTION") ?? Flag(args, "--cs")
-            ?? (Interactive(args) ? Ask("Connection string", s.ConnectionString) : s.ConnectionString);
+            ?? (Interactive(args) ? AskSecret("Connection string", s.ConnectionString) : s.ConnectionString);
         s.SetupId = Flag(args, "--setup") ?? (Interactive(args) ? Ask("SetupId", s.SetupId) : s.SetupId);
         if (short.TryParse(Flag(args, "--project") ?? (Interactive(args) ? Ask("ProjectId", s.ProjectId.ToString()) : s.ProjectId.ToString()), out var pid))
             s.ProjectId = pid;
@@ -79,7 +79,8 @@ static class App
 
         Directory.CreateDirectory(s.OutDir);
         Console.WriteLine();
-        Console.WriteLine($"Connecting to {ServerOf(s.ConnectionString)}  db={DbOf(s.ConnectionString)} ...");
+        Console.WriteLine("Connection string  ****");
+        Console.WriteLine("Connecting ...");
 
         try
         {
@@ -164,7 +165,6 @@ static class App
         HIS ProjectID: {s.ProjectId}
         Period: {(from is null ? "n/a" : $"{from:yyyy-MM-dd} .. {toExclusive!.Value.AddDays(-1):yyyy-MM-dd} inclusive")}
         Extracted (UTC): {DateTime.UtcNow:u}
-        Server: {ServerOf(s.ConnectionString)}
 
         Identity is SetupID + ProjectID (every CSV + zip name). Do not treat the zip
         filename as a VERITA hospital. Inner CSV names stay NN_Table.csv.
@@ -285,6 +285,14 @@ static class App
     private static bool Interactive(string[] args) =>
         !args.Any(a => a is "probe" or "catalogue" or "facts" or "all");
 
+    /// <summary>Never echoes the current value: consoles get copied into logs.</summary>
+    private static string AskSecret(string label, string def)
+    {
+        Console.Write($"{label} [****]: ");
+        var line = Console.ReadLine();
+        return string.IsNullOrWhiteSpace(line) ? def : line.Trim();
+    }
+
     private static string Ask(string label, string def)
     {
         Console.Write($"{label} [{def}]: ");
@@ -331,28 +339,6 @@ static class App
         return string.IsNullOrWhiteSpace(v) ? null : v;
     }
 
-    private static string ServerOf(string cs)
-    {
-        foreach (var part in cs.Split(';'))
-        {
-            var kv = part.Split('=', 2);
-            if (kv.Length == 2 && kv[0].Trim().Equals("Server", StringComparison.OrdinalIgnoreCase))
-                return kv[1].Trim();
-        }
-        return "(unknown)";
-    }
-
-    private static string DbOf(string cs)
-    {
-        foreach (var part in cs.Split(';'))
-        {
-            var kv = part.Split('=', 2);
-            if (kv.Length == 2 && kv[0].Trim().Equals("Database", StringComparison.OrdinalIgnoreCase))
-                return kv[1].Trim();
-        }
-        return "(unknown)";
-    }
-
     private static void Help()
     {
         Console.WriteLine("""
@@ -385,7 +371,7 @@ static class App
               --out        output directory     default ./his-extract-out
 
             Defaults (UAT):
-              Server=RAY-VIDA-UAT;Database=HISGENX;User Id=HmgDbUser;Password=HmgDbUser123
+              Connection string  ****
 
             Publish for the HIS PC:
               dotnet publish tools/HisExtract -c Release -r win-x64 --self-contained -o ./publish/HisExtract

@@ -345,7 +345,7 @@ public static class CatalogueExtract
         });
 
         await db.QueryAsync("""
-            SELECT d.ProcedureID, d.ChildProcedureID, d.LineItemNo
+            SELECT d.ProcedureID, d.ChildProcedureID, COUNT(*) AS Quantity
             FROM dbo.HIS_ProcedurePackageDetail d WITH (NOLOCK)
             INNER JOIN dbo.HIS_Procedure parent WITH (NOLOCK)
               ON parent.SetupID=d.SetupID AND parent.ProjectID=d.ProjectID AND parent.ProcedureID=d.ProcedureID
@@ -354,12 +354,14 @@ public static class CatalogueExtract
               ON child.SetupID=d.SetupID AND child.ProjectID=d.ProjectID AND child.ProcedureID=d.ChildProcedureID
              AND ISNULL(child.IsMedicine,0)=0
             WHERE d.SetupID=@SetupId AND d.ProjectID=@ProjectId AND ISNULL(d.IsActive,1)=1
+            GROUP BY d.ProcedureID, d.ChildProcedureID
             """, s.BindTenant, r =>
         {
+            // HIS repeats a procedure as one line per unit, so its quantity is the number of lines.
             var parent = HisConnection.S(r, "ProcedureID");
             var child = HisConnection.S(r, "ChildProcedureID");
             if (parent.Length == 0 || child.Length == 0) return;
-            comp.Write(c.Procedure(parent), c.Procedure(child), "1");
+            comp.Write(c.Procedure(parent), c.Procedure(child), Maps.Int(HisConnection.I(r, "Quantity")));
         });
     }
 

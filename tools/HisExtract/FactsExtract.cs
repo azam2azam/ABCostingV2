@@ -162,75 +162,62 @@ public static class FactsExtract
 
         // ER before OP: an assessment linked to an appointment claims that encounter number, so the
         // appointment is not written again as OP. Its invoice lines already point at that number.
+        // Packs are one month each and a visit can span two, so links are read for the months around
+        // this one. HIS_InvoiceMain has no key on InvoiceNo alone: invoices are read by date and hashed,
+        // never looked up per assessment.
+        const string ErNearby = "e.AssessmentDate >= DATEADD(month,-3,@From) AND e.AssessmentDate < DATEADD(month,3,@To)";
         const string ErColumns = """
             e.AssessmentNo, e.PatientType, e.PatientID, e.ClinicID, e.DoctorID, e.AssessmentDate,
             e.ArrivalTime, e.DischargeTime, e.SignInTime, e.SignOutTime,
             e.Status, e.ERStatus, ap.IsVisitClosed, ap.ArrivedOn,
             ap.AppointmentNo AS LinkedAppointment, ap.CompanyID AS AppointmentCompany,
-            inv.AppointmentNo AS InvoiceAppointment, inv.CompanyID AS InvoiceCompany,
             CAST(CASE WHEN e.AppointmentID > 0 AND ap.AppointmentNo IS NULL THEN 1 ELSE 0 END AS bit) AS AppointmentRefused
             """;
-        const string ErLinks = """
+        const string ErAppointment = """
             LEFT JOIN dbo.HIS_Appointment ap WITH (NOLOCK)
               ON ap.SetupID=e.SetupID AND ap.ProjectID=e.ProjectID AND ap.AppointmentNo=e.AppointmentID AND e.AppointmentID > 0
               AND ap.PatientID=e.PatientID
-            OUTER APPLY (
-              SELECT TOP 1 iv.AppointmentNo, iv.CompanyID FROM dbo.HIS_InvoiceMain iv WITH (NOLOCK)
-              WHERE iv.SetupID=e.SetupID AND iv.ProjectID=e.ProjectID AND iv.InvoiceNo=e.InvoiceNo AND e.InvoiceNo > 0 AND iv.CancelledOn IS NULL
-                AND iv.PatientID=e.PatientID
-              ORDER BY iv.AppointmentNo DESC) inv
             """;
-        // Packs are one month each, and a visit can span two. Links are read for the months around
-        // this one, so a pack knows an appointment is an ER visit even when the assessment is dated elsewhere.
-        const string ErNearby = "e.AssessmentDate >= DATEADD(month,-3,@From) AND e.AssessmentDate < DATEADD(month,3,@To)";
-        await db.QueryAsync($"""
-            SELECT e.AssessmentNo, ap.AppointmentNo AS LinkedAppointment, inv.AppointmentNo AS InvoiceAppointment
-            FROM dbo.INP_ERAssessment e WITH (NOLOCK)
-            {ErLinks}
-            WHERE e.SetupID=@SetupId AND e.ProjectID=@ProjectId AND e.PatientID > 0 AND {ErNearby}
-            """, s.BindPeriod, r =>
-        {
-            var linked = HisConnection.Ni(r, "LinkedAppointment") ?? HisConnection.Ni(r, "InvoiceAppointment");
-            if (linked is > 0) c.LinkErToAppointment(HisConnection.I(r, "AssessmentNo"), linked.Value);
-        });
-        int erByAppointment = 0, erByInvoice = 0, erStandalone = 0, erRefused = 0, erSharing = 0;
-        await db.QueryAsync($"""
-            SELECT {ErColumns}
-            FROM dbo.INP_ERAssessment e WITH (NOLOCK)
-            {ErLinks}
-            WHERE e.SetupID=@SetupId AND e.ProjectID=@ProjectId AND e.PatientID > 0
-              AND e.AssessmentDate >= @From AND e.AssessmentDate < @To
-            UNION ALL
-            SELECT {ErColumns}
+        var invoiceLinks = new Dictionary<int, (int Appointment, int? Company)>();
+        await db.QueryAsync("""
+            SELECT e.AssessmentNo, m.AppointmentNo, m.CompanyID
             FROM dbo.HIS_InvoiceMain m WITH (NOLOCK)
             INNER JOIN dbo.INP_ERAssessment e WITH (NOLOCK)
-              ON e.SetupID=m.SetupID AND e.ProjectID=m.ProjectID AND e.InvoiceNo=m.InvoiceNo
-            {ErLinks}
-            WHERE m.SetupID=@SetupId AND m.ProjectID=@ProjectId AND e.InvoiceNo > 0
-              AND m.InvoiceDate >= @From AND m.InvoiceDate < @To AND m.CancelledOn IS NULL
-              AND (e.AssessmentDate < @From OR e.AssessmentDate >= @To)
-            UNION ALL
-            SELECT {ErColumns}
-            FROM dbo.INP_ERAssessment e WITH (NOLOCK)
-            {ErLinks}
-            INNER JOIN dbo.HIS_Appointment a WITH (NOLOCK)
-              ON a.SetupID=e.SetupID AND a.ProjectID=e.ProjectID AND a.AppointmentNo=COALESCE(ap.AppointmentNo, NULLIF(inv.AppointmentNo,0))
-            WHERE e.SetupID=@SetupId AND e.ProjectID=@ProjectId AND e.PatientID > 0 AND {ErNearby}
-              AND (e.AssessmentDate < @From OR e.AssessmentDate >= @To)
-              AND (
-                    (a.AppointmentDate >= @From AND a.AppointmentDate < @To)
-                 OR EXISTS (
-                        SELECT 1 FROM dbo.HIS_InvoiceMain m WITH (NOLOCK)
-                        WHERE m.SetupID=a.SetupID AND m.ProjectID=a.ProjectID AND m.AppointmentNo=a.AppointmentNo
-                          AND m.InvoiceDate >= @From AND m.InvoiceDate < @To AND m.CancelledOn IS NULL)
-                  )
+              ON e.SetupID=m.SetupID AND e.ProjectID=m.ProjectID AND e.InvoiceNo=m.InvoiceNo AND e.PatientID=m.PatientID
+            WHERE m.SetupID=@SetupId AND m.ProjectID=@ProjectId AND m.AppointmentNo > 0
+              AND m.InvoiceDate >= DATEADD(month,-3,@From) AND m.InvoiceDate < DATEADD(month,3,@To)
+              AND m.CancelledOn IS NULL AND e.InvoiceNo > 0
+            OPTION (HASH JOIN)
             """, s.BindPeriod, r =>
+        {
+            var assessment = HisConnection.I(r, "AssessmentNo");
+            var appointment = HisConnection.I(r, "AppointmentNo");
+            invoiceLinks[assessment] = (appointment, HisConnection.Ni(r, "CompanyID"));
+            c.LinkErToAppointment(assessment, appointment);
+        });
+        pack.Note($"ER links by InvoiceNo: {invoiceLinks.Count}.");
+        var appointmentLinks = 0;
+        await db.QueryAsync($"""
+            SELECT e.AssessmentNo, ap.AppointmentNo
+            FROM dbo.INP_ERAssessment e WITH (NOLOCK)
+            INNER JOIN dbo.HIS_Appointment ap WITH (NOLOCK)
+              ON ap.SetupID=e.SetupID AND ap.ProjectID=e.ProjectID AND ap.AppointmentNo=e.AppointmentID AND ap.PatientID=e.PatientID
+            WHERE e.SetupID=@SetupId AND e.ProjectID=@ProjectId AND e.PatientID > 0 AND e.AppointmentID > 0 AND {ErNearby}
+            """, s.BindPeriod, r =>
+        {
+            appointmentLinks++;
+            c.LinkErToAppointment(HisConnection.I(r, "AssessmentNo"), HisConnection.I(r, "AppointmentNo"));
+        });
+        pack.Note($"ER links by AppointmentID: {appointmentLinks}.");
+
+        int erByAppointment = 0, erByInvoice = 0, erStandalone = 0, erRefused = 0, erSharing = 0;
+        void WriteEr(Microsoft.Data.SqlClient.SqlDataReader r)
         {
             var mrn = c.Mrn(HisConnection.I(r, "PatientID"));
             if (mrn.Length == 0) return;
             var assessment = HisConnection.I(r, "AssessmentNo");
-            var byAppointment = HisConnection.Ni(r, "LinkedAppointment") is > 0 ? HisConnection.Ni(r, "LinkedAppointment") : null;
-            var byInvoice = HisConnection.Ni(r, "InvoiceAppointment") is > 0 ? HisConnection.Ni(r, "InvoiceAppointment") : null;
+            var byAppointment = HisConnection.Ni(r, "LinkedAppointment");
+            int? byInvoice = invoiceLinks.TryGetValue(assessment, out var invoiced) ? invoiced.Appointment : null;
             var appointment = byAppointment ?? byInvoice;
             if (appointment is { } linked) c.LinkErToAppointment(assessment, linked);
             var no = c.ErEncounter(assessment);
@@ -246,7 +233,7 @@ public static class FactsExtract
             var day = HisConnection.Dt(r, "AssessmentDate") ?? s.From!.Value;
             var start = HisConnection.Dt(r, "SignInTime") ?? Maps.Combine(day, HisConnection.S(r, "ArrivalTime"));
             var end = HisConnection.Dt(r, "SignOutTime") ?? HisConnection.Dt(r, "DischargeTime") ?? start;
-            var company = HisConnection.Ni(r, "AppointmentCompany") ?? HisConnection.Ni(r, "InvoiceCompany");
+            var company = HisConnection.Ni(r, "AppointmentCompany") ?? invoiced.Company;
             var drg = appointment is { } a ? DrgExtract.Lookup(opDrg, a) : "";
             csv.Write(
                 mrn,
@@ -254,6 +241,46 @@ public static class FactsExtract
                 c.PayerOrSelf(company), drg, "", c.ProviderOrEmpty(HisConnection.Ni(r, "DoctorID")),
                 no, "ER", Maps.DateTime(start), Maps.DateTime(end), "0", "false", "ROUTINE", $"{assessment}",
                 HisConnection.S(r, "Status"), HisConnection.S(r, "ERStatus"), Flag(r, "IsVisitClosed"), When(HisConnection.Dt(r, "ArrivedOn")));
+        }
+        await db.QueryAsync($"""
+            SELECT {ErColumns}
+            FROM dbo.INP_ERAssessment e WITH (NOLOCK)
+            {ErAppointment}
+            WHERE e.SetupID=@SetupId AND e.ProjectID=@ProjectId AND e.PatientID > 0
+              AND e.AssessmentDate >= @From AND e.AssessmentDate < @To
+            UNION ALL
+            SELECT {ErColumns}
+            FROM dbo.HIS_InvoiceMain m WITH (NOLOCK)
+            INNER JOIN dbo.INP_ERAssessment e WITH (NOLOCK)
+              ON e.SetupID=m.SetupID AND e.ProjectID=m.ProjectID AND e.InvoiceNo=m.InvoiceNo
+            {ErAppointment}
+            WHERE m.SetupID=@SetupId AND m.ProjectID=@ProjectId AND e.InvoiceNo > 0
+              AND m.InvoiceDate >= @From AND m.InvoiceDate < @To AND m.CancelledOn IS NULL
+              AND (e.AssessmentDate < @From OR e.AssessmentDate >= @To)
+            """, s.BindPeriod, WriteEr);
+
+        // An assessment dated outside this month still belongs here when its appointment is in this pack.
+        var inPack = new HashSet<int>();
+        await db.QueryAsync("""
+            SELECT a.AppointmentNo FROM dbo.HIS_Appointment a WITH (NOLOCK)
+            WHERE a.SetupID=@SetupId AND a.ProjectID=@ProjectId AND a.PatientID > 0
+              AND a.AppointmentDate >= @From AND a.AppointmentDate < @To
+            UNION
+            SELECT m.AppointmentNo FROM dbo.HIS_InvoiceMain m WITH (NOLOCK)
+            WHERE m.SetupID=@SetupId AND m.ProjectID=@ProjectId AND m.AppointmentNo > 0
+              AND m.InvoiceDate >= @From AND m.InvoiceDate < @To AND m.CancelledOn IS NULL
+            """, s.BindPeriod, r => inPack.Add(HisConnection.I(r, "AppointmentNo")));
+        await db.QueryAsync($"""
+            SELECT {ErColumns}
+            FROM dbo.INP_ERAssessment e WITH (NOLOCK)
+            {ErAppointment}
+            WHERE e.SetupID=@SetupId AND e.ProjectID=@ProjectId AND e.PatientID > 0 AND {ErNearby}
+              AND (e.AssessmentDate < @From OR e.AssessmentDate >= @To)
+            """, s.BindPeriod, r =>
+        {
+            var assessment = HisConnection.I(r, "AssessmentNo");
+            var linked = HisConnection.Ni(r, "LinkedAppointment") ?? (invoiceLinks.TryGetValue(assessment, out var invoiced) ? invoiced.Appointment : null);
+            if (linked is { } appointment && inPack.Contains(appointment)) WriteEr(r);
         });
         pack.Note($"ER encounters: {erByAppointment} linked by AppointmentID, {erByInvoice} linked by InvoiceNo, {erStandalone} with no appointment. {erRefused} AppointmentID values had no appointment for the same patient; {erSharing} assessments shared an appointment with another.");
 
@@ -429,6 +456,7 @@ public static class FactsExtract
             "refundAmount", "patientShare", "companyShare", "patientPaid", "taxAmount", "headerRefundAmount", "headerAmountPaid",
             "status", "approvalStatus", "approvedAt", "cancelledAt", "reasonId", "sourceSystem", "sourceRef");
         int lines = 0, cancelled = 0, noEncounter = 0;
+        var written = new HashSet<(int RefundNo, int Line)>();
         await db.QueryAsync("""
             SELECT r.RefundNo, r.RefundType, r.RefundDate, r.PatientID, r.RefundAmount AS HeaderRefundAmount, r.AmountPaid,
                    r.OriginalTransactionType, r.OriginalTransactionRef, r.OriginalTransactionDate, r.ReasonID,
@@ -441,10 +469,9 @@ public static class FactsExtract
             LEFT JOIN dbo.HIS_InvoiceMain m WITH (NOLOCK)
               ON m.SetupID=r.SetupID AND m.ProjectID=r.ProjectID
              AND m.TransactionType=r.OriginalTransactionType AND m.InvoiceNo=r.OriginalTransactionRef
-            OUTER APPLY (
-              SELECT TOP 1 e.AssessmentNo FROM dbo.INP_ERAssessment e WITH (NOLOCK)
-              WHERE e.SetupID=r.SetupID AND e.ProjectID=r.ProjectID AND e.InvoiceNo=r.OriginalTransactionRef
-                AND e.InvoiceNo > 0 AND ISNULL(m.AppointmentNo,0)=0 AND ISNULL(m.AdmissionNo,0)=0) er
+            LEFT JOIN dbo.INP_ERAssessment er WITH (NOLOCK)
+              ON er.SetupID=m.SetupID AND er.ProjectID=m.ProjectID AND er.InvoiceNo=m.InvoiceNo
+             AND ISNULL(m.AppointmentNo,0)=0 AND ISNULL(m.AdmissionNo,0)=0
             WHERE r.SetupID=@SetupId AND r.ProjectID=@ProjectId
               AND r.RefundDate >= @From AND r.RefundDate < @To
             """, s.BindPeriod, r =>
@@ -452,6 +479,7 @@ public static class FactsExtract
             var enc = EncounterOf(c, HisConnection.Ni(r, "AdmissionNo"), HisConnection.Ni(r, "AppointmentNo"), HisConnection.Ni(r, "AssessmentNo")) ?? "";
             var refundNo = HisConnection.I(r, "RefundNo");
             var line = HisConnection.I(r, "InvoiceLineItemNo");
+            if (!written.Add((refundNo, line))) return;
             var procId = HisConnection.S(r, "ProcedureID");
             static string Money(double v) => Maps.Money(Maps.Round4(v));
             var cancelledOn = HisConnection.Dt(r, "CancelledOn");
