@@ -12,6 +12,8 @@ public class CalculationRun
     public Guid CostingVersionId { get; set; }
     public string Status { get; set; } = "DRAFT";
     public string RunType { get; set; } = "ACTUAL";
+    /// <summary>ENGINE, or COSTING_MODEL when Direct and Indirect costing produced the results.</summary>
+    public string CostingMethod { get; set; } = "ENGINE";
     public DateTime? StartedAt { get; set; }
     public DateTime? FinishedAt { get; set; }
     public int? DurationMs { get; set; }
@@ -160,6 +162,26 @@ public class EncounterCost
     public int ServiceCount { get; set; }
     /// <summary>FR-5.9: weighted activity units for administration overhead.</summary>
     [Precise] public decimal WeightedActivityUnits { get; set; }
+}
+
+/// <summary>A costing-model run's totals by reporting dimension, prepared once so screens read them instead of re-adding the period.</summary>
+public class RunDimensionCost
+{
+    public Guid Id { get; set; }
+    public Guid RunId { get; set; }
+    public string Dimension { get; set; } = "";
+    /// <summary>The dimension member's id or code; empty is "Not assigned".</summary>
+    public string Key { get; set; } = "";
+    public string Label { get; set; } = "";
+    public int Encounters { get; set; }
+    public decimal Revenue { get; set; }
+    public decimal DirectCost { get; set; }
+    public decimal IndirectCost { get; set; }
+    public decimal OverheadCost { get; set; }
+    public decimal TotalCost { get; set; }
+    public decimal ContributionMargin { get; set; }
+    public decimal OperatingMargin { get; set; }
+    [Precise] public decimal MarginPct { get; set; }
 }
 
 public class PackageCost

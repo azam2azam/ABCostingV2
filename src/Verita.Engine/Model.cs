@@ -160,9 +160,10 @@ public sealed class StageOutput
     public List<ResidualBucket> Residuals { get; } = [];
     public List<Reconciliation> Reconciliations { get; } = [];
     public List<ReconciliationLine> ReconciliationLines { get; } = [];
+    public List<RunDimensionCost> DimensionCosts { get; } = [];
 
     public int RowCount =>
-        Issues.Count + PoolBalances.Count + UnitCosts.Count + CcBalances.Count + Allocations.Count + ActivityCosts.Count +
+        DimensionCosts.Count + Issues.Count + PoolBalances.Count + UnitCosts.Count + CcBalances.Count + Allocations.Count + ActivityCosts.Count +
         ProcedureCosts.Count + EncounterCosts.Count + Components.Count + PackageCosts.Count + DrgSummaries.Count +
         Variances.Count + VarianceComponents.Count + Residuals.Count + Reconciliations.Count + ReconciliationLines.Count;
 }

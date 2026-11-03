@@ -133,7 +133,9 @@ table.data th {
   color: var(--text-3); background: var(--surface-2); border-bottom: 1px solid var(--border);
   padding: 10px 12px; white-space: nowrap; position: sticky; top: 0; z-index: 1;
 }
-table.data th button { all: unset; cursor: pointer; }
+table.data th.num { text-align: right; }
+table.data th button { all: unset; cursor: pointer; display: inline; }
+table.data th.num button { width: 100%; text-align: right; }
 table.data th button:hover { color: var(--text); }
 table.data th button:focus-visible { outline: 2px solid var(--focus); }
 table.data td { border-bottom: 1px solid var(--border); padding: 9px 12px; vertical-align: top; }
@@ -152,6 +154,8 @@ table.data tr.total td { font-weight: 650; background: var(--surface-2); border-
 .chip.bad { background: var(--bad-soft); color: var(--bad); border-color: transparent; }
 .chip.warn { background: var(--warn-soft); color: var(--warn); border-color: transparent; }
 .chip.info { background: var(--accent-soft); color: var(--accent-strong); border-color: transparent; }
+.chip.live::before { animation: chip-pulse 1s ease-in-out infinite; }
+@keyframes chip-pulse { 50% { opacity: .15; transform: scale(1.35); } }
 .chip.nature-DIRECT { color: var(--nature-direct); }
 .chip.nature-INDIRECT { color: var(--nature-indirect); }
 .chip.nature-OVERHEAD { color: var(--nature-overhead); }
@@ -204,3 +208,48 @@ dl.kv dd { margin: 0; }
 details summary { cursor: pointer; }
 
 @media (prefers-reduced-motion: reduce) { * { transition: none !important; animation: none !important; } }
+
+@media print {
+  @page { size: A4 portrait; margin: 8mm; }
+  html, body {
+    background: #fff !important;
+    color: #111;
+    font-size: 8px;
+    line-height: 1.25;
+    min-height: 0;
+  }
+  a { color: inherit; text-decoration: none; }
+  h1 { font-size: 13px; margin: 0 0 2px; }
+  h2 { font-size: 10px; margin: 0 0 6px; }
+  h3 { font-size: 9px; margin: 0 0 4px; }
+  .card {
+    background: none; border: 0; box-shadow: none; backdrop-filter: none;
+    padding: 0; margin: 0 0 8px; border-radius: 0;
+  }
+  .grid { gap: 6px; }
+  .grid.tiles { grid-template-columns: repeat(4, 1fr); }
+  .row { gap: 4px; }
+  .table-wrap {
+    overflow: visible; border: 1px solid #ccc; border-radius: 0;
+    background: #fff; box-shadow: none;
+  }
+  table.data { font-size: 7.5px; width: 100%; table-layout: auto; }
+  table.data th {
+    font-size: 7px; padding: 2px 4px; background: #f0f0f0; color: #333;
+    position: static; letter-spacing: 0;
+  }
+  table.data td { padding: 2px 4px; border-bottom: 1px solid #ddd; }
+  table.data tbody tr:hover td { background: none; }
+  table.data thead { display: table-header-group; }
+  table.data tr { break-inside: avoid; }
+  .expr { font-size: 6.5px; margin-top: 1px; }
+  .chip { font-size: 7px; padding: 0 5px; }
+  .muted, .faint { color: #555; }
+  .btn, .more, .notice { display: none !important; }
+  .type-tiles { gap: 3px; margin-bottom: 6px; }
+  .type-tile { font-size: 7px !important; padding: 2px 6px !important; box-shadow: none !important; }
+  .page-head { margin-bottom: 8px; }
+  .page-head h1 { font-size: 13px !important; }
+  .tile { padding: 6px 8px !important; box-shadow: none !important; backdrop-filter: none !important; }
+  .tile:hover { transform: none !important; }
+}

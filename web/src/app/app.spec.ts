@@ -11,6 +11,9 @@ describe('decimal formatting', () => {
   it('formats money and compact money', () => {
     expect(formatMoney('1180.9175')).toBe('SAR 1,180.92');
     expect(formatMoney('1180917.5', { compact: true })).toBe('SAR 1.18M');
+    expect(formatMoney('-119')).toBe('(SAR 119.00)');
+    expect(formatMoney('-1180917.5', { compact: true })).toBe('(SAR 1.18M)');
+    expect(formatMoney('-0.001')).toBe('SAR 0.00');
   });
   it('compares decimal strings without floats', () => {
     expect(compareDec('10.5', '9.99')).toBeGreaterThan(0);

@@ -31,8 +31,11 @@ public sealed partial class ReadQueries
         {
             case "cost-statement":
             {
-                var recon = await ReconciliationAsync(s, ct);
                 var dash = await DashboardAsync(s, p, ct);
+                if (s.Run.CostingMethod == Verita.Engine.CostingModelPipeline.Method)
+                    return new ReportDto(def.Key, def.Title, def.Audience, $"Costed by costing version {s.Version.Code}: Direct and Indirect costing, with no ledger to reconcile to.",
+                        new { ByNaturalClass = Array.Empty<object>(), ByCostCentre = Array.Empty<object>(), Lines = Array.Empty<object>(), costNature = dash.CostNature });
+                var recon = await ReconciliationAsync(s, ct);
                 return new ReportDto(def.Key, def.Title, def.Audience, recon.Narrative, new { recon.ByNaturalClass, recon.ByCostCentre, recon.Lines, costNature = dash.CostNature });
             }
             case "service-line":

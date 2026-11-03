@@ -3,6 +3,7 @@ using Microsoft.EntityFrameworkCore;
 using Verita.Application;
 using Verita.Domain;
 using Verita.Domain.Entities;
+using Verita.Engine;
 using Verita.Infrastructure.Data;
 
 namespace Verita.Infrastructure.Queries;
@@ -27,19 +28,28 @@ public sealed partial class ReadQueries(VeritaDbContext db, IAuditWriter audit)
 
     // ═══ Context, runs ═══════════════════════════════════════════════════════════════
 
-    public sealed record HospitalDto(Guid Id, string Code, string Name, string City, string Currency, int BedCount);
-    public sealed record PeriodDto(Guid Id, string Code, DateOnly StartDate, DateOnly EndDate, int Days, string Status);
+    public sealed record HospitalDto(Guid Id, string Code, string Name, string City, string Currency, int BedCount, string? HisSetupId, int? HisProjectId, bool HasDrgs, bool UsesCostingModel);
+    public sealed record PeriodDto(Guid Id, string Code, DateOnly StartDate, DateOnly EndDate, int Days, string Status, string? Hospital);
     public sealed record RunListItem(Guid Id, string Code, string Name, string Hospital, string HospitalName, string Period, string CostingVersion,
         string Status, string RunType, bool Forced, DateTime? StartedAt, DateTime? FinishedAt, int? DurationMs, string TriggeredBy,
-        string? ApprovedBy, DateTime? PublishedAt, string? ErrorMessage, JsonElement? Metrics);
+        string? ApprovedBy, DateTime? PublishedAt, string? ErrorMessage, JsonElement? Metrics, string? CurrentStep, string CostingVersionStatus);
     public sealed record ContextDto(HospitalDto[] Hospitals, PeriodDto[] Periods, RunListItem[] Runs);
 
     public async Task<ContextDto> ContextAsync(Principal p, CancellationToken ct)
     {
+        var withDrg = (await db.Encounters.AsNoTracking().Where(e => e.DrgId != null).Select(e => e.HospitalId).Distinct().ToListAsync(ct)).ToHashSet();
+        var withModel = (await db.ProcedureTypeCostings.AsNoTracking().Select(x => x.HospitalId).Distinct().ToListAsync(ct))
+            .Concat(await db.ProcedureMargins.AsNoTracking().Select(x => x.HospitalId).Distinct().ToListAsync(ct))
+            .Concat(await db.EncounterOverheads.AsNoTracking().Select(x => x.HospitalId).Distinct().ToListAsync(ct))
+            .ToHashSet();
         var hospitals = (await db.Hospitals.AsNoTracking().OrderBy(h => h.Code).ToListAsync(ct)).Where(h => p.HasHospital(h.Code))
-            .Select(h => new HospitalDto(h.Id, h.Code, h.Name, h.City, h.Currency, h.BedCount)).ToArray();
-        var periods = await db.Periods.AsNoTracking().OrderBy(x => x.StartDate)
-            .Select(x => new PeriodDto(x.Id, x.Code, x.StartDate, x.EndDate, x.Days, x.Status)).ToArrayAsync(ct);
+            .Select(h => new HospitalDto(h.Id, h.Code, h.Name, h.City, h.Currency, h.BedCount, h.HisSetupId, h.HisProjectId, withDrg.Contains(h.Id), withModel.Contains(h.Id))).ToArray();
+        var periodRows = await (from x in db.Periods.AsNoTracking()
+                                join h in db.Hospitals.AsNoTracking() on x.HospitalId equals h.Id into hh
+                                from h in hh.DefaultIfEmpty()
+                                orderby x.StartDate, x.Code
+                                select new { x, Hospital = h.Code }).ToListAsync(ct);
+        var periods = periodRows.Select(x => new PeriodDto(x.x.Id, x.x.Code, x.x.StartDate, x.x.EndDate, x.x.Days, x.x.Status, x.Hospital)).ToArray();
         return new ContextDto(hospitals, periods, await RunsAsync(p, ct));
     }
 
@@ -51,10 +61,17 @@ public sealed partial class ReadQueries(VeritaDbContext db, IAuditWriter audit)
                           join v in db.CostingVersions on r.CostingVersionId equals v.Id
                           where r.RunType != "SIMULATION"
                           orderby pe.StartDate descending, h.Code
-                          select new { r, h.Code, HName = h.Name, Period = pe.Code, Version = v.Code }).ToListAsync(ct);
-        return rows.Where(x => p.HasHospital(x.Code)).Select(x => new RunListItem(x.r.Id, x.r.Code, x.r.Name, x.Code, x.HName, x.Period, x.Version,
-            x.r.Status, x.r.RunType, x.r.Forced, x.r.StartedAt, x.r.FinishedAt, x.r.DurationMs, x.r.TriggeredBy, x.r.ApprovedBy, x.r.PublishedAt,
-            x.r.ErrorMessage, x.r.MetricsJson is null ? null : JsonDocument.Parse(x.r.MetricsJson).RootElement)).ToArray();
+                          select new { r, h.Code, HName = h.Name, Period = pe.Code, Version = v.Code, VersionStatus = v.Status }).ToListAsync(ct);
+        var running = await db.RunSteps.AsNoTracking().Where(s => s.Status == "RUNNING")
+            .Select(s => new { s.RunId, s.StepCode, s.StepName }).ToListAsync(ct);
+        var stepByRun = running.GroupBy(s => s.RunId).ToDictionary(g => g.Key, g => g.First());
+        return rows.Where(x => p.HasHospital(x.Code)).Select(x =>
+        {
+            var step = stepByRun.GetValueOrDefault(x.r.Id);
+            return new RunListItem(x.r.Id, x.r.Code, x.r.Name, x.Code, x.HName, x.Period, x.Version,
+                x.r.Status, x.r.RunType, x.r.Forced, x.r.StartedAt, x.r.FinishedAt, x.r.DurationMs, x.r.TriggeredBy, x.r.ApprovedBy, x.r.PublishedAt,
+                x.r.ErrorMessage, x.r.MetricsJson is null ? null : JsonDocument.Parse(x.r.MetricsJson).RootElement, step?.StepCode, x.VersionStatus);
+        }).ToArray();
     }
 
     public sealed record StepDto(int StepNo, string StepCode, string StepName, string Status, int? DurationMs, int RowsWritten,
@@ -67,7 +84,7 @@ public sealed partial class ReadQueries(VeritaDbContext db, IAuditWriter audit)
     {
         var item = (await RunsAsync(p, ct)).FirstOrDefault(r => r.Id == s.Run.Id)
                    ?? new RunListItem(s.Run.Id, s.Run.Code, s.Run.Name, s.Hospital.Code, s.Hospital.Name, s.Period.Code, s.Version.Code, s.Run.Status,
-                       s.Run.RunType, s.Run.Forced, s.Run.StartedAt, s.Run.FinishedAt, s.Run.DurationMs, s.Run.TriggeredBy, s.Run.ApprovedBy, s.Run.PublishedAt, s.Run.ErrorMessage, null);
+                       s.Run.RunType, s.Run.Forced, s.Run.StartedAt, s.Run.FinishedAt, s.Run.DurationMs, s.Run.TriggeredBy, s.Run.ApprovedBy, s.Run.PublishedAt, s.Run.ErrorMessage, null, null, s.Version.Status);
         var steps = await db.RunSteps.AsNoTracking().Where(x => x.RunId == s.Run.Id).OrderBy(x => x.StepNo).ToListAsync(ct);
         var defs = Catalogue.RunSteps.ToDictionary(d => d.Code);
         var dq = await db.DataQualityIssues.AsNoTracking().Where(i => i.RunId == s.Run.Id).GroupBy(i => i.Severity).Select(g => new { g.Key, N = g.Count() }).ToListAsync(ct);
@@ -93,79 +110,39 @@ public sealed partial class ReadQueries(VeritaDbContext db, IAuditWriter audit)
 
     public sealed record Tile(string Key, string Label, decimal Value, string Unit, string Direction, string? Link, string? Note);
     public sealed record Bar(string Key, string Label, decimal Value, decimal Share, string? Link, string? Note);
-    public sealed record DashboardDto(Tile[] Headline, Bar[] ServiceLines, Bar[] Procedures, Bar[] Variances, Bar[] Payers,
-        Bar[] SupplyCost, Bar[] Waste, Bar[] Utilisation, Bar[] Residuals, Bar[] CostNature, string? Narrative);
+    public sealed record DashboardDto(Tile[] Headline, Bar[] CostNature);
 
     public async Task<DashboardDto> DashboardAsync(ScopedRun s, Principal p, CancellationToken ct)
     {
         var rid = s.Run.Id;
-        var rec = await db.Reconciliations.AsNoTracking().FirstOrDefaultAsync(r => r.RunId == rid, ct);
-        var enc = await EncounterFacts(rid, ct);
-        var cost = enc.Sum(e => e.Total);
-        var revenue = enc.Sum(e => e.Revenue);
-        var direct = enc.Sum(e => e.Direct);
-        var indirect = enc.Sum(e => e.Indirect);
-        var overhead = enc.Sum(e => e.Overhead);
-        var residuals = await db.ResidualBuckets.AsNoTracking().Where(b => b.RunId == rid).ToListAsync(ct);
-        var idle = residuals.Where(b => b.Bucket == "UNUSED_CAPACITY").Sum(b => b.Amount);
-        var canRevenue = p.Can("revenue.view");
-
+        decimal direct, indirect, overhead, revenue;
+        int encounters;
+        if (s.Run.CostingMethod == CostingModelPipeline.Method)
+        {
+            var whole = await db.RunDimensionCosts.AsNoTracking().FirstOrDefaultAsync(x => x.RunId == rid && x.Dimension == "hospital", ct);
+            (direct, indirect, overhead, revenue, encounters) = (whole?.DirectCost ?? 0m, whole?.IndirectCost ?? 0m, whole?.OverheadCost ?? 0m, whole?.Revenue ?? 0m, whole?.Encounters ?? 0);
+        }
+        else
+        {
+            var whole = await db.EncounterCosts.AsNoTracking().Where(x => x.RunId == rid).GroupBy(_ => 1)
+                .Select(g => new { D = g.Sum(x => x.DirectCost), I = g.Sum(x => x.IndirectCost), O = g.Sum(x => x.OverheadCost), R = g.Sum(x => x.Revenue), N = g.Count() })
+                .FirstOrDefaultAsync(ct);
+            (direct, indirect, overhead, revenue, encounters) = (whole?.D ?? 0m, whole?.I ?? 0m, whole?.O ?? 0m, whole?.R ?? 0m, whole?.N ?? 0);
+        }
+        var cost = Money.R4(direct + indirect + overhead);
         var tiles = new List<Tile>
         {
-            new("gl", "General ledger", rec?.GlTotal ?? 0m, "SAR", "neutral", "reconciliation", "Operating expenditure posted to the period"),
-            new("patientCost", "Cost attributed to patients", cost, "SAR", "lower-better", "patient-costing", $"{enc.Count:N0} encounters"),
-            new("attribution", "Attribution", rec?.AttributionPct ?? 0m, "%", "neutral", "reconciliation", "Share of the ledger that reached a patient — comparable across hospitals"),
-            new("idle", "Cost of unused capacity", idle, "SAR", "lower-better", "capacity", "Paid for, not consumed; never charged to a patient"),
-            new("unexplained", "Unexplained", rec?.Unexplained ?? 0m, "SAR", "lower-better", "reconciliation", rec is null ? null : $"Materiality SAR {rec.Materiality:N2}"),
-            new("perEncounter", "Average cost per encounter", enc.Count == 0 ? 0m : Money.R4(cost / enc.Count), "SAR", "lower-better", "patient-costing", null),
+            new("direct", "Direct cost", direct, "SAR", "lower-better", "direct-costing", "Contracted price × Margin Cost %"),
+            new("indirect", "Indirect cost", indirect, "SAR", "lower-better", "indirect-costing", "Contracted price × Overhead %"),
+            new("overheads", "Overheads", overhead, "SAR", "lower-better", "indirect-costing", "Encounter level overheads"),
         };
-        if (canRevenue)
+        if (p.Can("revenue.view"))
         {
-            tiles.Insert(2, new("revenue", "Net revenue", revenue, "SAR", "higher-better", "profitability", null));
-            tiles.Insert(3, new("operatingMargin", "Operating margin", Money.R4(revenue - cost), "SAR", "higher-better", "profitability", $"{Share(revenue - cost, revenue):N1}% of revenue"));
-            tiles.Insert(4, new("fullCostMargin", "Full-cost margin", Money.R4(revenue - cost - idle), "SAR", "higher-better", "profitability", "Operating margin less idle capacity (FR-5.17)"));
+            tiles.Add(new("revenue", "Revenue", revenue, "SAR", "higher-better", null, $"{encounters:N0} encounters"));
+            tiles.Add(new("margin", "Margin", Money.R4(revenue - cost), "SAR", "higher-better", null, $"{Share(revenue - cost, revenue):N1}% of revenue"));
         }
-
-        var sl = await db.ServiceLines.AsNoTracking().ToDictionaryAsync(x => x.Id, x => x.Name, ct);
-        var bySl = enc.GroupBy(e => e.ServiceLineId).Select(g => (Id: g.Key, Margin: g.Sum(e => e.Revenue - e.Total), Cost: g.Sum(e => e.Total)))
-            .OrderByDescending(x => canRevenue ? x.Margin : x.Cost).ToList();
-        var slMax = bySl.Count == 0 ? 0m : bySl.Max(x => Math.Abs(canRevenue ? x.Margin : x.Cost));
-
-        var procs = await (from pc in db.ProcedureCosts.AsNoTracking()
-                           join pr in db.Procedures on pc.ProcedureId equals pr.Id
-                           where pc.RunId == rid && pc.CostType == "ACTUAL"
-                           orderby pc.TotalCost descending
-                           select new { pr.Id, pr.Name, pc.TotalCost, pc.Volume }).Take(8).ToListAsync(ct);
-        var variances = await db.Variances.AsNoTracking().Where(v => v.RunId == rid).OrderByDescending(v => v.VarianceAmount).Take(6).ToListAsync(ct);
-
-        var payers = await db.Payers.AsNoTracking().ToDictionaryAsync(x => x.Id, x => x.Name, ct);
-        var byPayer = canRevenue
-            ? enc.GroupBy(e => e.PayerId).Select(g => (Id: g.Key, Margin: g.Sum(e => e.Revenue - e.Total), Rev: g.Sum(e => e.Revenue))).OrderByDescending(x => x.Rev).ToList()
-            : [];
-
-        var units = await (from u in db.ResourceUnitCosts.AsNoTracking()
-                           join r in db.Resources on u.ResourceId equals r.Id
-                           where u.RunId == rid
-                           select new { r.Id, r.Name, r.ResourceType, r.IsCapacityDriven, u.CostOfUsedCapacity, u.CostOfUnusedCapacity, u.UtilisationPct, u.AvailableMinutes }).ToListAsync(ct);
-        var supply = units.Where(u => u.ResourceType is "DRUG" or "CONSUMABLE" or "IMPLANT" or "BLOOD").GroupBy(u => u.ResourceType)
-            .Select(g => (Type: g.Key, Used: g.Sum(x => x.CostOfUsedCapacity), Waste: g.Sum(x => x.CostOfUnusedCapacity))).ToList();
-        var utilisation = units.Where(u => u.IsCapacityDriven && u.AvailableMinutes > 0).GroupBy(u => u.ResourceType)
-            .Select(g => (Type: g.Key, Util: Money.R4(g.Sum(x => x.CostOfUsedCapacity) / Math.Max(0.0001m, g.Sum(x => x.CostOfUsedCapacity + x.CostOfUnusedCapacity)) * 100m))).ToList();
-
-        var resTotal = residuals.Sum(r => Math.Abs(r.Amount));
-        return new DashboardDto(
-            tiles.ToArray(),
-            bySl.Take(8).Select(x => new Bar(x.Id?.ToString() ?? "none", x.Id is { } i ? sl.GetValueOrDefault(i, "Unassigned") : "Unassigned",
-                canRevenue ? x.Margin : x.Cost, slMax == 0 ? 0 : Share(Math.Abs(canRevenue ? x.Margin : x.Cost), slMax), "profitability?dimension=serviceLine", null)).ToArray(),
-            procs.Select(x => new Bar(x.Id.ToString(), x.Name, x.TotalCost, procs.Count == 0 ? 0 : Share(x.TotalCost, procs[0].TotalCost), $"procedures/{x.Id}", $"{x.Volume:N0} cases")).ToArray(),
-            variances.Select(v => new Bar(v.Id.ToString(), v.ScopeLabel, v.VarianceAmount, variances.Count == 0 ? 0 : Share(Math.Abs(v.VarianceAmount), Math.Abs(variances[0].VarianceAmount)), $"variance/{v.Id}", v.Direction)).ToArray(),
-            byPayer.Select(x => new Bar(x.Id.ToString(), payers.GetValueOrDefault(x.Id, "?"), x.Margin, Share(x.Rev, byPayer.Max(y => y.Rev)), "profitability?dimension=payer", $"revenue SAR {x.Rev:N0}")).ToArray(),
-            supply.Select(x => new Bar(x.Type, Catalogue.ComponentLabel(x.Type), x.Used, Share(x.Used, supply.Sum(y => y.Used)), "resources", null)).ToArray(),
-            supply.Select(x => new Bar(x.Type, Catalogue.ComponentLabel(x.Type), x.Waste, Share(x.Waste, x.Used + x.Waste), "capacity", "share of purchased value not issued")).ToArray(),
-            utilisation.Select(x => new Bar(x.Type, Catalogue.ComponentLabel(x.Type), x.Util, x.Util, "capacity", "% of practical capacity")).ToArray(),
-            residuals.OrderByDescending(r => Math.Abs(r.Amount)).Select(r => new Bar(r.Bucket, r.Label, r.Amount, Share(Math.Abs(r.Amount), resTotal), "reconciliation", Catalogue.ResidualOwner[r.Bucket])).ToArray(),
-            [new("DIRECT", "Direct", direct, Share(direct, cost), null, null), new("INDIRECT", "Indirect", indirect, Share(indirect, cost), null, null), new("OVERHEAD", "Overhead", overhead, Share(overhead, cost), null, null)],
-            rec?.Narrative);
+        return new DashboardDto(tiles.ToArray(),
+            [new("DIRECT", "Direct cost", direct, Share(direct, cost), "direct-costing", null), new("INDIRECT", "Indirect cost", indirect, Share(indirect, cost), "indirect-costing", null), new("OVERHEAD", "Overheads", overhead, Share(overhead, cost), "indirect-costing", null)]);
     }
 
     // Encounter facts used by dashboards, profitability and reports.

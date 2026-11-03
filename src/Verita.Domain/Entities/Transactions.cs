@@ -38,6 +38,13 @@ public class Encounter
     public Guid? PackageId { get; set; }
     public Guid? ProviderId { get; set; }
     public string EncType { get; set; } = "";
+    /// <summary>The HIS ER assessment this encounter came from, when it is merged under its appointment's number.</summary>
+    public string? SourceAssessmentNo { get; set; }
+    /// <summary>HIS states as stored: appointment, admission or ER assessment status, for reading against invoices.</summary>
+    public int? HisStatus { get; set; }
+    public int? HisErStatus { get; set; }
+    public bool? HisVisitClosed { get; set; }
+    public DateTime? HisArrivedAt { get; set; }
     public DateTime AdmitAt { get; set; }
     public DateTime? DischargeAt { get; set; }
     public int LengthOfStay { get; set; }
@@ -86,6 +93,108 @@ public class RevenueTransaction
     public decimal NetAmount { get; set; }
     public DateTime PostedAt { get; set; }
     public string SourceSystem { get; set; } = "CYCLUS-RCM";
+    public string SourceRef { get; set; } = "";
+    /// <summary>The HIS invoice line's own state, as stored. Not used by any calculation yet.</summary>
+    public int? HisLineStatus { get; set; }
+    public bool? IsPerformed { get; set; }
+    public int? PerformType { get; set; }
+    public bool? IsReturned { get; set; }
+    public bool? IsRefunded { get; set; }
+    public decimal? RefundedAmount { get; set; }
+    /// <summary>The HIS line's money and package fields, as stored. Not used by any calculation.</summary>
+    public decimal? HisUnitPrice { get; set; }
+    public int? HisQuantity { get; set; }
+    public string? DiscountType { get; set; }
+    public decimal? HisDiscountAmount { get; set; }
+    public decimal? WaivedAmount { get; set; }
+    public int? WaiverId { get; set; }
+    public decimal? PatientShare { get; set; }
+    public decimal? CompanyShare { get; set; }
+    public decimal? TaxAmount { get; set; }
+    public decimal? PatientTaxAmount { get; set; }
+    public decimal? CompanyTaxAmount { get; set; }
+    public decimal? OutlierPayment { get; set; }
+    public decimal? ClaimedAmount { get; set; }
+    public decimal? SettledAmount { get; set; }
+    public decimal? RejectedAmount { get; set; }
+    public bool? IsZeroPrice { get; set; }
+    public bool? IsPackageSelected { get; set; }
+    public string? PackageProcedureId { get; set; }
+    public int? PackageSequenceNo { get; set; }
+    public bool? IsPackageInvoice { get; set; }
+    public int? BillType { get; set; }
+    public bool? IsAcceptedWithDrg { get; set; }
+}
+
+/// <summary>
+/// One line of a HIS refund, as HIS holds it: cancelled and unapproved ones included, and not part of
+/// revenue. EncounterId is empty when the refund's encounter is not loaded; HisEncounterNo still says which.
+/// </summary>
+public class RefundTransaction
+{
+    public Guid Id { get; set; }
+    public Guid HospitalId { get; set; }
+    public Guid? EncounterId { get; set; }
+    public string? HisEncounterNo { get; set; }
+    public string? PatientMrn { get; set; }
+    public Guid? ProcedureId { get; set; }
+    public string? HisProcedureId { get; set; }
+    public Guid? PayerId { get; set; }
+    public string RefundNo { get; set; } = "";
+    public int RefundType { get; set; }
+    public DateTime RefundDate { get; set; }
+    public int OriginalTransactionType { get; set; }
+    public string OriginalInvoiceNo { get; set; } = "";
+    public DateTime? OriginalInvoiceDate { get; set; }
+    public int InvoiceLineNo { get; set; }
+    public DateTime? InvoiceCancelledAt { get; set; }
+    public decimal RefundAmount { get; set; }
+    public decimal PatientShare { get; set; }
+    public decimal CompanyShare { get; set; }
+    public decimal PatientPaid { get; set; }
+    public decimal TaxAmount { get; set; }
+    /// <summary>The whole refund's amounts on HIS_RefundMain, repeated on each of its lines.</summary>
+    public decimal HeaderRefundAmount { get; set; }
+    public decimal HeaderAmountPaid { get; set; }
+    public int Status { get; set; }
+    public int? ApprovalStatus { get; set; }
+    public DateTime? ApprovedAt { get; set; }
+    public DateTime? CancelledAt { get; set; }
+    public int? ReasonId { get; set; }
+    public string SourceSystem { get; set; } = "VIDA-HIS";
+    public string SourceRef { get; set; } = "";
+}
+
+/// <summary>
+/// One component of a package billed on a HIS invoice, as HIS holds it. Stored for reference: it is not
+/// a service or revenue line, and no calculation reads it.
+/// </summary>
+public class InvoicePackageItem
+{
+    public Guid Id { get; set; }
+    public Guid HospitalId { get; set; }
+    public Guid? EncounterId { get; set; }
+    public string? HisEncounterNo { get; set; }
+    public Guid? ProcedureId { get; set; }
+    public string? HisProcedureId { get; set; }
+    public string? PackageProcedureId { get; set; }
+    public int? PackageLineItemNo { get; set; }
+    public int? PackageSequence { get; set; }
+    public int TransactionType { get; set; }
+    public string InvoiceNo { get; set; } = "";
+    public int LineItemNo { get; set; }
+    public DateTime InvoiceDate { get; set; }
+    public decimal Price { get; set; }
+    public decimal DiscountedCharge { get; set; }
+    public decimal PatientShare { get; set; }
+    public decimal PatientPaid { get; set; }
+    public decimal CompanyShare { get; set; }
+    public decimal CompanyPaid { get; set; }
+    public string? ChildInvoiceNo { get; set; }
+    public int? ChildInvoiceLineItemNo { get; set; }
+    public bool? IsCompleted { get; set; }
+    public bool? IsRefunded { get; set; }
+    public string SourceSystem { get; set; } = "VIDA-HIS";
     public string SourceRef { get; set; } = "";
 }
 

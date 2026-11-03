@@ -26,6 +26,8 @@ public static class DependencyInjection
         services.AddScoped<GovernanceService>();
         services.AddScoped<ReadQueries>();
         services.AddScoped<DataHub.DataHubService>();
+        services.AddScoped<DataHub.HisImportService>();
+        services.AddScoped<CostingSeed.RecipeSuggestionService>();
         return services;
     }
 }

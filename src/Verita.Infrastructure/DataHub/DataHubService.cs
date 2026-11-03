@@ -5,6 +5,7 @@ using System.Text.Json;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.Data.SqlClient;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Logging;
 using Verita.Application;
 using Verita.Domain;
 using Verita.Domain.Entities;
@@ -12,7 +13,7 @@ using Verita.Infrastructure.Data;
 
 namespace Verita.Infrastructure.DataHub;
 
-public sealed record ColumnSpec(string Name, string Kind, bool Required, bool Key, string[]? Options, string? RefEntity, string? Description);
+public sealed record ColumnSpec(string Name, string Kind, bool Required, bool Key, string[]? Options, string? RefEntity, string? Description, string? Label = null);
 public sealed record EntityDescription(string Name, string Group, string Description, bool Versioned, string WritePermission, bool IsTransaction,
     ColumnSpec[] Columns, string[] KeyColumns);
 public sealed record RowError(int Row, string? Key, string[] Errors, Dictionary<string, string> Values);
@@ -27,7 +28,7 @@ public sealed record ImportBatchDto(Guid Id, string Entity, string SourceSystem,
 /// reason — never the whole file. Effective-dated rows (rates, capacity, mappings, prices) are never
 /// edited in place: a change is a new version and the previous one is closed the day before.
 /// </summary>
-public sealed class DataHubService(IDbContextFactory<VeritaDbContext> factory, IAuditWriter audit)
+public sealed class DataHubService(IDbContextFactory<VeritaDbContext> factory, IAuditWriter audit, ILogger<DataHubService> log)
 {
     private static readonly string[] AlwaysRequired = ["Code", "Name", "Mrn", "EncounterNo", "SourceRef", "Email"];
     private static readonly JsonSerializerOptions Json = new() { PropertyNamingPolicy = JsonNamingPolicy.CamelCase };
@@ -68,8 +69,18 @@ public sealed class DataHubService(IDbContextFactory<VeritaDbContext> factory, I
             var options = Catalogue.ColumnDomains.TryGetValue($"{spec.Type.Name}.{p.Name}", out var o) ? o : null;
             var required = spec.Key.Contains(p.Name) || AlwaysRequired.Contains(p.Name) ||
                            (!nullable && !hasDefault && (kind is "decimal" or "date" or "datetime" or "int" || options is not null));
-            cols.Add(new(Camel(p.Name), kind, required, spec.Key.Contains(p.Name), options, null,
-                hasDefault && !required ? $"Defaults to {Convert.ToString(value, CultureInfo.InvariantCulture)}" : null));
+            var camel = Camel(p.Name);
+            var label = p.Name switch
+            {
+                "HisSetupId" => "HIS SetupId",
+                "HisProjectId" => "HIS ProjectId",
+                _ => camel,
+            };
+            cols.Add(new(camel, kind, required, spec.Key.Contains(p.Name), options, null,
+                p.Name == "HisSetupId" ? "HISGENX SetupID for this hospital (same tenant can map to more than one VERITA hospital)"
+                    : p.Name == "HisProjectId" ? "HISGENX ProjectID (branch)"
+                    : hasDefault && !required ? $"Defaults to {Convert.ToString(value, CultureInfo.InvariantCulture)}" : null,
+                label));
         }
         var keyCols = spec.Key.Select(k => spec.Refs.FirstOrDefault(r => r.FkProperty == k)?.Column ?? (k == "DefinitionId" ? "procedureCode+costingVersionCode" : Camel(k))).ToArray();
         return new EntityDescription(spec.Name, spec.Group, spec.Description, spec.Versioned, spec.WritePermission, spec.IsTransaction, cols.ToArray(), keyCols);
@@ -117,25 +128,115 @@ public sealed class DataHubService(IDbContextFactory<VeritaDbContext> factory, I
 
     private static async Task<Dictionary<string, RefTarget>> CodesOf<T>(VeritaDbContext db, string key, Dictionary<Guid, string> hospitals, CancellationToken ct) where T : class
     {
-        var hasHospital = typeof(T).GetProperty("HospitalId") is not null;
-        var rows = hasHospital
+        var hospitalProp = typeof(T).GetProperty("HospitalId");
+        // A shared row (a Period open to every hospital) has no HospitalId.
+        var rows = hospitalProp?.PropertyType == typeof(Guid?)
+            ? (await db.Set<T>().AsNoTracking().Select(e => new { Id = EF.Property<Guid>(e, "Id"), K = EF.Property<string>(e, key), H = EF.Property<Guid?>(e, "HospitalId") }).ToListAsync(ct))
+                .Select(x => new { x.Id, x.K, H = x.H ?? Guid.Empty }).ToList()
+            : hospitalProp is not null
             ? await db.Set<T>().AsNoTracking().Select(e => new { Id = EF.Property<Guid>(e, "Id"), K = EF.Property<string>(e, key), H = EF.Property<Guid>(e, "HospitalId") }).ToListAsync(ct)
             : (await db.Set<T>().AsNoTracking().Select(e => new { Id = EF.Property<Guid>(e, "Id"), K = EF.Property<string>(e, key) }).ToListAsync(ct))
                 .Select(x => new { x.Id, x.K, H = Guid.Empty }).ToList();
         var dict = new Dictionary<string, RefTarget>(StringComparer.OrdinalIgnoreCase);
-        foreach (var r in rows) dict.TryAdd(r.K, new RefTarget(r.Id, r.H == Guid.Empty ? null : hospitals.GetValueOrDefault(r.H)));
+        foreach (var r in rows)
+        {
+            var hc = r.H == Guid.Empty ? null : hospitals.GetValueOrDefault(r.H);
+            var target = new RefTarget(r.Id, hc);
+            dict.TryAdd(r.K, target);
+            if (string.IsNullOrEmpty(hc) || string.IsNullOrEmpty(r.K)) continue;
+            dict.TryAdd($"{hc}|{r.K}", target);
+            var local = HisImportPack.LocalOrgCode(r.K);
+            dict.TryAdd($"{hc}|{local}", target);
+            if (!r.K.StartsWith(hc + ".", StringComparison.OrdinalIgnoreCase))
+                dict.TryAdd($"{hc}.{r.K}", target);
+        }
+        // Encounter numbers, MRNs and costing version codes repeat across hospitals, so a bare one only resolves within a hospital.
+        if (typeof(T) == typeof(Encounter) || typeof(T) == typeof(Patient) || typeof(T) == typeof(CostingVersion))
+            foreach (var repeated in rows.GroupBy(r => r.K, StringComparer.OrdinalIgnoreCase).Where(g => g.Count() > 1))
+                dict.Remove(repeated.Key);
         return dict;
+    }
+
+    /// <summary>Encounters already loaded under an ER assessment's own number, which this file now merges into an appointment.</summary>
+    private static async Task<Dictionary<(Guid HospitalId, string No), (Guid Id, bool Costed)>> ReplacedErEncountersAsync(VeritaDbContext db,
+        IReadOnlyList<Dictionary<string, string>> rows, CancellationToken ct)
+    {
+        var numbers = rows.Select(r => r.GetValueOrDefault("sourceAssessmentNo")?.Trim()).Where(v => !string.IsNullOrEmpty(v)).Distinct().ToList();
+        if (numbers.Count == 0) return [];
+        return (await db.Encounters.AsNoTracking().Where(e => e.EncType == "ER" && (e.SourceAssessmentNo == null || e.SourceAssessmentNo == e.EncounterNo) && numbers.Contains(e.EncounterNo))
+                .Select(e => new { e.HospitalId, e.EncounterNo, e.Id, Costed = db.EncounterCosts.Any(c => c.EncounterId == e.Id) }).ToListAsync(ct))
+            .ToDictionary(e => (e.HospitalId, e.EncounterNo), e => (e.Id, e.Costed));
+    }
+
+    /// <summary>
+    /// Moves what the old ER encounter held onto the merged one, so a re-import finds those rows instead of doubling them, then removes it.
+    /// The appointment's clinic-visit minutes go too: the extract no longer writes them, as the ER rows now measure that visit.
+    /// </summary>
+    private async Task MergeReplacedErEncountersAsync(List<(Guid HospitalId, string AssessmentNo, string Key)> merges,
+        Dictionary<(Guid HospitalId, string No), (Guid Id, bool Costed)> replaced, IReadOnlyDictionary<string, object> existing, CancellationToken ct)
+    {
+        var targets = merges.Where(m => existing.TryGetValue(m.Key, out var e) && e is Encounter).ToList();
+        if (targets.Count == 0) return;
+        await using var db = await Db(ct);
+        await db.Database.ExecuteSqlRawAsync(
+            "DELETE t FROM [ActivityTransaction] t JOIN OPENJSON({0}) WITH (Id uniqueidentifier '$') m ON t.EncounterId = m.Id WHERE t.SourceRef LIKE 'APPT-%'",
+            [JsonSerializer.Serialize(targets.Select(m => ((Encounter)existing[m.Key]).Id).Distinct())], ct);
+        var moves = targets
+            .Where(m => replaced.ContainsKey((m.HospitalId, m.AssessmentNo)))
+            .Select(m => new { FromId = replaced[(m.HospitalId, m.AssessmentNo)].Id, ToId = ((Encounter)existing[m.Key]).Id })
+            .Where(m => m.FromId != m.ToId).DistinctBy(m => m.FromId).ToList();
+        if (moves.Count == 0) return;
+        var json = JsonSerializer.Serialize(moves);
+        foreach (var table in new[] { "ActivityTransaction", "EncounterService", "RevenueTransaction", "RefundTransaction", "InvoicePackageItem" })
+            await db.Database.ExecuteSqlRawAsync(
+                $"UPDATE t SET EncounterId = m.ToId FROM [{table}] t JOIN OPENJSON({{0}}) WITH (FromId uniqueidentifier, ToId uniqueidentifier) m ON t.EncounterId = m.FromId", [json], ct);
+        await db.Database.ExecuteSqlRawAsync(
+            "DELETE e FROM [Encounter] e JOIN OPENJSON({0}) WITH (FromId uniqueidentifier) m ON e.Id = m.FromId", [json], ct);
+    }
+
+    /// <summary>Older packs loaded refunds as negative revenue. Each one saved as a refund line stops counting as revenue.</summary>
+    private async Task RemoveRefundsFromRevenueAsync(List<(Guid HospitalId, string SourceRef, string Key)> refunds, CancellationToken ct)
+    {
+        if (refunds.Count == 0) return;
+        await using var db = await Db(ct);
+        var json = JsonSerializer.Serialize(refunds.Select(r => new { r.HospitalId, r.SourceRef }).Distinct());
+        await db.Database.ExecuteSqlRawAsync(
+            """
+            DELETE t FROM [RevenueTransaction] t
+            JOIN [Encounter] e ON e.Id = t.EncounterId
+            JOIN OPENJSON({0}) WITH (HospitalId uniqueidentifier, SourceRef nvarchar(100)) m ON m.HospitalId = e.HospitalId AND m.SourceRef = t.SourceRef
+            WHERE t.SourceRef LIKE 'REF-%'
+            """, [json], ct);
+    }
+
+    private static IQueryable<T> CandidatesOf<T>(VeritaDbContext db, string keyProperty, IReadOnlyList<Dictionary<string, string>> rows) where T : class
+    {
+        var column = char.ToLowerInvariant(keyProperty[0]) + keyProperty[1..];
+        var wanted = rows.Select(r => r.GetValueOrDefault(column)?.Trim()).Where(v => !string.IsNullOrEmpty(v)).Distinct().ToList();
+        return db.Set<T>().Where(e => wanted.Contains(EF.Property<string>(e, keyProperty)));
+    }
+
+    private static bool TryResolve(Dictionary<string, RefTarget> lookup, string code, string? hospitalCode, out RefTarget target)
+    {
+        if (!string.IsNullOrEmpty(hospitalCode))
+        {
+            if (lookup.TryGetValue($"{hospitalCode}|{code}", out target!)) return true;
+            var local = HisImportPack.LocalOrgCode(code);
+            if (lookup.TryGetValue($"{hospitalCode}|{local}", out target!)) return true;
+            if (lookup.TryGetValue($"{hospitalCode}.{local}", out target!)) return true;
+        }
+        return lookup.TryGetValue(code, out target!);
     }
 
     public async Task<Dictionary<string, string>[]> LookupAsync(EntitySpec spec, Principal p, CancellationToken ct)
     {
         var page = await ListAsync(spec, p, null, 1, 5000, ct);
-        var key = Describe(spec).KeyColumns[0];
+        var key = DisplayKey(Describe(spec));
         return page.Rows.Select(r => new Dictionary<string, string>
         {
             ["code"] = r.GetValueOrDefault(key) ?? "",
             ["name"] = r.GetValueOrDefault("name") ?? r.GetValueOrDefault("fullName") ?? r.GetValueOrDefault(key) ?? "",
-        }).ToArray();
+        }).DistinctBy(r => r["code"], StringComparer.OrdinalIgnoreCase).ToArray(); // Costing version codes repeat across hospitals.
     }
 
     // ── Listing ────────────────────────────────────────────────────────────────
@@ -153,7 +254,14 @@ public sealed class DataHubService(IDbContextFactory<VeritaDbContext> factory, I
         var hospitals = await db.Hospitals.AsNoTracking().ToDictionaryAsync(h => h.Id, h => h.Code, ct);
         var reverse = new Dictionary<string, Dictionary<Guid, string>>();
         foreach (var r in spec.Refs)
-            reverse[r.Column] = (await CodesAsync(db, r.Target, r.TargetKey, hospitals, ct)).ToDictionary(kv => kv.Value.Id, kv => kv.Key);
+            reverse[r.Column] = r.Target == typeof(CostingVersion)
+                ? await db.CostingVersions.AsNoTracking().ToDictionaryAsync(x => x.Id, x => x.Code, ct)
+                : (await CodesAsync(db, r.Target, r.TargetKey, hospitals, ct))
+                .GroupBy(kv => kv.Value.Id)
+                .ToDictionary(g => g.Key, g => g.Select(x => x.Key)
+                    .Where(k => k.IndexOf('|') < 0)
+                    .OrderBy(k => k.Length)
+                    .First());
         Dictionary<Guid, (string Proc, string Ver)>? defs = null;
         if (spec.ExtraColumns?.Contains("procedureCode") == true)
         {
@@ -184,13 +292,17 @@ public sealed class DataHubService(IDbContextFactory<VeritaDbContext> factory, I
         }
         if (!string.IsNullOrWhiteSpace(search))
             rows = rows.Where(r => r.Values.Any(v => v.Contains(search, StringComparison.OrdinalIgnoreCase))).ToList();
-        var key = d.KeyColumns[0].Split('+')[0];
+        var key = DisplayKey(d);
         rows = rows.OrderBy(r => r.GetValueOrDefault(key), StringComparer.OrdinalIgnoreCase).ToList();
         pageSize = Math.Clamp(pageSize, 1, 5000);
         page = Math.Max(1, page);
         return new RowPage(spec.Name, d.Columns.Where(c => c.Kind != "password").Select(c => c.Name).ToArray(),
             rows.Skip((page - 1) * pageSize).Take(pageSize).ToArray(), rows.Count, page, pageSize);
     }
+
+    private static string DisplayKey(EntityDescription d) =>
+        d.KeyColumns.FirstOrDefault(c => c.Equals("code", StringComparison.OrdinalIgnoreCase))
+        ?? d.KeyColumns[0].Split('+')[0];
 
     private static string Format(object? v) => v switch
     {
@@ -218,6 +330,7 @@ public sealed class DataHubService(IDbContextFactory<VeritaDbContext> factory, I
 
     private (SqlConnection Conn, SqlTransaction Tx)? _shared;
     private bool _rehearsal;
+    private string? _importHospital;
 
     /// <summary>A context on the import's shared transaction when one is open, otherwise a fresh one.</summary>
     private async Task<VeritaDbContext> Db(CancellationToken ct)
@@ -233,41 +346,78 @@ public sealed class DataHubService(IDbContextFactory<VeritaDbContext> factory, I
     /// at the end, so later files see the rows of earlier ones — a zip validates as it would load.
     /// Rejected rows never abort the set; only an unexpected failure rolls everything back.
     /// </summary>
-    public async Task<ImportResult[]> ImportSetAsync(IReadOnlyList<(EntitySpec Spec, List<Dictionary<string, string>> Rows)> files, Principal p, bool dryRun, string source, CancellationToken ct)
+    public async Task<ImportResult[]> ImportSetAsync(IReadOnlyList<(EntitySpec Spec, List<Dictionary<string, string>> Rows)> files, Principal p, bool dryRun, string source, CancellationToken ct, string? hospital = null)
     {
+        if (files.FirstOrDefault(f => HisImportPack.CostingModelTables.Contains(f.Spec.Name)).Spec is { } costing)
+            throw AppError.Invalid($"Import does not change costing models, so {costing.Name} cannot be imported.");
         await using var probe = await factory.CreateDbContextAsync(ct);
         await using var conn = new SqlConnection(probe.Database.GetConnectionString());
         await conn.OpenAsync(ct);
         await using var tx = (SqlTransaction)await conn.BeginTransactionAsync(ct);
         _shared = (conn, tx);
         _rehearsal = dryRun;
+        _importHospital = hospital;
         var results = new List<ImportResult>();
         try
         {
             foreach (var (spec, rows) in files)
             {
-                try { var r = await SaveAsync(spec, p, rows, false, source, ct); results.Add(r with { DryRun = dryRun, BatchId = dryRun ? null : r.BatchId }); }
+                try
+                {
+                    var r = await SaveAsync(spec, p, rows, false, source, ct);
+                    results.Add(r with { DryRun = dryRun, BatchId = dryRun ? null : r.BatchId });
+                    log.LogInformation("Import {Mode} {Entity} rows={Rows} created={Created} updated={Updated} unchanged={Unchanged} rejected={Rejected} source={Source}",
+                        dryRun ? "validate" : "commit", spec.Name, r.Rows, r.Created, r.Updated, r.Unchanged, r.Rejected, source);
+                }
                 catch (AppError ex) when (ex.Code is "FORBIDDEN")
                 {
+                    log.LogWarning("Import {Entity} forbidden for {Email}: {Message}", spec.Name, p.Email, ex.Message);
                     results.Add(new ImportResult(spec.Name, null, dryRun, rows.Count, 0, 0, 0, rows.Count, [new RowError(0, null, [ex.Message], [])]));
                 }
             }
             if (dryRun) await tx.RollbackAsync(ct); else await tx.CommitAsync(ct);
+            log.LogInformation("Import set {Mode} files={Files} source={Source} rejected={Rejected}",
+                dryRun ? "validate" : "commit", results.Count, source, results.Sum(x => x.Rejected));
             return results.ToArray();
         }
         finally
         {
             _shared = null;
             _rehearsal = false;
+            _importHospital = null;
         }
     }
+
+    public const int ImportPageRows = 50_000;
 
     public async Task<ImportResult> SaveAsync(EntitySpec spec, Principal p, IReadOnlyList<Dictionary<string, string>> rows, bool dryRun, string source, CancellationToken ct)
     {
         if (!p.Can(spec.WritePermission)) throw AppError.Forbidden(spec.WritePermission);
+        if (rows.Count <= ImportPageRows)
+            return await SavePageAsync(spec, p, rows, dryRun, source, ct);
+
+        ImportResult? acc = null;
+        for (var i = 0; i < rows.Count; i += ImportPageRows)
+        {
+            var n = Math.Min(ImportPageRows, rows.Count - i);
+            IReadOnlyList<Dictionary<string, string>> page = rows is List<Dictionary<string, string>> list
+                ? list.GetRange(i, n)
+                : rows.Skip(i).Take(n).ToList();
+            var r = await SavePageAsync(spec, p, page, dryRun, source, ct);
+            acc = acc is null ? r : MergePages(acc, r);
+        }
+        return acc!;
+    }
+
+    private async Task<ImportResult> SavePageAsync(EntitySpec spec, Principal p, IReadOnlyList<Dictionary<string, string>> rows, bool dryRun, string source, CancellationToken ct)
+    {
         var method = typeof(DataHubService).GetMethod(nameof(SaveOf), BindingFlags.NonPublic | BindingFlags.Instance)!.MakeGenericMethod(spec.Type);
         return await (Task<ImportResult>)method.Invoke(this, [spec, p, rows, dryRun, source, ct])!;
     }
+
+    private static ImportResult MergePages(ImportResult a, ImportResult b) =>
+        new(a.Entity, b.BatchId ?? a.BatchId, a.DryRun, a.Rows + b.Rows, a.Created + b.Created, a.Updated + b.Updated,
+            a.Unchanged + b.Unchanged, a.Rejected + b.Rejected, a.Rejects.Concat(b.Rejects).OrderBy(r => r.Row).Take(100).ToArray());
 
     private sealed record Pending(int Row, string Key, object Entity, bool IsNew, Dictionary<string, string> Values, Dictionary<string, object?>? Before);
 
@@ -293,7 +443,17 @@ public sealed class DataHubService(IDbContextFactory<VeritaDbContext> factory, I
 
         var keyProps = spec.Key.Select(k => spec.Type.GetProperty(k)!).ToArray();
         string KeyOf(object e) => string.Join("|", keyProps.Select(k => Format(k.GetValue(e)).ToUpperInvariant()));
-        var existing = (await db.Set<T>().ToListAsync(ct)).GroupBy(e => KeyOf(e)).ToDictionary(g => g.Key, g => (object)g.First());
+        foreach (var row in rows)
+            if (row.TryGetValue("encounterNo", out var rawNo) && !string.IsNullOrWhiteSpace(rawNo))
+            {
+                var (localNo, named) = HisImportPack.LocalEncounterNo(rawNo.Trim(), hospitals.Values);
+                row["encounterNo"] = localNo;
+                if (named is not null) row["__encounterHospital"] = named;
+            }
+        // Monthly tables run to millions of rows: load only the rows this file can match.
+        var matchOn = spec.IsTransaction ? keyProps.LastOrDefault(k => k.PropertyType == typeof(string)) : null;
+        var candidates = matchOn is null ? db.Set<T>() : CandidatesOf<T>(db, matchOn.Name, rows);
+        var existing = (await candidates.ToListAsync(ct)).GroupBy(e => KeyOf(e)).ToDictionary(g => g.Key, g => (object)g.First());
 
         var groupProps = spec.VersionGroup?.Select(g => spec.Type.GetProperty(g)!).ToArray();
         string GroupOf(object e) => string.Join("|", groupProps!.Select(k => Format(k.GetValue(e))));
@@ -303,6 +463,10 @@ public sealed class DataHubService(IDbContextFactory<VeritaDbContext> factory, I
         var scalars = Scalars(spec).ToDictionary(x => Camel(x.Name), StringComparer.OrdinalIgnoreCase);
         var rejects = new List<RowError>();
         var pending = new List<Pending>();
+        var fellBack = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var merges = new List<(Guid HospitalId, string AssessmentNo, string Key)>();
+        var refunds = new List<(Guid HospitalId, string SourceRef, string Key)>();
+        var replaced = spec.Type == typeof(Encounter) ? await ReplacedErEncountersAsync(db, rows, ct) : [];
         var seen = new HashSet<string>();
         var unchanged = 0;
 
@@ -312,6 +476,7 @@ public sealed class DataHubService(IDbContextFactory<VeritaDbContext> factory, I
             var rowNo = values.TryGetValue("__row", out var rn) && int.TryParse(rn, out var n) ? n : i + 1;
             var errors = new List<string>();
             var entity = new T();
+            var encounterHospital = values.GetValueOrDefault("__encounterHospital");
 
             // References by code.
             foreach (var r in spec.Refs)
@@ -323,7 +488,25 @@ public sealed class DataHubService(IDbContextFactory<VeritaDbContext> factory, I
                     if (!r.Optional) errors.Add($"{r.Column} is required.");
                     continue;
                 }
-                if (!lookups[r.Column].TryGetValue(code, out var target)) { errors.Add($"{r.Column} '{code}' does not exist. Load the {r.Target.Name} first."); continue; }
+                var hospital = values.GetValueOrDefault("hospitalCode")?.Trim();
+                if (string.IsNullOrEmpty(hospital)) hospital = _importHospital ?? encounterHospital;
+                // A costing version belongs to the hospital of the procedure bound to it.
+                if (r.Target == typeof(CostingVersion) && lookups.TryGetValue("procedureCode", out var procCodes)
+                    && TryResolve(procCodes, values.GetValueOrDefault("procedureCode")?.Trim() ?? "", hospital, out var boundProc))
+                    hospital = boundProc.HospitalCode ?? hospital;
+                var found = TryResolve(lookups[r.Column], code, hospital, out var target)
+                    && (r.Target != typeof(Encounter) && r.Target != typeof(Patient) && r.Target != typeof(CostingVersion)
+                        || string.IsNullOrEmpty(hospital) || string.Equals(target.HospitalCode, hospital, StringComparison.OrdinalIgnoreCase));
+                if (!found && _importHospital is not null && HisImportPack.UnmappedFallback(spec.Name, r.Column) is { } fallback)
+                {
+                    found = TryResolve(lookups[r.Column], fallback, hospital, out target);
+                    if (found) fellBack.Add($"{r.Column} {code}");
+                }
+                if (!found)
+                {
+                    if (!r.Optional) errors.Add($"{r.Column} '{code}' does not exist{(r.Target == typeof(CostingVersion) && !string.IsNullOrEmpty(hospital) ? $" for {hospital}" : "")}. Load the {r.Target.Name} first.");
+                    continue;
+                }
                 if (target.HospitalCode is { } hc && !p.HasHospital(hc)) { errors.Add($"{r.Column} '{code}' belongs to {hc}, outside your scope."); continue; }
                 prop.SetValue(entity, target.Id);
             }
@@ -332,7 +515,7 @@ public sealed class DataHubService(IDbContextFactory<VeritaDbContext> factory, I
                 var pc = values.GetValueOrDefault("procedureCode")?.Trim() ?? "";
                 var vc = values.GetValueOrDefault("costingVersionCode")?.Trim() ?? "";
                 if (!procLookup!.TryGetValue(pc, out var proc)) errors.Add($"procedureCode '{pc}' does not exist.");
-                else if (!verLookup!.TryGetValue(vc, out var ver)) errors.Add($"costingVersionCode '{vc}' does not exist.");
+                else if (!TryResolve(verLookup!, vc, proc.HospitalCode, out var ver) || ver.HospitalCode != proc.HospitalCode) errors.Add($"costingVersionCode '{vc}' does not exist for {proc.HospitalCode}. Load the CostingVersion for that hospital first.");
                 else
                 {
                     var exists = definitions!.TryGetValue((proc.Id, ver.Id), out var defId);
@@ -383,10 +566,27 @@ public sealed class DataHubService(IDbContextFactory<VeritaDbContext> factory, I
             if (errors.Count > 0) { rejects.Add(new RowError(rowNo, null, errors.ToArray(), values)); continue; }
 
             var key = KeyOf(entity);
+            if (entity is RefundTransaction refund) refunds.Add((refund.HospitalId, refund.SourceRef, key));
+            if (entity is Encounter merged && !string.IsNullOrWhiteSpace(merged.SourceAssessmentNo) && merged.SourceAssessmentNo != merged.EncounterNo)
+            {
+                if (replaced.TryGetValue((merged.HospitalId, merged.SourceAssessmentNo), out var old) && old.Costed)
+                {
+                    rejects.Add(new RowError(rowNo, key, [$"ER encounter {merged.SourceAssessmentNo} merges into {merged.EncounterNo}, but it is costed in a calculation run. Delete that run first."], values));
+                    continue;
+                }
+                merges.Add((merged.HospitalId, merged.SourceAssessmentNo, key));
+            }
             if (!seen.Add(key)) { rejects.Add(new RowError(rowNo, key, ["The same key appears earlier in this file."], values)); continue; }
 
             if (existing.TryGetValue(key, out var current))
             {
+                // An appointment loaded as OP becomes ER once its ER assessment is linked; anything else would overwrite a different visit.
+                if (current is Encounter was && entity is Encounter now && !string.Equals(was.EncType, now.EncType, StringComparison.OrdinalIgnoreCase)
+                    && !(was.EncType == "OP" && now.EncType == "ER"))
+                {
+                    rejects.Add(new RowError(rowNo, key, [$"Encounter {now.EncounterNo} already exists as {was.EncType}; it would be overwritten by this {now.EncType} row."], values));
+                    continue;
+                }
                 if (spec.Versioned)
                 {
                     if (SameValues(spec, current, entity, values)) { unchanged++; continue; }
@@ -396,6 +596,12 @@ public sealed class DataHubService(IDbContextFactory<VeritaDbContext> factory, I
                 if (current is CostingVersion cv && cv.Status == "PUBLISHED")
                 {
                     rejects.Add(new RowError(rowNo, key, ["A published costing version is never edited (FR-10.5)."], values));
+                    continue;
+                }
+                if (current.GetType().GetProperty("Status")?.GetValue(current) is string st
+                    && st is "PUBLISHED" or "RETIRED" or "REVIEW" or "APPROVED" or "FINANCE_APPROVED" or "CLINICAL_APPROVED")
+                {
+                    rejects.Add(new RowError(rowNo, key, [$"A {st} row is never overwritten by import. Change it through Governance, or send a later effectiveFrom for a versioned table."], values));
                     continue;
                 }
                 var before = Snapshot(spec, current);
@@ -445,10 +651,12 @@ public sealed class DataHubService(IDbContextFactory<VeritaDbContext> factory, I
             }
         }
 
+        if (fellBack.Count > 0)
+            log.LogWarning("Import {Entity}: {Count} codes not in the catalogue were sent to Unmapped: {Codes}", spec.Name, fellBack.Count, string.Join(", ", fellBack.Take(50)));
         var created = pending.Count(x => x.IsNew);
         var updated = pending.Count(x => !x.IsNew);
         Guid? batchId = null;
-        if (!dryRun && (pending.Count > 0 || rejects.Count > 0))
+        if (!dryRun && (pending.Count > 0 || rejects.Count > 0 || merges.Count > 0 || refunds.Count > 0))
         {
             foreach (var def in newDefinitions) db.CostingDefinitions.Add(def);
             foreach (var x in pending.Where(x => x.IsNew)) db.Add(x.Entity);
@@ -467,6 +675,10 @@ public sealed class DataHubService(IDbContextFactory<VeritaDbContext> factory, I
                 rejects.AddRange(bad);
                 if (ok.Count == 0 && bad.Count == 0) throw new AppError("SAVE_FAILED", Inner(ex), 400);
             }
+
+            var refused = rejects.Select(r => r.Key).ToHashSet();
+            await MergeReplacedErEncountersAsync(merges.Where(m => !refused.Contains(m.Key)).ToList(), replaced, existing, ct);
+            await RemoveRefundsFromRevenueAsync(refunds.Where(r => !refused.Contains(r.Key)).ToList(), ct);
 
             await using var log = await Db(ct);
             var batch = new ImportBatch
@@ -491,7 +703,7 @@ public sealed class DataHubService(IDbContextFactory<VeritaDbContext> factory, I
         }
 
         return new ImportResult(spec.Name, batchId, dryRun, rows.Count, created, updated, unchanged, rejects.Count,
-            rejects.OrderBy(r => r.Row).Select(Clean).ToArray());
+            rejects.OrderBy(r => r.Row).Take(100).Select(Clean).ToArray());
     }
 
     private async Task<(List<Pending> Ok, List<RowError> Bad)> SaveOneByOneAsync(EntitySpec spec, List<Pending> pending, List<CostingDefinition> defs, CancellationToken ct)
@@ -525,7 +737,7 @@ public sealed class DataHubService(IDbContextFactory<VeritaDbContext> factory, I
 
     /// <summary>Passwords never reach the reject log or the response.</summary>
     private static RowError Clean(RowError r) =>
-        r with { Values = r.Values.Where(kv => kv.Key is not ("password" or "__row")).ToDictionary(kv => kv.Key, kv => kv.Value) };
+        r with { Values = r.Values.Where(kv => kv.Key is not ("password" or "__row" or "__encounterHospital")).ToDictionary(kv => kv.Key, kv => kv.Value) };
 
     private static Dictionary<string, object?> Snapshot(EntitySpec spec, object e) =>
         Scalars(spec).ToDictionary(p => Camel(p.Name), p => p.GetValue(e));

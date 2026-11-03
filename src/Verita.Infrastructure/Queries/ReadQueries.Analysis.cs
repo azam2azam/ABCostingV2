@@ -1,6 +1,7 @@
 using Microsoft.EntityFrameworkCore;
 using Verita.Application;
 using Verita.Domain;
+using Verita.Engine;
 
 namespace Verita.Infrastructure.Queries;
 
@@ -9,7 +10,7 @@ public sealed partial class ReadQueries
     // ═══ Profitability (FR-5.15 – FR-5.17) ═══════════════════════════════════════════
 
     public static readonly string[] Dimensions =
-        ["hospital", "department", "serviceLine", "physician", "payer", "procedure", "package", "drg", "encounterType", "segment"];
+        ["hospital", "department", "resource", "serviceLine", "physician", "payer", "procedure", "package", "drg", "encounterType", "segment"];
 
     public sealed record ProfitRow(string Key, string Label, int Encounters, decimal Volume, decimal Revenue, decimal Direct, decimal Indirect,
         decimal Overhead, decimal Total, decimal Contribution, decimal Operating, decimal MarginPct, string? Link);
@@ -22,6 +23,7 @@ public sealed partial class ReadQueries
         var rid = s.Run.Id;
         var idle = await db.ResidualBuckets.AsNoTracking().Where(b => b.RunId == rid && b.Bucket == "UNUSED_CAPACITY").SumAsync(b => (decimal?)b.Amount, ct) ?? 0m;
         List<ProfitRow> rows;
+        ProfitRow? wholeRun = null;
 
         ProfitRow Make(string key, string label, int n, decimal vol, decimal rev, decimal d, decimal i, decimal o, string? link)
         {
@@ -39,13 +41,29 @@ public sealed partial class ReadQueries
                            select new { pr.Id, pr.Name, pc.Volume, pc.Revenue, pc.DirectCost, pc.IndirectCost, pc.OverheadCost }).ToListAsync(ct))
                 .Select(x => Make(x.Id.ToString(), x.Name, 0, x.Volume, x.Revenue, x.DirectCost, x.IndirectCost, x.OverheadCost, $"procedures/{x.Id}")).ToList();
         }
+        else if (s.Run.CostingMethod == CostingModelPipeline.Method)
+        {
+            // Prepared by the run: read, never re-added.
+            string? StoredLink(string k) => k.Length == 0 ? null : dimension switch
+            {
+                "package" => $"packages/{k}", "drg" => $"drgs/{k}", "resource" => $"resources/{k}", _ => null,
+            };
+            var stored = await db.RunDimensionCosts.AsNoTracking().Where(x => x.RunId == rid && (x.Dimension == dimension || x.Dimension == "hospital")).ToListAsync(ct);
+            rows = stored.Where(x => x.Dimension == dimension)
+                .Select(x => Make(x.Key, x.Label, x.Encounters, x.Encounters, x.Revenue, x.DirectCost, x.IndirectCost, x.OverheadCost, StoredLink(x.Key))).ToList();
+            // One encounter can sit under several resources, so the total is the run's own.
+            if (stored.FirstOrDefault(x => x.Dimension == "hospital") is { } whole)
+                wholeRun = Make("total", "Total", whole.Encounters, whole.Encounters, whole.Revenue, whole.DirectCost, whole.IndirectCost, whole.OverheadCost, null);
+        }
         else
         {
             var facts = await EncounterFacts(rid, ct);
+            var doctorResource = dimension == "resource" ? await db.Providers.AsNoTracking().ToDictionaryAsync(x => x.Id, x => x.ResourceId, ct) : [];
             var labels = dimension switch
             {
                 "hospital" => await db.Hospitals.AsNoTracking().ToDictionaryAsync(x => (Guid?)x.Id, x => x.Name, ct),
                 "department" => await db.Departments.AsNoTracking().ToDictionaryAsync(x => (Guid?)x.Id, x => x.Name, ct),
+                "resource" => await db.Resources.AsNoTracking().Where(x => x.HospitalId == s.Hospital.Id).ToDictionaryAsync(x => (Guid?)x.Id, x => x.Name, ct),
                 "serviceLine" => await db.ServiceLines.AsNoTracking().ToDictionaryAsync(x => (Guid?)x.Id, x => x.Name, ct),
                 "physician" => await db.Providers.AsNoTracking().ToDictionaryAsync(x => (Guid?)x.Id, x => $"{x.Name} ({x.Specialty})", ct),
                 "payer" => await db.Payers.AsNoTracking().ToDictionaryAsync(x => (Guid?)x.Id, x => x.Name, ct),
@@ -57,6 +75,7 @@ public sealed partial class ReadQueries
             {
                 "hospital" => f => f.HospitalId.ToString(),
                 "department" => f => f.DepartmentId.ToString(),
+                "resource" => f => f.ProviderId is { } doctor && doctorResource.GetValueOrDefault(doctor) is { } resource ? resource.ToString() : "",
                 "serviceLine" => f => f.ServiceLineId?.ToString() ?? "",
                 "physician" => f => f.ProviderId?.ToString() ?? "",
                 "payer" => f => f.PayerId.ToString(),
@@ -69,14 +88,14 @@ public sealed partial class ReadQueries
                 : Guid.TryParse(k, out var g) ? labels.GetValueOrDefault(g, k) : "Not assigned";
             string? Link(string k) => dimension switch
             {
-                "package" when k != "" => $"packages/{k}", "drg" when k != "" => $"drgs/{k}", _ => null,
+                "package" when k != "" => $"packages/{k}", "drg" when k != "" => $"drgs/{k}", "resource" when k != "" => $"resources/{k}", _ => null,
             };
             rows = facts.GroupBy(key).Select(g => Make(g.Key, Label(g.Key), g.Count(), g.Count(), g.Sum(x => x.Revenue),
                 g.Sum(x => x.Direct), g.Sum(x => x.Indirect), g.Sum(x => x.Overhead), Link(g.Key))).ToList();
         }
 
         rows = rows.OrderByDescending(r => showRevenue ? r.Operating : r.Total).ToList();
-        var total = Make("total", "Total", rows.Sum(r => r.Encounters), rows.Sum(r => r.Volume), rows.Sum(r => r.Revenue), rows.Sum(r => r.Direct),
+        var total = wholeRun ?? Make("total", "Total", rows.Sum(r => r.Encounters), rows.Sum(r => r.Volume), rows.Sum(r => r.Revenue), rows.Sum(r => r.Direct),
             rows.Sum(r => r.Indirect), rows.Sum(r => r.Overhead), null);
         return new ProfitDto(dimension, rows.ToArray(), total, idle, showRevenue ? Money.R4(total.Operating - idle) : 0m);
     }

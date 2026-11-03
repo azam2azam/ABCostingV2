@@ -78,42 +78,28 @@ public static class Security
     public sealed record NavItem(string Path, string Label, string Permission, string Purpose);
     public sealed record NavGroup(string Label, NavItem[] Items);
 
-    /// <summary>FR-11.4: the twenty-four modules, plus data entry and import, grouped by what a person is doing.</summary>
+    /// <summary>FR-11.4: the modules, plus data entry and import, grouped by what a person is doing.</summary>
     public static readonly NavGroup[] Navigation =
     [
         new("Overview", [
-            new("dashboard", "Dashboard", "dashboard.view", "Executive, finance, clinical, revenue-cycle and supply-chain views of one run."),
-            new("profitability", "Profitability", "profitability.view", "Contribution and operating margin by hospital, department, service line, physician, payer, procedure, package, DRG, encounter type and segment."),
-            new("variance", "Variance", "variance.view", "Actual against standard, decomposed into rate, quantity and mix effects with a written explanation for each."),
-            new("capacity", "Capacity", "costing.view", "Time-driven capacity, utilisation and the cost of capacity paid for but not used."),
+            new("dashboard", "Dashboard", "dashboard.view", "Direct cost, indirect cost, overheads, revenue and margin of one run, by hospital, service line, department, physician, payer, DRG, encounter type and segment."),
         ]),
-        new("Cost model", [
+        new("Catalogue", [
             new("cost-centres", "Cost Centres", "masterdata.view", "The financial units money lands in, their step-down sequence and their closing balances."),
-            new("cost-pools", "Cost Pools", "costing.view", "Homogeneous bundles of cost, their GL mappings, drivers and allocation method."),
-            new("resources", "Resources", "masterdata.view", "Everything that costs money and is consumed, with effective-dated rates and capacity models."),
-            new("cost-drivers", "Cost Drivers", "costing.view", "The measurable things that cause cost, their source systems, formulas and measured volumes."),
-            new("activities", "Activities", "masterdata.view", "Units of clinical and operational work, their standard recipes and unit costs."),
-            new("procedures", "Procedures", "costing.view", "Standard and actual cost per procedure, fully decomposed into its cost components."),
             new("packages", "Packages", "costing.view", "Bundled episodes: cost, revenue, variance and margin against the contracted price."),
+            new("procedures", "Procedure/Activity", "costing.view", "Standard and actual cost per procedure/activity, fully decomposed into its cost components."),
+            new("resources", "Resources", "masterdata.view", "Everything that costs money and is consumed, with effective-dated rates and capacity models."),
+            new("patient-encounters", "Patient Encounters", "patient.view", "Patient encounters and what was invoiced for each, with the source reference of every line."),
             new("drgs", "DRGs", "costing.view", "Case-mix cost distribution, length of stay, reimbursement, margin and high-cost outliers."),
         ]),
         new("Configuration", [
             new("costing-models", "Costing Models", "costing.view", "Versioned costing definitions with their effective dates, diffs and approval history."),
-            new("allocation-rules", "Allocation Rules", "costing.view", "How each pool is distributed: method, driver, stage, targets and the money each rule moved."),
+            new("direct-costing", "Direct Costing", "costing.view", "Procedure/activity types in this hospital, and how many sit under each."),
+            new("indirect-costing", "Indirect Costing", "costing.view", "Indirect overhead cost on each procedure/activity type, as a percentage of contracted price, and the amount in SAR."),
+            new("periods", "Periods", "costing.view", "The costing periods of the selected hospital, with the run and costing model linked to each."),
         ]),
         new("Execution", [
             new("runs", "Calculation Runs", "costing.view", "Controlled costing runs, their eleven stages, money in and out, and lifecycle state."),
-            new("reconciliation", "Reconciliation", "costing.view", "The bridge from the general ledger to patient cost, with every residual named and explained."),
-            new("patient-costing", "Patient Costing", "patient.view", "Cost, revenue and margin for individual encounters, traceable to source transactions."),
-        ]),
-        new("Analysis", [
-            new("simulation", "Simulation", "simulation.view", "What-if scenarios executed by the same engine as a real run."),
-            new("reports", "Reports", "reports.view", "Standing reports for finance, executive, clinical operations, revenue cycle and supply chain."),
-        ]),
-        new("Assurance", [
-            new("data-quality", "Data Quality", "quality.view", "Nineteen automated checks, passes included, gating every run."),
-            new("governance", "Governance", "governance.view", "Four-eye approval of costing configuration and runs, with the full lifecycle history."),
-            new("audit", "Audit", "audit.view", "Every change, approval, publication and PHI access, with actor, timestamp and before-and-after state."),
         ]),
         new("Data", [
             new("data-entry", "Data Entry", "masterdata.view", "Add and edit hospitals, cost centres, resources, rates, activities, procedures and the rest of the costing model."),
@@ -121,6 +107,7 @@ public static class Security
         ]),
         new("System", [
             new("administration", "Administration", "admin.view", "Users, roles, hospital and department scopes, and the permission matrix."),
+            new("audit", "Audit", "audit.view", "Every change, approval, publication and PHI access, with actor, timestamp and before-and-after state."),
             new("help", "Help & Method", "help.view", "How the costing model works, what each number means, and the rules behind it."),
         ]),
     ];

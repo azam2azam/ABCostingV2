@@ -59,20 +59,21 @@ export function formatDec(v: string | null | undefined, dp = 2): string {
   return `${neg ? '−' : ''}${group(i)}${f ? '.' + f : ''}`;
 }
 
-/** "SAR 1,180.92", or compact "SAR 1.18M" for tiles. */
+/** "SAR 1,180.92", or compact "SAR 1.18M" for tiles. A negative is an accounting credit: "(SAR 119.00)". */
 export function formatMoney(v: string | null | undefined, opts: { dp?: number; compact?: boolean; currency?: string } = {}): string {
   if (v === null || v === undefined || v === '') return '—';
   const cur = opts.currency ?? 'SAR';
   const p = parse(String(v));
   if (!p) return String(v);
+  const show = (amount: string) => amount.startsWith('−') ? `(${cur} ${amount.slice(1)})` : `${cur} ${amount}`;
   if (opts.compact) {
     const len = p.int.length;
-    if (len > 9) return `${cur} ${formatDec(shiftDec(String(v), -9), 2)}B`;
-    if (len > 6) return `${cur} ${formatDec(shiftDec(String(v), -6), 2)}M`;
-    if (len > 3) return `${cur} ${formatDec(shiftDec(String(v), -3), 1)}K`;
-    return `${cur} ${formatDec(String(v), 0)}`;
+    if (len > 9) return show(`${formatDec(shiftDec(String(v), -9), 2)}B`);
+    if (len > 6) return show(`${formatDec(shiftDec(String(v), -6), 2)}M`);
+    if (len > 3) return show(`${formatDec(shiftDec(String(v), -3), 1)}K`);
+    return show(formatDec(String(v), 0));
   }
-  return `${cur} ${formatDec(String(v), opts.dp ?? 2)}`;
+  return show(formatDec(String(v), opts.dp ?? 2));
 }
 
 export function sign(v: string | null | undefined): -1 | 0 | 1 {

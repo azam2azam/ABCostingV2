@@ -7,14 +7,14 @@ namespace Verita.Infrastructure.Queries;
 
 /// <summary>ARCH-12: every response names the run, its status, version, period and hospital.</summary>
 public sealed record Meta(
-    Guid? RunId, string? Run, string? RunStatus, string? CostingVersion, string? Period, string? Hospital, string? HospitalName,
+    Guid? RunId, string? Run, string? RunStatus, string? CostingVersion, string? CostingVersionStatus, string? Period, string? Hospital, string? HospitalName,
     string? Currency, DateTime GeneratedAt);
 
 public sealed record Envelope<T>(Meta Meta, T Data);
 
 public sealed record ScopedRun(CalculationRun Run, Hospital Hospital, Period Period, CostingVersion Version)
 {
-    public Meta Meta() => new(Run.Id, Run.Code, Run.Status, Version.Code, Period.Code, Hospital.Code, Hospital.Name, Hospital.Currency, DateTime.UtcNow);
+    public Meta Meta() => new(Run.Id, Run.Code, Run.Status, Version.Code, Version.Status, Period.Code, Hospital.Code, Hospital.Name, Hospital.Currency, DateTime.UtcNow);
 }
 
 /// <summary>

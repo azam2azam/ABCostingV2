@@ -23,6 +23,14 @@ public abstract class VeritaController : ControllerBase
         return (p, s);
     }
 
+    /// <summary>For catalogue screens, which show their data whether or not a run exists.</summary>
+    protected async Task<(Principal P, ScopedRun S)> CatalogueScoped()
+    {
+        var p = await Me();
+        var s = await Q.CatalogueScopeAsync(p, Request.Query["run"], Request.Query["hospital"], Request.Query["period"], HttpContext.RequestAborted);
+        return (p, s);
+    }
+
     protected static Envelope<T> Wrap<T>(ScopedRun s, T data) => new(s.Meta(), data);
-    protected static Envelope<T> Wrap<T>(T data) => new(new Meta(null, null, null, null, null, null, null, null, DateTime.UtcNow), data);
+    protected static Envelope<T> Wrap<T>(T data) => new(new Meta(null, null, null, null, null, null, null, null, null, DateTime.UtcNow), data);
 }

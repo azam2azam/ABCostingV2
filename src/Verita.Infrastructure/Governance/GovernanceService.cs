@@ -46,6 +46,7 @@ public sealed class GovernanceService(IDbContextFactory<VeritaDbContext> factory
         {
             var v = await db.CostingVersions.FirstOrDefaultAsync(x => x.Id == entityId, ct) ?? throw AppError.NotFound("Costing version");
             if (v.Status == "PUBLISHED") throw AppError.Conflict("VERSION_IMMUTABLE", "A published costing version is never edited; create a new version (FR-10.5).");
+            await CostingVersionRules.EnsureCanPublishAsync(db, v, ct);
             label = v.Name;
             versionId = v.Id;
             v.Status = "REVIEW";
@@ -114,6 +115,9 @@ public sealed class GovernanceService(IDbContextFactory<VeritaDbContext> factory
                     .ExecuteUpdateAsync(s => s.SetProperty(r => r.Status, "APPROVED").SetProperty(r => r.ApprovedBy, actor.Email), ct);
                 break;
             case "COSTING_VERSION":
+                // Checked again here: another version may have been published since the request.
+                var version = await db.CostingVersions.AsNoTracking().FirstAsync(v => v.Id == req.EntityId, ct);
+                await CostingVersionRules.EnsureCanPublishAsync(db, version, ct);
                 await db.CostingVersions.Where(v => v.Id == req.EntityId)
                     .ExecuteUpdateAsync(s => s.SetProperty(v => v.Status, "PUBLISHED").SetProperty(v => v.PublishedAt, DateTime.UtcNow).SetProperty(v => v.PublishedById, actor.Id), ct);
                 break;

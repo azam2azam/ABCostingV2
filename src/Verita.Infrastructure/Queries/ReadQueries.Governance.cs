@@ -1,6 +1,7 @@
 using Microsoft.EntityFrameworkCore;
 using Verita.Application;
 using Verita.Domain;
+using Verita.Domain.Entities;
 
 namespace Verita.Infrastructure.Queries;
 
@@ -9,51 +10,163 @@ public sealed partial class ReadQueries
     // ═══ Costing models (FR-10.5, FR-10.6) ═══════════════════════════════════════════
 
     public sealed record VersionDto(Guid Id, string Code, string Name, string Description, DateOnly EffectiveFrom, DateOnly? EffectiveTo, string Status,
-        DateTime? PublishedAt, int Definitions, int Runs);
+        DateTime? PublishedAt, int Definitions, int Runs, string Hospital);
     public sealed record DiffLine(string Procedure, string Kind, string Item, decimal? From, decimal? To);
     public sealed record VersionDiff(string FromVersion, string ToVersion, DiffLine[] Changes);
-    public sealed record CostingModelsDto(VersionDto[] Versions, VersionDiff[] Diffs, ApprovalDto[] Approvals);
+    public sealed record CostingModelsDto(VersionDto[] Versions, VersionDiff[] DirectDiffs, VersionDiff[] IndirectDiffs, ApprovalDto[] Approvals);
+    public sealed record NewVersionBody(Guid FromVersionId, string Code, string Name, string? Description, DateOnly EffectiveFrom, DateOnly? EffectiveTo);
 
-    public async Task<CostingModelsDto> CostingModelsAsync(Principal p, CancellationToken ct)
+    public async Task<CostingModelsDto> CostingModelsAsync(Principal p, string? hospital, CancellationToken ct)
     {
-        var versions = await db.CostingVersions.AsNoTracking().OrderBy(v => v.EffectiveFrom).ToListAsync(ct);
-        var defs = await db.CostingDefinitions.AsNoTracking().ToListAsync(ct);
-        var runs = await db.CalculationRuns.AsNoTracking().Where(r => r.RunType != "SIMULATION").GroupBy(r => r.CostingVersionId)
-            .Select(g => new { g.Key, N = g.Count() }).ToDictionaryAsync(x => x.Key, x => x.N, ct);
         var procs = await db.Procedures.AsNoTracking().ToDictionaryAsync(x => x.Id, ct);
-        var acts = await db.Activities.AsNoTracking().ToDictionaryAsync(x => x.Id, x => x.Name, ct);
-        var res = await db.Resources.AsNoTracking().ToDictionaryAsync(x => x.Id, x => x.Name, ct);
-        var actLines = (await db.ProcedureActivityLines.AsNoTracking().ToListAsync(ct)).ToLookup(l => l.DefinitionId);
-        var resLines = (await db.ProcedureResourceLines.AsNoTracking().ToListAsync(ct)).ToLookup(l => l.DefinitionId);
+        var typeCost = await db.ProcedureTypeCostings.AsNoTracking().ToListAsync(ct);
+        var itemMargins = await db.ProcedureMargins.AsNoTracking().ToListAsync(ct);
+        var overheads = await db.EncounterOverheads.AsNoTracking().ToListAsync(ct);
+        var centres = await db.CostCenters.AsNoTracking().ToDictionaryAsync(c => c.Id, ct);
         var scope = await RunScope.HospitalCodesInScope(db, p, ct);
         var hospitals = await db.Hospitals.AsNoTracking().ToDictionaryAsync(h => h.Id, h => h.Code, ct);
+        var hospitalCode = string.IsNullOrWhiteSpace(hospital) ? null : hospital.Trim();
+        if (hospitalCode is not null && !scope.Contains(hospitalCode)) throw AppError.OutOfScope(hospitalCode);
 
-        // Each version's recipes keyed by (procedure catalogue code at a hospital, item), so the
-        // computed diff says which quantity changed, from what to what — a diff, not a description.
-        Dictionary<(string Proc, string Kind, string Item), decimal> Recipe(Guid versionId) =>
-            defs.Where(d => d.CostingVersionId == versionId && procs.ContainsKey(d.ProcedureId) && scope.Contains(hospitals[procs[d.ProcedureId].HospitalId]))
-                .SelectMany(d =>
-                {
-                    var pname = $"{procs[d.ProcedureId].Name} ({hospitals[procs[d.ProcedureId].HospitalId]})";
-                    return actLines[d.Id].Select(l => ((pname, "Activity", acts.GetValueOrDefault(l.ActivityId, "?")), l.Quantity))
-                        .Concat(resLines[d.Id].Select(l => ((pname, "Resource", res.GetValueOrDefault(l.ResourceId, "?")), l.Quantity)));
-                })
-                .GroupBy(x => x.Item1).ToDictionary(g => g.Key, g => g.Sum(x => x.Quantity));
-
-        var diffs = new List<VersionDiff>();
-        for (var i = 1; i < versions.Count; i++)
+        bool InScope(Guid hospitalId)
         {
-            var a = Recipe(versions[i - 1].Id);
-            var b = Recipe(versions[i].Id);
-            var changes = a.Keys.Union(b.Keys)
-                .Select(k => new DiffLine(k.Proc, k.Kind, k.Item, a.TryGetValue(k, out var x) ? x : null, b.TryGetValue(k, out var y) ? y : null))
-                .Where(d => d.From != d.To).OrderBy(d => d.Procedure).ThenBy(d => d.Item).ToArray();
-            diffs.Add(new VersionDiff(versions[i - 1].Code, versions[i].Code, changes));
+            var code = hospitals.GetValueOrDefault(hospitalId);
+            if (code is null || !scope.Contains(code)) return false;
+            return hospitalCode is null || code == hospitalCode;
         }
+
+        var versions = (await db.CostingVersions.AsNoTracking().OrderBy(v => v.EffectiveFrom).ToListAsync(ct)).Where(v => InScope(v.HospitalId)).ToList();
+        var defCounts = (await db.CostingDefinitions.AsNoTracking()
+                .Join(db.Procedures.AsNoTracking(), d => d.ProcedureId, x => x.Id, (d, x) => new { d.CostingVersionId, x.HospitalId })
+                .GroupBy(x => new { x.CostingVersionId, x.HospitalId })
+                .Select(g => new { g.Key.CostingVersionId, g.Key.HospitalId, N = g.Count() }).ToListAsync(ct))
+            .Where(x => InScope(x.HospitalId)).GroupBy(x => x.CostingVersionId).ToDictionary(g => g.Key, g => g.Sum(x => x.N));
+        var runs = (await db.CalculationRuns.AsNoTracking().Where(r => r.RunType != "SIMULATION")
+                .GroupBy(r => new { r.CostingVersionId, r.HospitalId })
+                .Select(g => new { g.Key.CostingVersionId, g.Key.HospitalId, N = g.Count() }).ToListAsync(ct))
+            .Where(x => InScope(x.HospitalId)).GroupBy(x => x.CostingVersionId).ToDictionary(g => g.Key, g => g.Sum(x => x.N));
+
+        Dictionary<(string Proc, string Kind, string Item), decimal> Snapshot(Guid versionId, string stream)
+        {
+            var types = typeCost.Where(x => x.CostingVersionId == versionId && x.Stream == stream && InScope(x.HospitalId))
+                .Select(x => ((x.ProcType, "Type", hospitals[x.HospitalId]), x.MarginPct));
+            var items = itemMargins.Where(x => x.CostingVersionId == versionId && x.Stream == stream && procs.ContainsKey(x.ProcedureId)
+                    && InScope(procs[x.ProcedureId].HospitalId))
+                .Select(x =>
+                {
+                    var proc = procs[x.ProcedureId];
+                    return ((proc.Name, "Item", proc.Code), x.MarginPct);
+                });
+            IEnumerable<((string Proc, string Kind, string Item), decimal Value)> enc = [];
+            if (stream == CostingStreamIndirect)
+            {
+                enc = overheads.Where(x => x.CostingVersionId == versionId && InScope(x.HospitalId))
+                    .SelectMany(x =>
+                    {
+                        var cc = centres.GetValueOrDefault(x.CostCenterId);
+                        var proc = cc?.Code ?? hospitals[x.HospitalId];
+                        var item = string.IsNullOrWhiteSpace(x.Description) ? (cc?.Name ?? proc) : x.Description;
+                        return new[]
+                        {
+                            ((proc, "Encounter %", item), x.OverheadPct),
+                            ((proc, "Encounter cap", item), x.OverheadAmount),
+                        };
+                    });
+            }
+            return types.Concat(items).Concat(enc)
+                .GroupBy(x => x.Item1).ToDictionary(g => g.Key, g => g.Sum(x => x.Item2));
+        }
+
+        VersionDiff[] Diffs(string stream)
+        {
+            var diffs = new List<VersionDiff>();
+            foreach (var own in versions.GroupBy(v => v.HospitalId).Select(g => g.ToList()))
+                for (var i = 1; i < own.Count; i++)
+                {
+                    var a = Snapshot(own[i - 1].Id, stream);
+                    var b = Snapshot(own[i].Id, stream);
+                    var changes = a.Keys.Union(b.Keys)
+                        .Select(k => new DiffLine(k.Proc, k.Kind, k.Item, a.TryGetValue(k, out var x) ? x : null, b.TryGetValue(k, out var y) ? y : null))
+                        .Where(d => d.From != d.To).OrderBy(d => d.Kind).ThenBy(d => d.Procedure).ThenBy(d => d.Item).ToArray();
+                    diffs.Add(new VersionDiff(own[i - 1].Code, own[i].Code, changes));
+                }
+            return diffs.ToArray();
+        }
+
         return new CostingModelsDto(
             versions.Select(v => new VersionDto(v.Id, v.Code, v.Name, v.Description, v.EffectiveFrom, v.EffectiveTo, v.Status, v.PublishedAt,
-                defs.Count(d => d.CostingVersionId == v.Id), runs.GetValueOrDefault(v.Id))).ToArray(),
-            diffs.ToArray(), (await ApprovalsAsync(null, ct)).Where(a => a.EntityType == "COSTING_VERSION").ToArray());
+                defCounts.GetValueOrDefault(v.Id), runs.GetValueOrDefault(v.Id), hospitals.GetValueOrDefault(v.HospitalId) ?? "")).ToArray(),
+            Diffs(CostingStreamDirect), Diffs(CostingStreamIndirect),
+            (await ApprovalsAsync(null, ct)).Where(a => a.EntityType == "COSTING_VERSION" && versions.Any(v => v.Id == a.EntityId)).ToArray());
+    }
+
+    public async Task<CostingModelsDto> CreateCostingVersionAsync(Principal p, NewVersionBody body, CancellationToken ct)
+    {
+        var code = (body.Code ?? "").Trim();
+        var name = (body.Name ?? "").Trim();
+        if (code.Length == 0) throw AppError.Invalid("Version code is required.");
+        if (name.Length == 0) name = code;
+        var from = await db.CostingVersions.AsNoTracking().FirstOrDefaultAsync(v => v.Id == body.FromVersionId, ct)
+            ?? throw AppError.NotFound("Source costing version");
+        var hospitalCode = await db.Hospitals.AsNoTracking().Where(h => h.Id == from.HospitalId).Select(h => h.Code).FirstAsync(ct);
+        if (!p.HasHospital(hospitalCode)) throw AppError.OutOfScope(hospitalCode);
+        if (await db.CostingVersions.AnyAsync(v => v.HospitalId == from.HospitalId && v.Code == code, ct))
+            throw AppError.Conflict("VERSION_EXISTS", $"{hospitalCode} already has a costing version named {code}.");
+        if (body.EffectiveTo is { } to && to < body.EffectiveFrom)
+            throw AppError.Invalid("effectiveTo is before effectiveFrom.");
+
+        var version = new CostingVersion
+        {
+            Id = IdGen.Sequential(), HospitalId = from.HospitalId, Code = code, Name = name, Description = (body.Description ?? "").Trim(),
+            EffectiveFrom = body.EffectiveFrom, EffectiveTo = body.EffectiveTo, Status = "DRAFT", CreatedAt = DateTime.UtcNow,
+        };
+        db.CostingVersions.Add(version);
+
+        var defs = await db.CostingDefinitions.AsNoTracking().Where(d => d.CostingVersionId == from.Id).ToListAsync(ct);
+        var defMap = defs.ToDictionary(d => d.Id, _ => IdGen.Sequential());
+        db.CostingDefinitions.AddRange(defs.Select(d => new CostingDefinition
+        {
+            Id = defMap[d.Id], ProcedureId = d.ProcedureId, CostingVersionId = version.Id, Notes = d.Notes,
+        }));
+        var defIds = defs.Select(d => d.Id).ToList();
+        if (defIds.Count > 0)
+        {
+            var actLines = await db.ProcedureActivityLines.AsNoTracking().Where(l => defIds.Contains(l.DefinitionId)).ToListAsync(ct);
+            var resLines = await db.ProcedureResourceLines.AsNoTracking().Where(l => defIds.Contains(l.DefinitionId)).ToListAsync(ct);
+            db.ProcedureActivityLines.AddRange(actLines.Select(l => new ProcedureActivityLine
+            {
+                Id = IdGen.Sequential(), DefinitionId = defMap[l.DefinitionId], ActivityId = l.ActivityId, Quantity = l.Quantity,
+            }));
+            db.ProcedureResourceLines.AddRange(resLines.Select(l => new ProcedureResourceLine
+            {
+                Id = IdGen.Sequential(), DefinitionId = defMap[l.DefinitionId], ResourceId = l.ResourceId, Quantity = l.Quantity, Uom = l.Uom,
+            }));
+        }
+
+        var types = await db.ProcedureTypeCostings.AsNoTracking().Where(x => x.CostingVersionId == from.Id).ToListAsync(ct);
+        db.ProcedureTypeCostings.AddRange(types.Select(x => new ProcedureTypeCosting
+        {
+            Id = IdGen.Sequential(), HospitalId = x.HospitalId, CostingVersionId = version.Id,
+            ProcType = x.ProcType, Stream = x.Stream, MarginPct = x.MarginPct,
+        }));
+        var items = await db.ProcedureMargins.AsNoTracking().Where(x => x.CostingVersionId == from.Id).ToListAsync(ct);
+        db.ProcedureMargins.AddRange(items.Select(x => new ProcedureMargin
+        {
+            Id = IdGen.Sequential(), HospitalId = x.HospitalId, CostingVersionId = version.Id,
+            ProcedureId = x.ProcedureId, Stream = x.Stream, MarginPct = x.MarginPct,
+        }));
+        var overheads = await db.EncounterOverheads.AsNoTracking().Where(x => x.CostingVersionId == from.Id).ToListAsync(ct);
+        db.EncounterOverheads.AddRange(overheads.Select(x => new EncounterOverhead
+        {
+            Id = IdGen.Sequential(), HospitalId = x.HospitalId, CostingVersionId = version.Id, CostCenterId = x.CostCenterId,
+            Description = x.Description, OverheadPct = x.OverheadPct, OverheadAmount = x.OverheadAmount,
+        }));
+
+        await db.SaveChangesAsync(ct);
+        await audit.WriteAsync(p, "CREATE", "CostingVersion", version.Id.ToString(), version.Code,
+            after: new { source = from.Code, code = version.Code, version.Name, version.EffectiveFrom,
+                copied = new { definitions = defs.Count, types = types.Count, items = items.Count, overheads = overheads.Count } }, ct: ct);
+        return await CostingModelsAsync(p, hospitalCode, ct);
     }
 
     // ═══ Scenarios (FR-8) ════════════════════════════════════════════════════════════

@@ -78,6 +78,9 @@ public sealed class FixtureImporter(VeritaDbContext db, string demoPassword)
             log?.Invoke($"  {table,-24} {rows.Count,8:N0} rows");
         }
 
+        // The reference ships one shared set of costing versions; each hospital owns its own copy.
+        await db.Database.ExecuteSqlRawAsync(CostingVersionSplit.Sql, ct);
+
         // WITH CHECK makes SQL Server validate the deferred foreign keys and checks and mark them
         // trusted again; a fixture that breaks referential integrity fails here, loudly.
         foreach (var table in db.Model.GetEntityTypes().Select(t => t.GetTableName()).Distinct())
@@ -125,6 +128,7 @@ public sealed class FixtureImporter(VeritaDbContext db, string demoPassword)
     private static string MapString(Type type, string prop, JsonElement v)
     {
         var s = v.ValueKind == JsonValueKind.String ? v.GetString()! : v.GetRawText();
+        if (type == typeof(Encounter) && prop == nameof(Encounter.EncounterNo)) return s[(s.LastIndexOf('-') + 1)..];
         // Polymorphic references held as text: a lever's target or an audit entry's entity.
         if ((type == typeof(ScenarioLever) && prop == nameof(ScenarioLever.TargetId)) ||
             (type == typeof(AuditLog) && prop == nameof(AuditLog.EntityId)))

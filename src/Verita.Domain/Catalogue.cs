@@ -44,6 +44,15 @@ public static class Catalogue
     public static string ComponentLabel(string type) =>
         type == "OVERHEAD" ? "Allocated overhead" : ResourceTypeLabel.TryGetValue(type, out var l) ? l : type;
 
+    /// <summary>
+    /// Charge-master families seed does not bind (food, laundry). Billed lines still import as
+    /// revenue; they must not raise DQ-PROC-UNMAPPED.
+    /// </summary>
+    public static bool SkipTdabcRecipe(string? category) =>
+        !string.IsNullOrEmpty(category)
+        && (category.Contains("FOOD & BEVERAGE", StringComparison.OrdinalIgnoreCase)
+            || category.Contains("LAUNDRY", StringComparison.OrdinalIgnoreCase));
+
     /// <summary>Labour first, then what the patient consumed, then the estate, overhead last.</summary>
     public static readonly string[] ComponentDisplayOrder =
     [
@@ -102,6 +111,13 @@ public static class Catalogue
     /// <summary>FR-2.8 / FR-10.7: a published run is immutable on every path.</summary>
     public static bool IsRunImmutable(string status) => status == "PUBLISHED";
 
+    /// <summary>
+    /// A run with no results can always go. One with results can go only while its costing model
+    /// is unpublished: results under a published model are kept. A published run never goes.
+    /// </summary>
+    public static bool IsRunDeletable(string status, string versionStatus) =>
+        status is "DRAFT" or "FAILED" || (status == "RECONCILED" && versionStatus != "PUBLISHED");
+
     public sealed record RunStepDef(int No, string Code, string Name, bool MovesMoney);
 
     /// <summary>FR-2.2: the eleven stages in strict order. POOL_BUILD precedes CAPACITY (CR-3).</summary>
@@ -118,6 +134,16 @@ public static class Catalogue
         new(9, "AGGREGATE", "Package, DRG & profitability roll-up", false),
         new(10, "VARIANCE", "Variance decomposition", false),
         new(11, "RECONCILE", "GL reconciliation", false),
+    ];
+
+    /// <summary>The stages of a run costed by its costing model (Direct and Indirect costing).</summary>
+    public static readonly RunStepDef[] CostingModelRunSteps =
+    [
+        new(1, "VALIDATE", "Validate source data", false),
+        new(2, "DIRECT_COST", "Direct costing", true),
+        new(3, "INDIRECT_COST", "Indirect costing", true),
+        new(4, "ENCOUNTER_OVERHEAD", "Encounter level overheads", true),
+        new(5, "AGGREGATE", "Prepare encounter, procedure and dashboard results", true),
     ];
 
     public static readonly string[] StepStatuses = ["PENDING", "RUNNING", "SUCCESS", "WARNING", "FAILED"];
@@ -204,6 +230,7 @@ public static class Catalogue
     public static readonly string[] LeverTargetTypes = ["RESOURCE", "RESOURCE_TYPE", "ACTIVITY", "PROCEDURE", "PAYER", "DEPARTMENT", "ALL"];
     public static readonly string[] ChangeTypes = ["PCT", "ABS", "SET"];
     public static readonly string[] ScenarioStatuses = ["DRAFT", "RUNNING", "COMPLETED", "FAILED", "ARCHIVED"];
+    public static readonly string[] CostingStreams = ["DIRECT", "INDIRECT"];
 
     /// <summary>Column -> legal values, read by the database check-constraint generator.</summary>
     public static readonly IReadOnlyDictionary<string, string[]> ColumnDomains = new Dictionary<string, string[]>
@@ -239,5 +266,7 @@ public static class Catalogue
         ["ScenarioLever.LeverType"] = LeverTypes,
         ["ScenarioLever.ChangeType"] = ChangeTypes,
         ["Scenario.Status"] = ScenarioStatuses,
+        ["ProcedureTypeCosting.Stream"] = CostingStreams,
+        ["ProcedureMargin.Stream"] = CostingStreams,
     };
 }

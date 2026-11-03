@@ -42,8 +42,23 @@ public sealed class RunsController(RunService runs, RunQueue queue, VeritaDbCont
         if (!p.HasHospital(req.Hospital)) throw AppError.OutOfScope($"Hospital {req.Hospital}");
         var hospital = await db.Hospitals.FirstOrDefaultAsync(h => h.Code == req.Hospital, ct) ?? throw AppError.NotFound($"Hospital {req.Hospital}");
         var period = await db.Periods.FirstOrDefaultAsync(x => x.Code == req.Period, ct) ?? throw AppError.NotFound($"Period {req.Period}");
+        if (period.HospitalId is { } hid && hid != hospital.Id)
+            throw AppError.Invalid($"Period {period.Code} belongs to another hospital.");
         var run = await runs.CreateAsync(hospital.Id, period.Id, p.Email, req.Name, ct: ct);
         return Created($"/api/v1/runs/{run.Id}", (await Q.RunsAsync(p, ct)).First(r => r.Id == run.Id));
+    }
+
+    public sealed record AppliedVersion(string? Code, string? Name, string? Status);
+
+    /// <summary>The costing model a new run for this period would be calculated under.</summary>
+    [HttpGet("runs/applied-version")]
+    [Authorize(Policy = "run.execute")]
+    public async Task<AppliedVersion> Applied([FromQuery] string hospital, [FromQuery] string period, CancellationToken ct)
+    {
+        var row = await db.Periods.AsNoTracking().FirstOrDefaultAsync(x => x.Code == period, ct) ?? throw AppError.NotFound($"Period {period}");
+        var owner = await db.Hospitals.AsNoTracking().FirstOrDefaultAsync(x => x.Code == hospital, ct) ?? throw AppError.NotFound($"Hospital {hospital}");
+        var version = await RunService.AppliedVersionAsync(db, owner.Id, row, ct);
+        return new AppliedVersion(version?.Code, version?.Name, version?.Status);
     }
 
     public sealed record ExecuteRequest(bool Force = false);
@@ -56,8 +71,33 @@ public sealed class RunsController(RunService runs, RunQueue queue, VeritaDbCont
         var p = await Me();
         var s = await Q.Scope(p, run, null, null, ct);
         if (Catalogue.IsRunImmutable(s.Run.Status)) throw AppError.RunImmutable(s.Run.Code);
+        if (s.Run.Status is "VALIDATING" or "VALIDATED" or "CALCULATING" or "CALCULATED")
+            throw AppError.Conflict("RUN_IN_FLIGHT", $"{s.Run.Code} is already running.");
+        await db.CalculationRuns.Where(r => r.Id == s.Run.Id).ExecuteUpdateAsync(x => x
+            .SetProperty(r => r.Status, "VALIDATING")
+            .SetProperty(r => r.FinishedAt, (DateTime?)null)
+            .SetProperty(r => r.ErrorMessage, (string?)null), ct);
         await queue.EnqueueAsync(new RunJob(s.Run.Id, req.Force, p.Email));
-        return Accepted($"/api/v1/runs/{s.Run.Id}", new { runId = s.Run.Id, status = "QUEUED", poll = $"/api/v1/runs/{s.Run.Id}" });
+        return Accepted($"/api/v1/runs/{s.Run.Id}", new { runId = s.Run.Id, status = "VALIDATING", poll = $"/api/v1/runs/{s.Run.Id}" });
+    }
+
+    /// <summary>Remove a DRAFT or FAILED run. Same permission as creating one; reconciled or published runs stay.</summary>
+    [HttpDelete("runs/{run}")]
+    [Authorize(Policy = "run.execute")]
+    public async Task<IActionResult> Delete(string run, CancellationToken ct)
+    {
+        var p = await Me();
+        var s = await Q.Scope(p, run, null, null, ct);
+        await runs.DeleteDraftAsync(s.Run.Id, p, ct);
+        return NoContent();
+    }
+
+    [HttpDelete("periods/{id:guid}")]
+    [Authorize(Policy = "masterdata.edit")]
+    public async Task<IActionResult> DeletePeriod(Guid id, CancellationToken ct)
+    {
+        await runs.DeletePeriodAsync(id, await Me(), ct);
+        return NoContent();
     }
 
     public sealed record TransitionRequest(string To);

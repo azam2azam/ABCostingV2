@@ -1239,6 +1239,7 @@ export interface paths {
                     departmentId?: string;
                     drgId?: string;
                     packageId?: string;
+                    billedPackageId?: string;
                     payerId?: string;
                 };
                 header?: never;
@@ -2233,6 +2234,7 @@ export interface components {
             run: string | null;
             runStatus: string | null;
             costingVersion: string | null;
+            costingVersionStatus: string | null;
             period: string | null;
             hospital: string | null;
             hospitalName: string | null;
@@ -2476,12 +2478,26 @@ export interface components {
             periods: components["schemas"]["ReadQueriesPeriodDto"][];
             runs: components["schemas"]["ReadQueriesRunListItem"][];
         };
+        ReadQueriesCostCentreBilledRow: {
+            /** Format: uuid */
+            id: string;
+            code: string;
+            name: string;
+            /** Format: decimal */
+            unitPrice: string;
+            /** Format: decimal */
+            cases: string;
+            /** Format: decimal */
+            revenue: string;
+            /** Format: decimal */
+            unitCost: string;
+            /** Format: decimal */
+            totalCost: string;
+        };
         ReadQueriesCostCentreDetail: {
             costCentre: components["schemas"]["ReadQueriesCostCentreRow"];
-            inbound: components["schemas"]["ReadQueriesAllocationDto"][];
-            outbound: components["schemas"]["ReadQueriesAllocationDto"][];
-            pools: components["schemas"]["ReadQueriesPoolRow"][];
-            activities: components["schemas"]["ReadQueriesActivityRow"][];
+            packages: components["schemas"]["ReadQueriesCostCentreBilledRow"][];
+            procedures: components["schemas"]["ReadQueriesCostCentreBilledRow"][];
         };
         ReadQueriesCostCentreRow: {
             /** Format: uuid */
@@ -2504,10 +2520,17 @@ export interface components {
             isClosed: boolean;
             /** Format: decimal */
             glPosted: string;
+            /** Format: int32 */
+            cases: number;
+            /** Format: decimal */
+            revenue: string;
+            /** Format: decimal */
+            cost: string;
         };
         ReadQueriesCostingModelsDto: {
             versions: components["schemas"]["ReadQueriesVersionDto"][];
-            diffs: components["schemas"]["ReadQueriesVersionDiff"][];
+            directDiffs: components["schemas"]["ReadQueriesVersionDiff"][];
+            indirectDiffs: components["schemas"]["ReadQueriesVersionDiff"][];
             approvals: components["schemas"]["ReadQueriesApprovalDto"][];
         };
         ReadQueriesCrossHospital: {
@@ -2526,16 +2549,7 @@ export interface components {
         };
         ReadQueriesDashboardDto: {
             headline: components["schemas"]["ReadQueriesTile"][];
-            serviceLines: components["schemas"]["ReadQueriesBar"][];
-            procedures: components["schemas"]["ReadQueriesBar"][];
-            variances: components["schemas"]["ReadQueriesBar"][];
-            payers: components["schemas"]["ReadQueriesBar"][];
-            supplyCost: components["schemas"]["ReadQueriesBar"][];
-            waste: components["schemas"]["ReadQueriesBar"][];
-            utilisation: components["schemas"]["ReadQueriesBar"][];
-            residuals: components["schemas"]["ReadQueriesBar"][];
             costNature: components["schemas"]["ReadQueriesBar"][];
-            narrative: string | null;
         };
         ReadQueriesDiffLine: {
             procedure: string;
@@ -2639,6 +2653,7 @@ export interface components {
             services: components["schemas"]["ReadQueriesServiceDto"][];
             transactions: components["schemas"]["ReadQueriesSourceTxn"][];
             revenue: components["schemas"]["ReadQueriesRevenueDto"][];
+            recipes: components["schemas"]["ReadQueriesProcedureRecipe"][];
             /** Format: decimal */
             weightedActivityUnits: string;
             provenance: components["schemas"]["ReadQueriesProvenance"];
@@ -2707,6 +2722,11 @@ export interface components {
             currency: string;
             /** Format: int32 */
             bedCount: number;
+            hisSetupId?: string | null;
+            /** Format: int32 */
+            hisProjectId?: number | null;
+            hasDrgs: boolean;
+            usesCostingModel: boolean;
         };
         ReadQueriesIssueDto: {
             /** Format: uuid */
@@ -2761,12 +2781,25 @@ export interface components {
             standardUnit: string;
             /** Format: decimal */
             standardLine: string;
+            code: string;
+            category: string;
+            procType: string;
+            /** Format: decimal */
+            price: string;
+            /** True when the procedure category is MEDICINE (HIS IsMedicine). */
+            isMedicine: boolean;
+            /** Format: decimal */
+            cost: string;
         };
         ReadQueriesPackageDetail: {
             package: components["schemas"]["ReadQueriesPackageRow"];
             components: components["schemas"]["ReadQueriesPackageComponentDto"][];
             encounters: components["schemas"]["ReadQueriesEncounterRow"][];
             explanation: string;
+            /** Format: int32 */
+            encounterCount: number;
+            /** Format: decimal */
+            averageEncounterFee: string | null;
         };
         ReadQueriesPackageRow: {
             /** Format: uuid */
@@ -2776,6 +2809,8 @@ export interface components {
             description: string;
             /** Format: decimal */
             price: string;
+            /** Format: decimal */
+            compositionPrice: string;
             /** Format: int32 */
             coveredLOS: number;
             /** Format: int32 */
@@ -2798,6 +2833,11 @@ export interface components {
             standardPerCase: string;
             /** Format: decimal */
             actualPerCase: string;
+            procType: string;
+            /** Format: decimal */
+            unitCost: string;
+            /** Format: decimal */
+            totalCost: string;
         };
         ReadQueriesPeriodDto: {
             /** Format: uuid */
@@ -2810,6 +2850,7 @@ export interface components {
             /** Format: int32 */
             days: number;
             status: string;
+            hospital?: string | null;
         };
         ReadQueriesPoolDetail: {
             pool: components["schemas"]["ReadQueriesPoolRow"];
@@ -2843,6 +2884,18 @@ export interface components {
             /** Format: int32 */
             resources: number;
         };
+        ReadQueriesContainingPackage: {
+            /** Format: uuid */
+            id: string;
+            code: string;
+            name: string;
+            /** Format: decimal */
+            quantity: string;
+            /** Format: decimal */
+            price: string;
+            /** Format: int32 */
+            cases: number;
+        };
         ReadQueriesProcedureDetail: {
             procedure: components["schemas"]["ReadQueriesProcedureRow"];
             standardComponents: components["schemas"]["ReadQueriesComponentDto"][];
@@ -2854,6 +2907,13 @@ export interface components {
             sampleTransactions: components["schemas"]["ReadQueriesSourceTxn"][];
             acrossHospitals: components["schemas"]["ReadQueriesCrossHospital"][];
             provenance: components["schemas"]["ReadQueriesProvenance"];
+            packages: components["schemas"]["ReadQueriesContainingPackage"][];
+            recipe: components["schemas"]["ReadQueriesRecipeLineDto"][];
+        };
+        ReadQueriesProcedureRecipe: {
+            /** Format: uuid */
+            procedureId: string;
+            chain: components["schemas"]["ReadQueriesChainActivity"][];
         };
         ReadQueriesProcedureRow: {
             /** Format: uuid */
@@ -2881,6 +2941,10 @@ export interface components {
             variancePct: string;
             /** Format: decimal */
             listPrice: string;
+            /** Format: decimal */
+            unitCost: string;
+            /** Format: decimal */
+            totalCost: string;
             state: string;
         };
         ReadQueriesProcedureUse: {
@@ -3021,12 +3085,23 @@ export interface components {
             explanation: string;
             detail: unknown;
         };
+        ReadQueriesProviderShare: {
+            /** Format: uuid */
+            id: string;
+            code: string;
+            name: string;
+            department: string;
+            specialty: string;
+            grade: string;
+            /** Format: int32 */
+            billedLines: number;
+        };
         ReadQueriesResourceDetail: {
             resource: components["schemas"]["ReadQueriesResourceRow"];
             rates: components["schemas"]["ReadQueriesRateDto"][];
             capacity: components["schemas"]["ReadQueriesCapacityDto2"][];
             unitCost: components["schemas"]["ReadQueriesCapacityRow"];
-            providers: string[];
+            providers: components["schemas"]["ReadQueriesProviderShare"][];
             usedBy: components["schemas"]["ReadQueriesRecipeUse"][];
         };
         ReadQueriesResourceRow: {
@@ -3051,6 +3126,8 @@ export interface components {
             costOfUnused: string;
             /** Format: decimal */
             usedQuantity: string;
+            /** Format: int32 */
+            physicians: number;
         };
         ReadQueriesRevenueDto: {
             procedure: string | null;
@@ -3138,6 +3215,8 @@ export interface components {
             publishedAt: string | null;
             errorMessage: string | null;
             metrics: unknown;
+            currentStep: string | null;
+            costingVersionStatus: string;
         };
         ReadQueriesScenarioDto: {
             /** Format: uuid */
@@ -3335,6 +3414,7 @@ export interface components {
             definitions: number;
             /** Format: int32 */
             runs: number;
+            hospital: string;
         };
         RunsControllerCreateRunRequest: {
             hospital: string;
@@ -3382,6 +3462,7 @@ export interface components {
             options: string[] | null;
             refEntity: string | null;
             description: string | null;
+            label?: string | null;
         };
         "Verita.Infrastructure.DataHub.EntityDescription": {
             name: string;

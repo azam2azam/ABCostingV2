@@ -1,6 +1,6 @@
-import { Routes } from '@angular/router';
+import { CanActivateFn, Routes } from '@angular/router';
 import { authGuard } from './core/auth';
-import { moduleGuard, runGuard } from './core/context';
+import { drgGuard, moduleGuard, runGuard } from './core/context';
 import { Forbidden, Login } from './layout/login';
 import { Shell } from './layout/shell';
 
@@ -12,8 +12,8 @@ const exec = () => import('./features/execution');
 const analysis = () => import('./features/analysis');
 const data = () => import('./features/data');
 
-const r = (path: string, load: () => Promise<any>, name: string, runScoped = true) => ({
-  path, canActivate: runScoped ? [moduleGuard, runGuard] : [moduleGuard],
+const r = (path: string, load: () => Promise<any>, name: string, _runScoped = true, extra: CanActivateFn[] = []) => ({
+  path, canActivate: [moduleGuard, runGuard, ...extra],
   loadComponent: () => load().then(m => m[name]),
 });
 
@@ -24,26 +24,22 @@ export const routes: Routes = [
     children: [
       { path: '', pathMatch: 'full', redirectTo: 'dashboard' },
       r('dashboard', overview, 'Dashboard'),
-      r('profitability', overview, 'Profitability'),
-      r('variance', overview, 'Variance'), r('variance/:id', overview, 'VarianceDetail'),
-      r('capacity', overview, 'Capacity'),
+      { path: 'profitability', redirectTo: 'dashboard' },
       r('cost-centres', model, 'CostCentres'), r('cost-centres/:id', model, 'CostCentreDetail'),
-      r('cost-pools', model, 'CostPools'), r('cost-pools/:id', model, 'CostPoolDetail'),
       r('resources', model, 'Resources'), r('resources/:id', model, 'ResourceDetail'),
-      r('cost-drivers', model, 'Drivers'), r('cost-drivers/:id', model, 'DriverDetail'),
       r('activities', model, 'Activities'), r('activities/:id', model, 'ActivityDetail'),
       r('procedures', outputs, 'Procedures'), r('procedures/:id', outputs, 'ProcedureDetail'),
       r('packages', outputs, 'Packages'), r('packages/:id', outputs, 'PackageDetail'),
-      r('drgs', outputs, 'Drgs'), r('drgs/:id', outputs, 'DrgDetail'),
+      r('drgs', outputs, 'Drgs', true, [drgGuard]), r('drgs/:id', outputs, 'DrgDetail', true, [drgGuard]),
       r('costing-models', exec, 'CostingModels', false),
-      r('allocation-rules', exec, 'AllocationRules'),
+      r('direct-costing', exec, 'DirectCosting'),
+      r('indirect-costing', exec, 'IndirectCosting'),
+      r('periods', exec, 'Periods', false),
+      { path: 'procedure-costing', redirectTo: 'direct-costing' },
       r('runs', exec, 'Runs'), r('runs/:id', exec, 'RunDetail'),
-      r('reconciliation', exec, 'Reconciliation'),
-      r('patient-costing', exec, 'PatientCosting'), r('patient-costing/:id', exec, 'EncounterDetail'),
-      r('simulation', analysis, 'Simulation'), r('simulation/:id', analysis, 'ScenarioDetail'),
+      r('patient-encounters', exec, 'PatientEncounters'), r('patient-encounters/:id', exec, 'EncounterDetail'),
+      { path: 'patient-costing', redirectTo: 'patient-encounters' }, { path: 'patient-costing/:id', redirectTo: 'patient-encounters/:id' },
       r('reports', analysis, 'Reports'),
-      r('data-quality', analysis, 'DataQuality'),
-      r('governance', analysis, 'Governance', false),
       r('audit', analysis, 'Audit', false),
       r('data-entry', data, 'DataEntry', false),
       r('data-import', data, 'DataImport', false),

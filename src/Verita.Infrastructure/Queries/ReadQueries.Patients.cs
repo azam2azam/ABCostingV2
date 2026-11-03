@@ -15,10 +15,13 @@ public sealed partial class ReadQueries
         public string Sort { get; init; } = "total";
         public bool Desc { get; init; } = true;
         public string? Search { get; init; }
+        public Guid? EncounterId { get; init; }
         public string? EncType { get; init; }
         public Guid? DepartmentId { get; init; }
         public Guid? DrgId { get; init; }
         public Guid? PackageId { get; init; }
+        /// <summary>Encounters that billed this package as an invoice procedure (HIS IsPackage line), not Encounter.PackageId.</summary>
+        public Guid? BilledPackageId { get; init; }
         public Guid? PayerId { get; init; }
     }
 
@@ -49,10 +52,20 @@ public sealed partial class ReadQueries
                                  Package = pk != null ? pk.Name : null, Physician = pr != null ? pr.Name : null };
         if (allowedDepts is not null) query = query.Where(x => allowedDepts.Contains(x.e.DepartmentId));
         if (!string.IsNullOrWhiteSpace(q.Search)) query = query.Where(x => x.e.EncounterNo.Contains(q.Search));
+        if (q.EncounterId is { } encounterId) query = query.Where(x => x.e.Id == encounterId);
         if (!string.IsNullOrWhiteSpace(q.EncType)) query = query.Where(x => x.e.EncType == q.EncType);
         if (q.DepartmentId is { } dep) query = query.Where(x => x.e.DepartmentId == dep);
         if (q.DrgId is { } drg) query = query.Where(x => x.e.DrgId == drg);
         if (q.PackageId is { } pkg) query = query.Where(x => x.e.PackageId == pkg);
+        if (q.BilledPackageId is { } billedPkg)
+        {
+            var billedEncounters = from es in db.EncounterServices.AsNoTracking()
+                                   join pr in db.Procedures.AsNoTracking() on es.ProcedureId equals pr.Id
+                                   join pk in db.Packages.AsNoTracking() on new { pr.HospitalId, pr.Code } equals new { pk.HospitalId, pk.Code }
+                                   where pk.Id == billedPkg
+                                   select es.EncounterId;
+            query = query.Where(x => billedEncounters.Contains(x.e.Id));
+        }
         if (q.PayerId is { } pay) query = query.Where(x => x.e.PayerId == pay);
 
         query = (q.Sort, q.Desc) switch
@@ -86,8 +99,9 @@ public sealed partial class ReadQueries
     public sealed record ServiceDto(Guid Id, string Procedure, Guid ProcedureId, decimal Quantity, string CostCentre, string? Physician, DateTime PerformedAt,
         string SourceSystem, string SourceRef, decimal StandardUnit);
     public sealed record RevenueDto(string? Procedure, string Payer, decimal Gross, decimal Discount, decimal Net, DateTime PostedAt, string SourceSystem, string SourceRef);
+    public sealed record ProcedureRecipe(Guid ProcedureId, ChainActivity[] Chain);
     public sealed record EncounterDetail(EncounterRow Encounter, ComponentDto[] Components, ServiceDto[] Services, SourceTxn[] Transactions,
-        RevenueDto[] Revenue, decimal WeightedActivityUnits, Provenance Provenance);
+        RevenueDto[] Revenue, ProcedureRecipe[] Recipes, decimal WeightedActivityUnits, Provenance Provenance);
 
     public async Task<EncounterDetail> EncounterAsync(ScopedRun s, Principal p, Guid id, CancellationToken ct)
     {
@@ -98,7 +112,7 @@ public sealed partial class ReadQueries
         var dept = await db.Departments.AsNoTracking().FirstAsync(d => d.Id == enc.DepartmentId, ct);
         if (!p.HasDepartment(dept.CatalogCode)) throw AppError.OutOfScope($"Encounter {enc.EncounterNo}");
 
-        var row = (await EncountersAsync(s, p, new EncounterQuery { Search = enc.EncounterNo, PageSize = 5 }, ct, auditPhi: false)).Rows.FirstOrDefault(r => r.Id == id)
+        var row = (await EncountersAsync(s, p, new EncounterQuery { EncounterId = id, PageSize = 5 }, ct, auditPhi: false)).Rows.FirstOrDefault(r => r.Id == id)
             ?? throw AppError.NotCosted($"Encounter {enc.EncounterNo} was not costed in run {s.Run.Code}.");
         var comps = await db.CostComponents.AsNoTracking().Where(c => c.RunId == s.Run.Id && c.Scope == "ENCOUNTER" && c.ScopeId == id).ToListAsync(ct);
         var std = await db.ProcedureCosts.AsNoTracking().Where(c => c.RunId == s.Run.Id && c.CostType == "STANDARD").ToDictionaryAsync(c => c.ProcedureId, c => c.UnitCost, ct);
@@ -127,8 +141,50 @@ public sealed partial class ReadQueries
                      select new RevenueDto(pr != null ? pr.Name : null, py.Name, r.GrossAmount, r.Discount, r.NetAmount, r.PostedAt, r.SourceSystem, r.SourceRef)).ToArrayAsync(ct)
             : [];
         var wau = await db.EncounterCosts.AsNoTracking().Where(c => c.RunId == s.Run.Id && c.EncounterId == id).Select(c => c.WeightedActivityUnits).FirstOrDefaultAsync(ct);
+        var recipes = await RecipesForAsync(s, p, services.Select(x => x.ProcedureId).Distinct().ToList(), ct);
+        var recipeByProc = recipes.ToDictionary(r => r.ProcedureId, r => r.Chain);
+        decimal recipeStd = 0m;
+        foreach (var sv in services)
+        {
+            if (!recipeByProc.TryGetValue(sv.ProcedureId, out var chain) || chain.Length == 0) continue;
+            foreach (var a in chain)
+            foreach (var res in a.Resources)
+                if (res.LineCost is { } lc) recipeStd += lc * a.Quantity * sv.Quantity;
+        }
+        row = row with { StandardCost = Money.R4(recipeStd) };
         if (p.Can("phi.view"))
             await audit.WriteAsync(p, "VIEW_PHI", "Encounter", id.ToString(), enc.EncounterNo, metadata: new { run = s.Run.Code }, ct: ct);
-        return new EncounterDetail(row, Components(p, comps), services, txns, revenue, wau, Prov(s));
+        return new EncounterDetail(row, Components(p, comps), services, txns, revenue, recipes, wau, Prov(s));
+    }
+
+    /// <summary>
+    /// Procedure → activity → resource under the run's costing version, one query per hop.
+    /// Quantities are per billed procedure unit; the encounter UI scales by billed qty.
+    /// </summary>
+    private async Task<ProcedureRecipe[]> RecipesForAsync(ScopedRun s, Principal p, IReadOnlyCollection<Guid> procedureIds, CancellationToken ct)
+    {
+        if (procedureIds.Count == 0) return [];
+        var lines = await (from l in db.ProcedureActivityLines.AsNoTracking()
+                           join d in db.CostingDefinitions on l.DefinitionId equals d.Id
+                           join a in db.Activities on l.ActivityId equals a.Id
+                           join c in db.CostCenters on a.CostCenterId equals c.Id
+                           where d.CostingVersionId == s.Version.Id && procedureIds.Contains(d.ProcedureId)
+                           select new { d.ProcedureId, a.Id, a.Name, l.Quantity, Cc = c.Name }).ToListAsync(ct);
+        if (lines.Count == 0) return [];
+        var actIds = lines.Select(l => l.Id).Distinct().ToList();
+        var units = await db.ResourceUnitCosts.AsNoTracking().Where(u => u.RunId == s.Run.Id).ToDictionaryAsync(u => u.ResourceId, u => u.UnitCost, ct);
+        var recipeRows = await (from ar in db.ActivityResources.AsNoTracking()
+                                join r in db.Resources on ar.ResourceId equals r.Id
+                                where actIds.Contains(ar.ActivityId)
+                                select new { ar.ActivityId, r.Id, r.Name, r.ResourceType, ar.StdQuantity, ar.Uom }).ToListAsync(ct);
+        var recipeByAct = recipeRows.GroupBy(x => x.ActivityId).ToDictionary(g => g.Key, g => g.Select(x =>
+        {
+            var hasRate = units.TryGetValue(x.Id, out var rate);
+            var masked = Masked(p, x.ResourceType, rate);
+            return new RecipeLineDto(x.Id, x.Name, x.ResourceType, x.StdQuantity, x.Uom, hasRate ? masked : null,
+                hasRate && masked is not null ? Money.R4(x.StdQuantity * rate) : null);
+        }).ToArray());
+        return lines.GroupBy(l => l.ProcedureId).Select(g => new ProcedureRecipe(g.Key, g.Select(l =>
+            new ChainActivity(l.Id, l.Name, l.Quantity, l.Cc, 0, [], recipeByAct.GetValueOrDefault(l.Id) ?? [])).ToArray())).ToArray();
     }
 }

@@ -142,7 +142,7 @@ These are too large to copy in full. The extractor always takes `@From` / `@To` 
 | `INP_DischargeSummary` | 291,509 | LOS |
 | `INP_OTReservation` | 216,169 | Surgery flag + OR minutes |
 | `INP_OTProcedureMapping` | 156,197 | Surgery procedures |
-| `HIS_ReturnDetail` / `HIS_RefundDetail` | 2,228,459 / 571,933 | Negative revenue |
+| `HIS_ReturnDetail` / `HIS_RefundDetail` | 2,228,459 / 571,933 | Returns: planned as negative revenue. Refunds: `RefundTransaction`, not revenue |
 | `HIS_InvoiceCreditDetail` | 1,508 | Credit notes (small) |
 
 ### 3.3 Empty or unusable — drop from the previous mapping
@@ -307,16 +307,18 @@ Only rows whose **clinical/invoice date** falls in `[From, To)`.
 | `32_Patient.csv` | Distinct patients on the period’s OP + IP + ER encounters. `mrn = RYN-UAT-{PatientType}-{PatientID}` (PatientType is in the HIS PK). `birthYear` only, national ID masked. |
 | `33_Encounter.csv` | Union: closed OP appointments, IP admissions **admitted** in the month (VERITA rule: month of admit), ER assessments. |
 | `34_EncounterService.csv` | Invoice detail lines in the month whose header has AppointmentNo or AdmissionNo; skip medicine procedures; explode package components if header is a package. `sourceRef = INV-{TransactionType}-{InvoiceNo}-{LineItemNo}` |
-| `36_RevenueTransaction.csv` | Same lines: gross / discount / net from price × qty and shares. `sourceRef = REV-{TransactionType}-{InvoiceNo}-{LineItemNo}`. Add refund/return/credit as negative lines. |
+| `37_RefundTransaction.csv` | `HIS_RefundMain` + `HIS_RefundDetail`, all refunds dated in the period with status, approval, cancellation and original invoice. Not revenue. |
+| `38_InvoicePackageItem.csv` | `HIS_InvoicePackageItem` on the period's invoices, as HIS holds it. For reference: not services, not revenue, and `Encounter.packageCode` stays blank, because filling it would change package costing. |
+| `36_RevenueTransaction.csv` | Also carries the line's `Status`, `IsPerformed`, `PerformType`, `IsReturned`, `IsRefunded`, `RefundedAmount`. Same lines: gross / discount / net from price × qty and shares. `sourceRef = REV-{TransactionType}-{InvoiceNo}-{LineItemNo}`. Add refund/return/credit as negative lines. Also, for reference only: `HisUnitPrice`, `HisQuantity`, `DiscountType`, `HisDiscountAmount`, `WaivedAmount`, `WaiverId`, `PatientShare`, `CompanyShare`, tax, outlier, claimed, settled and rejected amounts, `IsZeroPrice` and the package and DRG flags. No calculation reads them. |
 | `35_ActivityTransaction.csv` | **Phase 2 of facts.** First month can omit this file (standard costing still works if recipes exist). When included: OR minutes from `INP_OTReservation`, bed-day rows from IP LOS / transfers, floor consumption quantities. |
 
 **Encounter numbers:**
 
 | Type | `encounterNo` | `encType` |
 |---|---|---|
-| OP | `RYN-UAT-OP-{AppointmentNo}` | `OP` |
-| IP | `RYN-UAT-IP-{AdmissionNo}` | `IP` |
-| ER | `RYN-UAT-ER-{AssessmentNo}` | `ER` |
+| OP | `{AppointmentNo}` | `OP` |
+| IP | `{AdmissionNo}` | `IP` |
+| ER | `{AppointmentNo}` when linked (`INP_ERAssessment.AppointmentID`, else through `InvoiceNo`), otherwise `{AssessmentNo}`; `sourceAssessmentNo` keeps the assessment number. The row is written in every monthly pack that holds the assessment, the appointment or an invoice on it. | `ER` |
 
 `payerCode`: invoice/admission `CompanyID` → `PAY-{id}`, else `PAY-SELF`.  
 `departmentCode`: clinic / admitting clinic / ER clinic as in the mapping doc.  

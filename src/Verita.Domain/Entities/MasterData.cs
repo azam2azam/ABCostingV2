@@ -33,6 +33,10 @@ public class Hospital
     public string Currency { get; set; } = "SAR";
     public int BedCount { get; set; }
     public bool IsActive { get; set; } = true;
+    /// <summary>HISGENX SetupID. Not unique: the same HIS tenant can map to more than one VERITA hospital.</summary>
+    public string? HisSetupId { get; set; }
+    /// <summary>HISGENX ProjectID (branch). Paired with HisSetupId; not unique.</summary>
+    public int? HisProjectId { get; set; }
     public DateTime CreatedAt { get; set; }
 }
 
@@ -99,6 +103,8 @@ public class Period
     public DateOnly EndDate { get; set; }
     public int Days { get; set; }
     public string Status { get; set; } = "OPEN";
+    /// <summary>Null = shared calendar. Set when a hospital uses a window that is not a calendar month.</summary>
+    public Guid? HospitalId { get; set; }
 }
 
 public class GLPosting
@@ -226,7 +232,8 @@ public class ResourceCapacity : IEffectiveDated
 public class Provider
 {
     public Guid Id { get; set; }
-    public Guid ResourceId { get; set; }
+    /// <summary>The role resource carrying the rate; null is a physician not assigned to one.</summary>
+    public Guid? ResourceId { get; set; }
     public Guid DepartmentId { get; set; }
     public string Code { get; set; } = "";
     public string Name { get; set; } = "";
@@ -301,9 +308,44 @@ public class ProcedureRate : IEffectiveDated
     public DateOnly? EffectiveTo { get; set; }
 }
 
+/// <summary>Configured margin on a procedure/activity type for one hospital, costing version and stream.</summary>
+public class ProcedureTypeCosting
+{
+    public Guid Id { get; set; }
+    public Guid HospitalId { get; set; }
+    public Guid CostingVersionId { get; set; }
+    public string ProcType { get; set; } = "";
+    public string Stream { get; set; } = "DIRECT";
+    [Share] public decimal MarginPct { get; set; }
+}
+
+/// <summary>Configured margin on one procedure/activity; overrides the type margin when set.</summary>
+public class ProcedureMargin
+{
+    public Guid Id { get; set; }
+    public Guid HospitalId { get; set; }
+    public Guid CostingVersionId { get; set; }
+    public Guid ProcedureId { get; set; }
+    public string Stream { get; set; } = "DIRECT";
+    [Share] public decimal MarginPct { get; set; }
+}
+
+/// <summary>Indirect overhead applied to every encounter billed at a cost centre.</summary>
+public class EncounterOverhead
+{
+    public Guid Id { get; set; }
+    public Guid HospitalId { get; set; }
+    public Guid CostingVersionId { get; set; }
+    public Guid CostCenterId { get; set; }
+    public string Description { get; set; } = "";
+    [Share] public decimal OverheadPct { get; set; }
+    public decimal OverheadAmount { get; set; }
+}
+
 public class CostingVersion : IEffectiveDated
 {
     public Guid Id { get; set; }
+    public Guid HospitalId { get; set; }
     public string Code { get; set; } = "";
     public string Name { get; set; } = "";
     public string Description { get; set; } = "";

@@ -528,9 +528,9 @@ Build **one encounter row per episode**. Suggested `encounterNo` (must be unique
 
 | Spine | `encounterNo` | `encType` | `admitAt` / `dischargeAt` |
 |---|---|---|---|
-| OP | `{Hosp}-OP-{AppointmentNo}` | `OP` | `ActualVisitStartTime` / `EndTime`, else appointment date + `StartTime`/`EndTime` |
-| ER | `{Hosp}-ER-{AssessmentNo}` | `ER` | `ArrivalTime` / `DischargeTime` or `SignIn`/`SignOut` |
-| IP | `{Hosp}-IP-{AdmissionNo}` | `IP` | `AdmissionDate` / `DischargeDate` |
+| OP | `{AppointmentNo}` | `OP` | `ActualVisitStartTime` / `EndTime`, else appointment date + `StartTime`/`EndTime` |
+| ER | `{AppointmentNo}` when linked (`INP_ERAssessment.AppointmentID`, else through `InvoiceNo`), otherwise `{AssessmentNo}`; `sourceAssessmentNo` keeps the assessment number | `ER` | `ArrivalTime` / `DischargeTime` or `SignIn`/`SignOut` |
+| IP | `{AdmissionNo}` | `IP` | `AdmissionDate` / `DischargeDate` |
 | Day case | Same as IP or OP depending on `AdmissionType` | `DAYCASE` | Confirm flag on live data |
 
 | VERITA column | HIS |
@@ -593,7 +593,7 @@ Include `HIS_InvoicePackageItem` exploded components if the header is a package 
 | `sourceSystem` | `VIDA-HIS` (or `CYCLUS-RCM` if a downstream RCM is still in play — here HIS **is** the bill) |
 | `sourceRef` | Same as invoice line, prefix `REV-` if you also store the service with the raw key |
 
-Credit notes / refunds: `HIS_InvoiceCreditDetail`, `HIS_RefundDetail`, `HIS_ReturnDetail` as **negative** revenue with their own `sourceRef`. Do not silently net them unless finance says so.
+Refunds (`HIS_RefundMain` + `HIS_RefundDetail`) load to their own table, `RefundTransaction`, from `37_RefundTransaction.csv`: every refund in the period with its status, approval, cancellation, original invoice and line. They are not part of revenue. Importing one removes the same `REF-…` line if an older pack loaded it as negative revenue. Planned, not extracted yet: `HIS_InvoiceCreditDetail`, `HIS_ReturnDetail` as **negative** revenue with their own `sourceRef`. Do not silently net them unless finance says so.
 
 Claims (`HIS_Claim*`, `HIS_Settlement*`) are **cash collection**, not the revenue fact VERITA needs for profitability. Use settlement later for a collections view, not for `RevenueTransaction.netAmount`.
 
@@ -607,6 +607,7 @@ Every row needs: encounter, optional service `sourceRef`, `activityCode`, `resou
 |---|---|---|---|
 | OP visit with actual start/end | Minutes | Physician role (+ nurse if known) | `APPT-{AppointmentNo}-CONSULT-PHYS` |
 | ER assessment in/out | Minutes | ER physician / nurse | `ER-{AssessmentNo}-TRIAGE-NURSE` |
+| OP visit linked to an ER assessment | — | — | Not written: the ER rows above measure that visit |
 | `INP_ORLogInfo` surgery start/end | Minutes | OR room + surgeon + anaesthetist + scrub + circulating | `OR-{ReservationID}-SURG-{role}` |
 | Anaesthesia start/end | Minutes | Anaesthetist resource | `OR-{ReservationID}-ANES` |
 | `INP_BedCensus` / transfer duration | Days or minutes | Ward `ROOM` + nurse resource | `BED-{AdmissionNo}-{Ward}-{Date}` |

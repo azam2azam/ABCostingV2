@@ -11,16 +11,27 @@ function clean(p: Params): Record<string, string> {
 }
 
 /**
- * A run-scoped read that re-fetches whenever the run in the URL changes. Signals hold component
- * state; HTTP stays observable underneath (NG-2).
+ * A scoped read that re-fetches whenever hospital or period in the URL changes. Signals hold
+ * component state; HTTP stays observable underneath (NG-2).
  */
 export function runResource<T>(path: () => string | null | undefined, extra?: () => Params) {
   const ctx = inject(RunContext);
   return httpResource<Envelope<T>>(() => {
-    const run = ctx.runParam();
+    const scope = ctx.scopeParams();
     const p = path();
-    if (!run || !p) return undefined;
-    return { url: `${apiV1}/${p}`, params: clean({ ...(extra?.() ?? {}), run }) };
+    if (!scope.hospital || !scope.period || !p) return undefined;
+    return { url: `${apiV1}/${p}`, params: clean({ ...(extra?.() ?? {}), ...scope }) };
+  });
+}
+
+/** A catalogue read: needs only the hospital. The period, when known, adds a run's calculated figures. */
+export function catalogueResource<T>(path: () => string | null | undefined, extra?: () => Params) {
+  const ctx = inject(RunContext);
+  return httpResource<Envelope<T>>(() => {
+    const hospital = ctx.hospitalParam();
+    const p = path();
+    if (!hospital || !p) return undefined;
+    return { url: `${apiV1}/${p}`, params: clean({ ...(extra?.() ?? {}), hospital, period: ctx.periodParam() }) };
   });
 }
 

@@ -3,6 +3,7 @@ using System.Text;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Verita.Application;
+using Verita.Infrastructure.CostingSeed;
 using Verita.Infrastructure.DataHub;
 
 namespace Verita.Api.Controllers;
@@ -12,9 +13,15 @@ namespace Verita.Api.Controllers;
 /// Every table in <see cref="EntitySpecs"/> gets a template, an upload, a list and a form.
 /// </summary>
 [Route("api/v1/data")]
-public sealed class DataController(DataHubService hub) : VeritaController
+public sealed class DataController(DataHubService hub, RecipeSuggestionService recipes, HisImportService his, ILogger<DataController> log) : VeritaController
 {
     private static EntitySpec Spec(string entity) => EntitySpecs.Find(entity) ?? throw AppError.NotFound($"Table {entity}");
+
+    /// <summary>Computed recipe hints for Data entry. Not stored — Save on the form writes the row.</summary>
+    [HttpGet("recipe-suggestions")]
+    [Authorize(Policy = "masterdata.view")]
+    public async Task<RecipeSuggestionList> RecipeSuggestions([FromQuery] string hospital, [FromQuery] string? entity, CancellationToken ct) =>
+        await recipes.ListAsync(await Me(), hospital, entity, ct);
 
     [HttpGet("entities")]
     [Authorize(Policy = "masterdata.view")]
@@ -75,51 +82,31 @@ public sealed class DataController(DataHubService hub) : VeritaController
         return File(ms.ToArray(), "application/zip", "verita-templates.zip");
     }
 
-    /// <summary>Upload a filled template (CSV), or a zip of them processed in load order. dryRun validates without saving.</summary>
-    [HttpPost("import")]
+    /// <summary>Parse a HIS or VERITA pack: tenant, row counts, matching hospitals. Saves nothing.</summary>
+    [HttpPost("import/preview")]
     [Authorize(Policy = "masterdata.view")]
     [RequestSizeLimit(200_000_000)]
-    public async Task<ImportResult[]> Import([FromForm] string? entity, IFormFile file, [FromForm] bool dryRun = false, CancellationToken ct = default)
+    public async Task<ImportPreview> ImportPreview([FromForm] string? entity, IFormFile file, CancellationToken ct)
     {
         var p = await Me();
         if (file is null || file.Length == 0) throw AppError.Invalid("Choose a file to upload.");
-        var results = new List<ImportResult>();
-        if (file.FileName.EndsWith(".zip", StringComparison.OrdinalIgnoreCase))
-        {
-            using var zip = new ZipArchive(file.OpenReadStream(), ZipArchiveMode.Read);
-            var files = zip.Entries.Where(e => e.Name.EndsWith(".csv", StringComparison.OrdinalIgnoreCase))
-                .Select(e => (Entry: e, Spec: EntitySpecs.All.FirstOrDefault(s => SpecFromFileName(e.Name) == s.Name)))
-                .ToList();
-            var unknown = files.Where(f => f.Spec is null).Select(f => f.Entry.Name).ToList();
-            if (unknown.Count > 0) throw AppError.Invalid($"These files do not match a table: {string.Join(", ", unknown)}. Name each file after its table, as in the templates.");
-            var set = new List<(EntitySpec, List<Dictionary<string, string>>)>();
-            foreach (var (e, spec) in files.OrderBy(f => Array.IndexOf(EntitySpecs.All, f.Spec)))
-            {
-                using var reader = new StreamReader(e.Open(), Encoding.UTF8);
-                var rows = Csv.Parse(await reader.ReadToEndAsync(ct));
-                if (rows.Count > 0) set.Add((spec!, rows));
-            }
-            // One file refused (for example users without admin.manage) does not stop the others.
-            return await hub.ImportSetAsync(set, p, dryRun, "UPLOAD", ct);
-        }
-
-        var specName = string.IsNullOrWhiteSpace(entity) ? SpecFromFileName(file.FileName) : entity;
-        var target = EntitySpecs.Find(specName ?? "") ?? throw AppError.Invalid("Pick the table this file is for, or name the file after it (for example Resource.csv).");
-        using var sr = new StreamReader(file.OpenReadStream(), Encoding.UTF8);
-        var parsed = Csv.Parse(await sr.ReadToEndAsync(ct));
-        if (parsed.Count == 0) throw AppError.Invalid("The file has a header but no data rows.");
-        var unknownCols = parsed[0].Keys.Where(k => k != "__row" && DataHubService.Describe(target).Columns.All(c => !c.Name.Equals(k, StringComparison.OrdinalIgnoreCase))).ToList();
-        if (unknownCols.Count > 0) throw AppError.Invalid($"Columns not in the {target.Name} template: {string.Join(", ", unknownCols)}.");
-        if (!p.Can(target.WritePermission)) throw AppError.Forbidden(target.WritePermission);
-        return await hub.ImportSetAsync([(target, parsed)], p, dryRun, "UPLOAD", ct);
+        log.LogInformation("Import preview {File} {Bytes}b user={Email}", file.FileName, file.Length, p.Email);
+        await using var stream = file.OpenReadStream();
+        return await his.PreviewAsync(p, file.FileName, stream, entity, ct);
     }
 
-    private static string? SpecFromFileName(string name)
+    /// <summary>Upload a filled template (CSV), or a zip of them processed in load order. dryRun validates without saving. HIS packs require hospital.</summary>
+    [HttpPost("import")]
+    [Authorize(Policy = "masterdata.view")]
+    [RequestSizeLimit(200_000_000)]
+    public async Task<ImportResult[]> Import([FromForm] string? entity, IFormFile file, [FromForm] bool dryRun = false, [FromForm] string? hospital = null, CancellationToken ct = default)
     {
-        var stem = Path.GetFileNameWithoutExtension(name);
-        var us = stem.IndexOf('_');
-        if (us > 0 && stem[..us].All(char.IsDigit)) stem = stem[(us + 1)..];
-        return EntitySpecs.Find(stem)?.Name;
+        var p = await Me();
+        if (file is null || file.Length == 0) throw AppError.Invalid("Choose a file to upload.");
+        log.LogInformation("Import {Mode} {File} {Bytes}b hospital={Hospital} user={Email}",
+            dryRun ? "validate" : "commit", file.FileName, file.Length, hospital, p.Email);
+        await using var stream = file.OpenReadStream();
+        return await his.ImportAsync(p, file.FileName, stream, hospital, dryRun, entity, ct);
     }
 
     [HttpGet("imports")]

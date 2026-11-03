@@ -1,7 +1,8 @@
 import { Component, computed, inject, signal } from '@angular/core';
-import { Router, RouterLink, RouterLinkActive, RouterOutlet } from '@angular/router';
+import { FormsModule } from '@angular/forms';
+import { RouterLink, RouterLinkActive, RouterOutlet } from '@angular/router';
 import { Auth } from '../core/auth';
-import { MetaService, RunContext } from '../core/context';
+import { MetaService, RunContext, runLiveStatus } from '../core/context';
 import { Theme } from '../core/theme';
 import { Icon } from '../shared/icon';
 import { Chip } from '../shared/ui';
@@ -13,12 +14,12 @@ import { Chip } from '../shared/ui';
  */
 @Component({
   selector: 'v-shell',
-  imports: [RouterOutlet, RouterLink, RouterLinkActive, Chip, Icon],
+  imports: [RouterOutlet, RouterLink, RouterLinkActive, Chip, Icon, FormsModule],
   template: `
     <a class="skip" href="#main">Skip to content</a>
     <div class="layout" [class.open]="menuOpen()">
       <nav class="side" aria-label="Modules">
-        <a class="brand" routerLink="/dashboard" [queryParams]="runQuery()">
+        <a class="brand" routerLink="/dashboard" [queryParams]="scopeQuery()">
           <span class="mark" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M9 3h6v6h6v6h-6v6H9v-6H3V9h6z"/></svg></span>
           <span class="word">VERITA<small>Cost intelligence</small></span>
         </a>
@@ -26,7 +27,7 @@ import { Chip } from '../shared/ui';
           @for (g of groups(); track g.label) {
             <div class="group">{{ g.label }}</div>
             @for (i of g.items; track i.path) {
-              <a [routerLink]="['/', i.path]" routerLinkActive="active" [queryParams]="runQuery()" [title]="i.purpose" (click)="menuOpen.set(false)">
+              <a [routerLink]="['/', i.path]" routerLinkActive="active" [queryParams]="scopeQuery()" [title]="i.purpose" (click)="menuOpen.set(false)">
                 <v-icon [name]="i.path" />
                 <span>{{ i.label }}</span>
               </a>
@@ -44,23 +45,33 @@ import { Chip } from '../shared/ui';
       <div class="main-col">
         <header class="ctx" aria-label="Scope">
           <button class="icon-btn menu" type="button" (click)="menuOpen.set(!menuOpen())" [attr.aria-expanded]="menuOpen()" aria-label="Menu"><v-icon name="menu" /></button>
-          @if (run(); as r) {
-            <div class="scope">
-              <span class="pill"><v-icon name="hospital" [size]="15" /> {{ r.hospitalName }}</span>
-              <span class="pill"><v-icon name="calendar" [size]="15" /> {{ r.period }}</span>
+          <div class="scope">
+            @if (ctx.hospitals().length && ctx.hospitalParam()) {
+              <label class="pick hospital">
+                <span class="sr-only">Hospital</span>
+                <select [ngModel]="ctx.hospitalParam()" (ngModelChange)="pickHospital($event)" aria-label="Hospital">
+                  @for (h of ctx.hospitals(); track h.code) {
+                    <option [value]="h.code">{{ h.name }}</option>
+                  }
+                </select>
+              </label>
+              <label class="pick period">
+                <span class="sr-only">Period</span>
+                <select [ngModel]="ctx.periodParam()" (ngModelChange)="pickPeriod($event)" aria-label="Period">
+                  @for (p of ctx.periodsForHospital(); track p.id) {
+                    <option [value]="p.code">{{ p.code }} ({{ p.startDate }} – {{ p.endDate }})</option>
+                  }
+                </select>
+              </label>
+            }
+            @if (run(); as r) {
               <span class="pill"><v-icon name="layers" [size]="15" /> {{ r.costingVersion }}</span>
-              <v-chip [value]="r.status" />
+              <v-chip [value]="live(r)" />
               @if (r.forced) { <v-chip value="FORCED" label="Forced — cannot publish" kind="bad" /> }
-            </div>
-          } @else { <div class="scope faint">No run selected</div> }
-          <label class="pick">
-            <span class="sr-only">Run</span>
-            <select (change)="pick($any($event.target).value)" aria-label="Select run">
-              @for (r of ctx.runs(); track r.id) {
-                <option [value]="r.code" [selected]="r.code === run()?.code">{{ r.code }} · {{ r.status }}</option>
-              }
-            </select>
-          </label>
+            } @else if (ctx.hospitalParam() && ctx.periodParam()) {
+              <span class="faint">No run for this hospital and period</span>
+            }
+          </div>
           <button class="icon-btn" type="button" (click)="theme.toggle()" [attr.aria-label]="theme.mode() === 'dark' ? 'Switch to light theme' : 'Switch to dark theme'">
             <v-icon [name]="theme.mode() === 'dark' ? 'sun' : 'moon'" />
           </button>
@@ -106,7 +117,9 @@ import { Chip } from '../shared/ui';
     .pill { display: inline-flex; align-items: center; gap: 6px; padding: 5px 11px; border-radius: 999px; background: var(--surface-2); border: 1px solid var(--border);
             font-size: 13px; font-weight: 500; color: var(--text); white-space: nowrap; }
     .pill v-icon { color: var(--accent); }
-    .pick select { max-width: 290px; border-radius: 999px; padding: 6px 14px; font-size: 13px; }
+    .pick select { max-width: 260px; border-radius: 999px; padding: 6px 14px; font-size: 13px; }
+    .pick.hospital select { max-width: min(280px, 42vw); }
+    .pick.period select { max-width: min(320px, 60vw); }
     main { padding: 26px 28px 40px; max-width: 1560px; }
     main:focus { outline: none; }
     .menu, .scrim { display: none; }
@@ -119,7 +132,14 @@ import { Chip } from '../shared/ui';
       .menu { display: grid; }
       main { padding: 18px 16px 32px; }
       .ctx { padding: 10px 16px; }
-      .pick select { max-width: 200px; }
+      .pick select { max-width: 160px; }
+    }
+    @media print {
+      .skip, .side, .scrim, .menu, .icon-btn, .me { display: none !important; }
+      .layout { display: block; min-height: 0; }
+      .ctx { position: static; padding: 0 0 6px; background: none; border: 0; backdrop-filter: none; gap: 6px; }
+      .pill { font-size: 8px; padding: 1px 6px; }
+      main { padding: 0; max-width: none; }
     }
   `,
 })
@@ -128,13 +148,13 @@ export class Shell {
   ctx = inject(RunContext);
   meta = inject(MetaService);
   theme = inject(Theme);
-  private router = inject(Router);
   menuOpen = signal(false);
   run = this.ctx.run;
-  runQuery = computed(() => (this.ctx.runCode() ? { run: this.ctx.runCode() } : {}));
+  live = runLiveStatus;
+  scopeQuery = computed(() => this.ctx.scopeParams());
   initials = computed(() => (this.auth.user()?.name ?? '?').split(' ').filter(Boolean).slice(0, 2).map(p => p[0]).join('').toUpperCase());
   groups = computed(() => this.meta.navigation()
-    .map(g => ({ ...g, items: g.items.filter(i => this.auth.can(i.permission)) }))
+    .map(g => ({ ...g, items: g.items.filter(i => this.auth.can(i.permission) && i.path !== 'activities' && (i.path !== 'drgs' || this.ctx.hasDrgs())) }))
     .filter(g => g.items.length > 0));
 
   constructor() {
@@ -142,7 +162,15 @@ export class Shell {
     void this.ctx.load();
   }
 
-  pick(code: string): void {
-    void this.router.navigate([], { queryParams: { run: code }, queryParamsHandling: 'merge' });
+  pickHospital(code: string): void {
+    if (!code || code === this.ctx.hospitalParam()) return;
+    const period = this.ctx.preferredPeriod(code) ?? this.ctx.periodParam() ?? '';
+    if (period) this.ctx.selectScope(code, period);
+  }
+
+  pickPeriod(code: string): void {
+    const hospital = this.ctx.hospitalParam();
+    if (!hospital || !code || code === this.ctx.periodParam()) return;
+    this.ctx.selectScope(hospital, code);
   }
 }

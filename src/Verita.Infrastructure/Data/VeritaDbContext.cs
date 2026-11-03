@@ -42,6 +42,9 @@ public sealed class VeritaDbContext(DbContextOptions<VeritaDbContext> options) :
     public DbSet<CostingDefinition> CostingDefinitions => Set<CostingDefinition>();
     public DbSet<ProcedureActivityLine> ProcedureActivityLines => Set<ProcedureActivityLine>();
     public DbSet<ProcedureResourceLine> ProcedureResourceLines => Set<ProcedureResourceLine>();
+    public DbSet<ProcedureTypeCosting> ProcedureTypeCostings => Set<ProcedureTypeCosting>();
+    public DbSet<ProcedureMargin> ProcedureMargins => Set<ProcedureMargin>();
+    public DbSet<EncounterOverhead> EncounterOverheads => Set<EncounterOverhead>();
     public DbSet<Package> Packages => Set<Package>();
     public DbSet<PackageComponent> PackageComponents => Set<PackageComponent>();
     public DbSet<Drg> Drgs => Set<Drg>();
@@ -52,6 +55,8 @@ public sealed class VeritaDbContext(DbContextOptions<VeritaDbContext> options) :
     public DbSet<EncounterService> EncounterServices => Set<EncounterService>();
     public DbSet<ActivityTransaction> ActivityTransactions => Set<ActivityTransaction>();
     public DbSet<RevenueTransaction> RevenueTransactions => Set<RevenueTransaction>();
+    public DbSet<RefundTransaction> RefundTransactions => Set<RefundTransaction>();
+    public DbSet<InvoicePackageItem> InvoicePackageItems => Set<InvoicePackageItem>();
     // Rules & versions
     public DbSet<AllocationRule> AllocationRules => Set<AllocationRule>();
     public DbSet<AllocationRuleTarget> AllocationRuleTargets => Set<AllocationRuleTarget>();
@@ -66,6 +71,7 @@ public sealed class VeritaDbContext(DbContextOptions<VeritaDbContext> options) :
     public DbSet<ActivityCost> ActivityCosts => Set<ActivityCost>();
     public DbSet<ProcedureCost> ProcedureCosts => Set<ProcedureCost>();
     public DbSet<EncounterCost> EncounterCosts => Set<EncounterCost>();
+    public DbSet<RunDimensionCost> RunDimensionCosts => Set<RunDimensionCost>();
     public DbSet<PackageCost> PackageCosts => Set<PackageCost>();
     public DbSet<DrgCostSummary> DrgCostSummaries => Set<DrgCostSummary>();
     public DbSet<CostComponent> CostComponents => Set<CostComponent>();
@@ -169,6 +175,8 @@ public sealed class VeritaDbContext(DbContextOptions<VeritaDbContext> options) :
         mb.Entity<CostComponent>().HasKey(x => x.Id).IsClustered(false);
         mb.Entity<CostComponent>().HasIndex(x => new { x.RunId, x.Scope, x.ScopeId }).IsClustered();
         mb.Entity<EncounterCost>().HasKey(x => x.Id).IsClustered(false);
+        mb.Entity<RunDimensionCost>().Property(x => x.Dimension).HasMaxLength(32);
+        mb.Entity<RunDimensionCost>().HasIndex(x => new { x.RunId, x.Dimension });
         mb.Entity<EncounterCost>().HasIndex(x => new { x.RunId, x.EncounterId }).IsUnique().IsClustered();
         mb.Entity<GLPosting>().HasKey(x => x.Id).IsClustered(false);
         // Clustered, so the index covers Amount, GLAccountId and CostCenterId without an INCLUDE.
@@ -187,6 +195,7 @@ public sealed class VeritaDbContext(DbContextOptions<VeritaDbContext> options) :
         Fk<CostCenter, Department>(x => x.DepartmentId);
         Fk<CostCenter, Facility>(x => x.FacilityId);
         Fk<GLPosting, Hospital>(x => x.HospitalId);
+        Fk<Period, Hospital>(x => x.HospitalId);
         Fk<GLPosting, Period>(x => x.PeriodId);
         Fk<GLPosting, GLAccount>(x => x.GLAccountId);
         Fk<GLPosting, CostCenter>(x => x.CostCenterId);
@@ -224,6 +233,7 @@ public sealed class VeritaDbContext(DbContextOptions<VeritaDbContext> options) :
         Fk<ProcedureRate, Procedure>(x => x.ProcedureId);
         Fk<ProcedureRate, Hospital>(x => x.HospitalId);
         Fk<CostingDefinition, Procedure>(x => x.ProcedureId);
+        Fk<CostingVersion, Hospital>(x => x.HospitalId);
         Fk<CostingDefinition, CostingVersion>(x => x.CostingVersionId);
         Fk<ProcedureActivityLine, CostingDefinition>(x => x.DefinitionId);
         Fk<ProcedureActivityLine, Activity>(x => x.ActivityId);
@@ -253,10 +263,25 @@ public sealed class VeritaDbContext(DbContextOptions<VeritaDbContext> options) :
         Fk<RevenueTransaction, Encounter>(x => x.EncounterId);
         Fk<RevenueTransaction, Procedure>(x => x.ProcedureId);
         Fk<RevenueTransaction, Payer>(x => x.PayerId);
+        Fk<RefundTransaction, Hospital>(x => x.HospitalId);
+        Fk<RefundTransaction, Encounter>(x => x.EncounterId);
+        Fk<RefundTransaction, Procedure>(x => x.ProcedureId);
+        Fk<RefundTransaction, Payer>(x => x.PayerId);
+        Fk<InvoicePackageItem, Hospital>(x => x.HospitalId);
+        Fk<InvoicePackageItem, Encounter>(x => x.EncounterId);
+        Fk<InvoicePackageItem, Procedure>(x => x.ProcedureId);
         Fk<AllocationRule, CostPool>(x => x.SourcePoolId);
         Fk<AllocationRule, CostDriver>(x => x.DriverId);
         Fk<AllocationRuleTarget, AllocationRule>(x => x.RuleId);
         Fk<AllocationRuleTarget, CostCenter>(x => x.CostCenterId);
+        Fk<ProcedureTypeCosting, Hospital>(x => x.HospitalId);
+        Fk<ProcedureTypeCosting, CostingVersion>(x => x.CostingVersionId);
+        Fk<ProcedureMargin, Hospital>(x => x.HospitalId);
+        Fk<ProcedureMargin, CostingVersion>(x => x.CostingVersionId);
+        Fk<ProcedureMargin, Procedure>(x => x.ProcedureId);
+        Fk<EncounterOverhead, Hospital>(x => x.HospitalId);
+        Fk<EncounterOverhead, CostingVersion>(x => x.CostingVersionId);
+        Fk<EncounterOverhead, CostCenter>(x => x.CostCenterId);
         Fk<CalculationRun, Hospital>(x => x.HospitalId);
         Fk<CalculationRun, Period>(x => x.PeriodId);
         Fk<CalculationRun, CostingVersion>(x => x.CostingVersionId);
@@ -265,7 +290,7 @@ public sealed class VeritaDbContext(DbContextOptions<VeritaDbContext> options) :
         void RunFk<T>() where T : class =>
             mb.Entity<T>().HasOne<CalculationRun>().WithMany().HasForeignKey("RunId").OnDelete(DeleteBehavior.Cascade);
         RunFk<RunStep>(); RunFk<ResourceUnitCost>(); RunFk<CostPoolBalance>(); RunFk<CostCenterBalance>(); RunFk<AllocationResult>();
-        RunFk<ActivityCost>(); RunFk<ProcedureCost>(); RunFk<EncounterCost>(); RunFk<PackageCost>(); RunFk<DrgCostSummary>();
+        RunFk<ActivityCost>(); RunFk<ProcedureCost>(); RunFk<EncounterCost>(); RunFk<RunDimensionCost>(); RunFk<PackageCost>(); RunFk<DrgCostSummary>();
         RunFk<CostComponent>(); RunFk<ResidualBucket>(); RunFk<Variance>(); RunFk<Reconciliation>();
         mb.Entity<DataQualityIssue>().HasOne<CalculationRun>().WithMany().HasForeignKey(x => x.RunId).OnDelete(DeleteBehavior.Cascade);
         mb.Entity<VarianceComponent>().HasOne<Variance>().WithMany().HasForeignKey(x => x.VarianceId).OnDelete(DeleteBehavior.Cascade);
@@ -284,16 +309,23 @@ public sealed class VeritaDbContext(DbContextOptions<VeritaDbContext> options) :
         void Unique<T>(System.Linq.Expressions.Expression<Func<T, object?>> cols) where T : class => mb.Entity<T>().HasIndex(cols!).IsUnique();
 
         Unique<Hospital>(x => x.Code); Unique<Facility>(x => x.Code); Unique<ServiceLine>(x => x.Code); Unique<Department>(x => x.Code);
-        Unique<CostCenter>(x => x.Code); Unique<GLAccount>(x => x.Code); Unique<Period>(x => x.Code); Unique<CostPool>(x => x.Code);
+        mb.Entity<Hospital>().HasIndex(x => new { x.HisSetupId, x.HisProjectId });
+        Unique<CostCenter>(x => new { x.HospitalId, x.Code }); Unique<GLAccount>(x => x.Code); Unique<Period>(x => x.Code); Unique<CostPool>(x => x.Code);
+        mb.Entity<Period>().HasIndex(x => x.HospitalId);
         Unique<CostDriver>(x => x.Code); Unique<Resource>(x => x.Code); Unique<Provider>(x => x.Code); Unique<Activity>(x => x.Code);
         Unique<Procedure>(x => x.Code); Unique<Package>(x => x.Code); Unique<Drg>(x => x.Code); Unique<Payer>(x => x.Code);
-        Unique<Patient>(x => x.Mrn); Unique<Encounter>(x => x.EncounterNo); Unique<AllocationRule>(x => x.Code);
-        Unique<CostingVersion>(x => x.Code); Unique<CalculationRun>(x => x.Code); Unique<Scenario>(x => x.Code); Unique<User>(x => x.Email);
+        Unique<Patient>(x => new { x.HospitalId, x.Mrn }); Unique<Encounter>(x => new { x.HospitalId, x.EncounterNo }); Unique<AllocationRule>(x => x.Code);
+        Unique<CostingVersion>(x => new { x.HospitalId, x.Code }); Unique<CalculationRun>(x => x.Code); Unique<Scenario>(x => x.Code); Unique<User>(x => x.Email);
         Unique<ActivityResource>(x => new { x.ActivityId, x.ResourceId });
         Unique<ActivityDriver>(x => new { x.ActivityId, x.DriverId });
         Unique<CostingDefinition>(x => new { x.ProcedureId, x.CostingVersionId });
         Unique<ProcedureActivityLine>(x => new { x.DefinitionId, x.ActivityId });
         Unique<ProcedureResourceLine>(x => new { x.DefinitionId, x.ResourceId });
+        Unique<ProcedureTypeCosting>(x => new { x.HospitalId, x.CostingVersionId, x.ProcType, x.Stream });
+        Unique<ProcedureMargin>(x => new { x.ProcedureId, x.CostingVersionId, x.Stream });
+        mb.Entity<EncounterOverhead>().HasIndex(x => new { x.HospitalId, x.CostingVersionId, x.CostCenterId });
+        mb.Entity<ProcedureTypeCosting>().Property(x => x.Stream).HasMaxLength(20).HasDefaultValue("DIRECT");
+        mb.Entity<ProcedureMargin>().Property(x => x.Stream).HasMaxLength(20).HasDefaultValue("DIRECT");
         Unique<PackageComponent>(x => new { x.PackageId, x.ProcedureId });
 
         // BRD section 18 constraints worth enforcing in the database.
@@ -319,6 +351,12 @@ public sealed class VeritaDbContext(DbContextOptions<VeritaDbContext> options) :
         mb.Entity<Encounter>().HasIndex(x => new { x.HospitalId, x.AdmitAt });
         mb.Entity<EncounterService>().HasIndex(x => x.EncounterId);
         mb.Entity<RevenueTransaction>().HasIndex(x => x.EncounterId);
+        mb.Entity<RefundTransaction>().Property(x => x.SourceRef).HasMaxLength(100);
+        mb.Entity<RefundTransaction>().HasIndex(x => new { x.HospitalId, x.SourceRef }).IsUnique();
+        mb.Entity<RefundTransaction>().HasIndex(x => x.EncounterId);
+        mb.Entity<InvoicePackageItem>().Property(x => x.SourceRef).HasMaxLength(100);
+        mb.Entity<InvoicePackageItem>().HasIndex(x => new { x.HospitalId, x.SourceRef }).IsUnique();
+        mb.Entity<InvoicePackageItem>().HasIndex(x => x.EncounterId);
         mb.Entity<DriverVolume>().HasIndex(x => new { x.DriverId, x.PeriodId });
         mb.Entity<ResourceRate>().HasIndex(x => new { x.ResourceId, x.EffectiveFrom });
         mb.Entity<GLMapping>().HasIndex(x => new { x.GLAccountId, x.CostCenterId });

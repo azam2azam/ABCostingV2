@@ -1,9 +1,21 @@
-import { Injectable, computed, inject, signal } from '@angular/core';
+import { DestroyRef, Injectable, computed, inject, signal } from '@angular/core';
 import { toSignal } from '@angular/core/rxjs-interop';
 import { ActivatedRoute, CanActivateFn, NavigationEnd, Router } from '@angular/router';
 import { filter, firstValueFrom, map } from 'rxjs';
 import { Api, ContextDto, RunListItem } from './api';
 import { Auth } from './auth';
+
+const IN_FLIGHT = new Set(['VALIDATING', 'VALIDATED', 'CALCULATING', 'CALCULATED']);
+
+/** List/header label: CALCULATED is the RECONCILE stage until the run reaches RECONCILED. */
+export function runLiveStatus(r: { status: string; currentStep?: string | null }): string {
+  if (r.currentStep === 'RECONCILE' || r.status === 'CALCULATED') return 'RECONCILING';
+  return r.status;
+}
+
+export function runInFlight(status: string): boolean {
+  return IN_FLIGHT.has(status);
+}
 
 export interface NavItem { path: string; label: string; permission: string; purpose: string; }
 export interface NavGroup { label: string; items: NavItem[]; }
@@ -41,32 +53,78 @@ export const moduleGuard: CanActivateFn = async (route) => {
 };
 
 /**
- * NG-3 / FR-11.13: the selected run lives in the URL (?run=), not in a cookie or a store, so
- * every screen can be linked or bookmarked with the exact run its numbers came from.
+ * NG-3 / FR-11.13: hospital and period live in the URL (?hospital=&period=), not in a cookie
+ * or a store. The API resolves those to a run (ARCH-14). Old ?run= bookmarks are rewritten.
  */
 @Injectable({ providedIn: 'root' })
 export class RunContext {
   private api = inject(Api);
   private router = inject(Router);
   private route = inject(ActivatedRoute);
+  private poll: ReturnType<typeof setTimeout> | null = null;
   readonly context = signal<ContextDto | null>(null);
 
+  constructor() {
+    inject(DestroyRef).onDestroy(() => this.stopPoll());
+  }
+
   private readonly url = toSignal(this.router.events.pipe(filter(e => e instanceof NavigationEnd), map(() => this.router.url)), { initialValue: this.router.url });
-  readonly runParam = computed(() => {
+  private qp(name: string): string | null {
     this.url();
-    return this.router.parseUrl(this.router.url).queryParams['run'] as string | undefined ?? null;
+    const v = this.router.parseUrl(this.router.url).queryParams[name];
+    const s = Array.isArray(v) ? v[0] : v;
+    return s ? String(s) : null;
+  }
+
+  readonly hospitalParam = computed(() => this.qp('hospital'));
+  readonly periodParam = computed(() => this.qp('period'));
+  readonly versionParam = computed(() => this.qp('version'));
+  /** Direct and Indirect costing are scoped by hospital and costing version, not by a run. */
+  readonly configParams = computed<{ hospital: string | null; version: string | null }>(() => ({ hospital: this.hospitalParam(), version: this.versionParam() }));
+  readonly hospitals = computed(() => this.context()?.hospitals ?? []);
+  readonly runs = computed(() => this.context()?.runs ?? []);
+  readonly periodsForHospital = computed(() => this.periodsOf(this.hospitalParam()));
+
+  readonly run = computed<RunListItem | null>(() => {
+    const h = this.hospitalParam(), p = this.periodParam();
+    if (!h || !p) return null;
+    return this.resolveRun(h, p);
   });
 
-  readonly runs = computed(() => this.context()?.runs ?? []);
-  readonly run = computed<RunListItem | null>(() => {
-    const param = this.runParam();
-    const runs = this.runs();
-    return runs.find(r => r.id === param || r.code === param) ?? null;
+  /** Query params every scoped request and nav link should carry. */
+  readonly scopeParams = computed<{ hospital?: string; period?: string }>(() => {
+    const hospital = this.hospitalParam(), period = this.periodParam();
+    return hospital && period ? { hospital, period } : {};
   });
-  readonly runCode = computed(() => this.run()?.code ?? this.runParam());
+
+  /** DRGs are a group catalogue; the module only opens when this hospital has assigned ones. */
+  readonly hasDrgs = computed(() => {
+    const code = this.hospitalParam() ?? this.run()?.hospital;
+    if (!code) return false;
+    return this.hospitals().some(h => h.code === code && h.hasDrgs);
+  });
+
+  periodsOf(hospital: string | null): ContextDto['periods'] {
+    if (!hospital) return [];
+    const all = this.context()?.periods ?? [];
+    const own = all.filter(p => p.hospital === hospital);
+    const list = own.length ? own : all.filter(p => !p.hospital);
+    return [...list].reverse();
+  }
 
   async load(force = false): Promise<void> {
     if (!this.context() || force) this.context.set(await firstValueFrom(this.api.get<ContextDto>('context')));
+    this.schedulePoll();
+  }
+
+  private schedulePoll(): void {
+    this.stopPoll();
+    if (!this.runs().some(r => runInFlight(r.status))) return;
+    this.poll = setTimeout(() => void this.load(true), 1500);
+  }
+
+  private stopPoll(): void {
+    if (this.poll) { clearTimeout(this.poll); this.poll = null; }
   }
 
   /**
@@ -79,20 +137,105 @@ export class RunContext {
     return runs.find(r => r.status === 'PUBLISHED') ?? runs.find(r => r.status !== 'FAILED' && r.status !== 'DRAFT') ?? runs[0] ?? null;
   }
 
-  select(code: string): void {
-    void this.router.navigate([], { relativeTo: this.route, queryParams: { run: code }, queryParamsHandling: 'merge' });
+  defaultScope(): { hospital: string; period: string } | null {
+    const run = this.defaultRun();
+    if (run) return { hospital: run.hospital, period: run.period };
+    const h = this.hospitals()[0];
+    if (!h) return null;
+    const period = this.periodsOf(h.code)[0]?.code;
+    return period ? { hospital: h.code, period } : null;
+  }
+
+  preferredPeriod(hospital: string): string | null {
+    const fromRun = this.resolveRun(hospital, null) ?? this.runs().find(r => r.hospital === hospital);
+    if (fromRun) return fromRun.period;
+    return this.periodsOf(hospital)[0]?.code ?? null;
+  }
+
+  /**
+   * Same preference as the API: published first, then most recently started, for a hospital
+   * (and period when given).
+   */
+  resolveRun(hospital: string, period: string | null): RunListItem | null {
+    const ofPair = this.runs().filter(r => r.hospital === hospital && (!period || r.period === period));
+    if (!ofPair.length) return null;
+    const published = ofPair.filter(r => r.status === 'PUBLISHED');
+    const pool = published.length ? published : ofPair;
+    return [...pool].sort((a, b) => {
+      const ta = a.publishedAt || a.startedAt || a.finishedAt || '';
+      const tb = b.publishedAt || b.startedAt || b.finishedAt || '';
+      return tb.localeCompare(ta);
+    })[0] ?? null;
+  }
+
+  /** Build hospital+period from the URL, an old ?run=, or the default in scope. */
+  resolveScope(q: { hospital?: string | null; period?: string | null; run?: string | null }): { hospital: string; period: string } | null {
+    const hospital = q.hospital || null;
+    const period = q.period || null;
+    const run = q.run || null;
+    if (hospital && period) return { hospital, period };
+    if (run) {
+      const row = this.runs().find(r => r.code === run || r.id === run);
+      if (row) return { hospital: row.hospital, period: row.period };
+    }
+    if (hospital) {
+      const p = this.preferredPeriod(hospital);
+      if (p) return { hospital, period: p };
+    }
+    return this.defaultScope();
+  }
+
+  configQuery(): string {
+    const q = new URLSearchParams();
+    const { hospital, version } = this.configParams();
+    if (hospital) q.set('hospital', hospital);
+    if (version) q.set('version', version);
+    return `?${q.toString()}`;
+  }
+
+  scopeQuery(): string {
+    const s = this.scopeParams();
+    if (!s.hospital || !s.period) return '';
+    return `?hospital=${encodeURIComponent(s.hospital)}&period=${encodeURIComponent(s.period)}`;
+  }
+
+  selectScope(hospital: string, period: string): void {
+    void this.router.navigate([], {
+      relativeTo: this.route,
+      queryParams: { hospital, period, run: null },
+      queryParamsHandling: 'merge',
+    });
   }
 }
 
-/** Ensures a run is in the URL before a run-scoped module renders. */
+/** Ensures ?hospital=&period= is in the URL before a scoped module renders. */
 export const runGuard: CanActivateFn = async (route) => {
   const ctx = inject(RunContext);
   const router = inject(Router);
   await ctx.load();
-  if (route.queryParamMap.get('run')) return true;
-  const def = ctx.defaultRun();
-  if (!def) return true;
+  const scope = ctx.resolveScope({
+    hospital: route.queryParamMap.get('hospital'),
+    period: route.queryParamMap.get('period'),
+    run: route.queryParamMap.get('run'),
+  });
+  if (!scope) return true;
+  if (route.queryParamMap.get('hospital') === scope.hospital
+    && route.queryParamMap.get('period') === scope.period
+    && !route.queryParamMap.get('run')) return true;
   const tree = router.parseUrl(router.getCurrentNavigation()?.extractedUrl.toString() ?? '/');
-  tree.queryParams = { ...tree.queryParams, run: def.code };
+  const { run: _ignored, ...rest } = tree.queryParams;
+  tree.queryParams = { ...rest, hospital: scope.hospital, period: scope.period };
   return tree;
+};
+
+/** DRGs module is hidden when the opened hospital has no assigned DRGs. */
+export const drgGuard: CanActivateFn = async (route) => {
+  const ctx = inject(RunContext);
+  const router = inject(Router);
+  await ctx.load();
+  const hospital = route.queryParamMap.get('hospital') ?? ctx.hospitalParam() ?? ctx.defaultScope()?.hospital;
+  const has = !!hospital && ctx.hospitals().some(h => h.code === hospital && h.hasDrgs);
+  if (has) return true;
+  const { run: _ignored, ...rest } = route.queryParams;
+  return router.createUrlTree(['/dashboard'], { queryParams: rest });
 };

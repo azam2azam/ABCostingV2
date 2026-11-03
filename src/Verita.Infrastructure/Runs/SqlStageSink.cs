@@ -56,6 +56,7 @@ public sealed class SqlStageSink(string connectionString, IDbContextFactory<Veri
             await writer.WriteAsync(conn, tx, rows.Residuals, ct: ct);
             await writer.WriteAsync(conn, tx, rows.Reconciliations, ct: ct);
             await writer.WriteAsync(conn, tx, rows.ReconciliationLines, ct: ct);
+            await writer.WriteAsync(conn, tx, rows.DimensionCosts, ct: ct);
             await tx.CommitAsync(ct);
         }
 

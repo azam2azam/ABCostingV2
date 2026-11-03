@@ -1,3 +1,5 @@
+using Verita.Infrastructure.Queries;
+using System.IO.Compression;
 using System.Net;
 using System.Net.Http.Headers;
 using System.Net.Http.Json;
@@ -9,6 +11,7 @@ using Verita.Application;
 using Verita.Domain;
 using Verita.Domain.Entities;
 using Verita.Infrastructure.Data;
+using Verita.Infrastructure.DataHub;
 using Verita.Infrastructure.Governance;
 
 namespace Verita.Integration.Tests;
@@ -133,6 +136,177 @@ public sealed class ApiTests : IClassFixture<WebApplicationFactory<Program>>
         }
     }
 
+    private static Principal Everywhere(User u) => new(u.Id, u.Email, u.Name, u.Role, u.Title, ["*"], ["*"]);
+
+    [Fact]
+    public async Task Data_entry_recipe_uses_the_costing_version_of_the_procedures_hospital()
+    {
+        using var scope = _factory.Services.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<VeritaDbContext>();
+        var hub = scope.ServiceProvider.GetRequiredService<DataHubService>();
+        var p = Everywhere(await db.Users.FirstAsync(u => u.Email == "costing.manager@verita.health"));
+        var open = await db.CostingVersions.Where(v => v.Status != "PUBLISHED").ToListAsync();
+        Assert.True(open.Select(v => v.HospitalId).Distinct().Count() > 1);
+        var spec = EntitySpecs.Find("ProcedureActivityLine")!;
+        foreach (var v in open)
+        {
+            var proc = await db.Procedures.Where(x => x.HospitalId == v.HospitalId).OrderBy(x => x.Code).Select(x => x.Code).FirstAsync();
+            var act = await db.Activities.Where(x => x.HospitalId == v.HospitalId).OrderBy(x => x.Code).Select(x => x.Code).FirstAsync();
+            var ok = await hub.SaveAsync(spec, p, [new() { ["procedureCode"] = proc, ["costingVersionCode"] = v.Code, ["activityCode"] = act, ["quantity"] = "1" }], dryRun: true, "TEST", default);
+            Assert.Equal(0, ok.Rejected);
+            var missing = await hub.SaveAsync(spec, p, [new() { ["procedureCode"] = proc, ["costingVersionCode"] = "CV-NOT-HERE", ["activityCode"] = act, ["quantity"] = "1" }], dryRun: true, "TEST", default);
+            Assert.Equal(1, missing.Rejected);
+        }
+    }
+
+    [Theory]
+    [InlineData("CostingVersion")]
+    [InlineData("CostingDefinition")]
+    [InlineData("ProcedureActivityLine")]
+    [InlineData("ProcedureResourceLine")]
+    public async Task Import_refuses_costing_model_tables(string table)
+    {
+        using var scope = _factory.Services.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<VeritaDbContext>();
+        var his = scope.ServiceProvider.GetRequiredService<HisImportService>();
+        var p = Everywhere(await db.Users.FirstAsync(u => u.Email == "costing.manager@verita.health"));
+        var before = await db.CostingVersions.CountAsync();
+        using var csv = new MemoryStream(System.Text.Encoding.UTF8.GetBytes("code,name\nCV-X,X\n"));
+        var error = await Assert.ThrowsAsync<AppError>(() => his.ImportAsync(p, $"{table}.csv", csv, null, dryRun: false, table, default));
+        Assert.Contains("costing models", error.Message);
+        Assert.Equal(before, await db.CostingVersions.CountAsync());
+    }
+
+    [Fact]
+    public async Task Import_of_a_zip_skips_costing_model_tables_and_loads_the_rest()
+    {
+        using var scope = _factory.Services.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<VeritaDbContext>();
+        var his = scope.ServiceProvider.GetRequiredService<HisImportService>();
+        var p = Everywhere(await db.Users.FirstAsync(u => u.Email == "costing.manager@verita.health"));
+        var dir = new DirectoryInfo(AppContext.BaseDirectory);
+        while (!Directory.Exists(Path.Combine(dir!.FullName, "samples"))) dir = dir.Parent;
+        using var zip = new MemoryStream();
+        ZipFile.CreateFromDirectory(Path.Combine(dir.FullName, "samples", "onboarding-example"), zip);
+        zip.Position = 0;
+        var results = await his.ImportAsync(p, "onboarding-example.zip", zip, null, dryRun: true, null, default);
+        Assert.Contains(results, r => r.Entity == "Procedure");
+        Assert.DoesNotContain(results, r => HisImportPack.CostingModelTables.Contains(r.Entity));
+    }
+
+    [Fact]
+    public async Task Seeding_endpoints_are_gone()
+    {
+        var client = await As("costing.manager@verita.health");
+        Assert.Equal(HttpStatusCode.NotFound, (await client.GetAsync("/api/v1/data/costing-seed/preview?hospital=NSH-RYD")).StatusCode);
+        Assert.Equal(HttpStatusCode.NotFound, (await client.PostAsJsonAsync("/api/v1/data/costing-seed/apply", new { hospital = "NSH-RYD" })).StatusCode);
+    }
+
+    [Fact]
+    public async Task Encounter_lines_show_refund_table_rows_except_cancelled_ones()
+    {
+        using var scope = _factory.Services.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<VeritaDbContext>();
+        var q = scope.ServiceProvider.GetRequiredService<ReadQueries>();
+        var user = Everywhere(await db.Users.FirstAsync(u => u.Email == "cfo@verita.health"));
+        var encounter = await db.Encounters.FirstAsync();
+        var code = await db.Hospitals.Where(h => h.Id == encounter.HospitalId).Select(h => h.Code).FirstAsync();
+        var tag = Guid.NewGuid().ToString("N")[..8];
+        RefundTransaction Refund(string no, DateTime? cancelled) => new()
+        {
+            Id = IdGen.Sequential(), HospitalId = encounter.HospitalId, EncounterId = encounter.Id, RefundNo = no, RefundDate = new DateTime(2026, 10, 5),
+            OriginalInvoiceNo = "TEST", InvoiceLineNo = 1, RefundAmount = 12.5m, CancelledAt = cancelled, SourceRef = $"REF-{no}-1",
+        };
+        var live = Refund($"T{tag}A", null);
+        var cancelled = Refund($"T{tag}B", new DateTime(2026, 10, 6));
+        db.RefundTransactions.AddRange(live, cancelled);
+        await db.SaveChangesAsync();
+        try
+        {
+            var scoped = await q.CatalogueScopeAsync(user, null, code, null, default);
+            var lines = (await q.PatientEncounterAsync(scoped, user, encounter.Id, default)).Lines;
+            Assert.Equal(-12.5m, lines.Single(l => l.SourceRef == live.SourceRef).Gross);
+            Assert.DoesNotContain(lines, l => l.SourceRef == cancelled.SourceRef);
+        }
+        finally
+        {
+            await db.RefundTransactions.Where(r => r.Id == live.Id || r.Id == cancelled.Id).ExecuteDeleteAsync();
+        }
+    }
+
+    [Fact]
+    public async Task Import_stores_his_invoice_fields_and_package_items_without_changing_the_money()
+    {
+        using var scope = _factory.Services.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<VeritaDbContext>();
+        var hub = scope.ServiceProvider.GetRequiredService<DataHubService>();
+        var user = Everywhere(await db.Users.FirstAsync(u => u.Email == "costing.manager@verita.health"));
+        var encounter = await db.Encounters.FirstAsync();
+        var hospital = await db.Hospitals.FirstAsync(h => h.Id == encounter.HospitalId);
+        var payer = await db.Payers.Select(x => x.Code).FirstAsync();
+        var tag = Guid.NewGuid().ToString("N")[..10];
+        var revenueRef = $"REV-T-{tag}";
+        var packageRef = $"PKG-T-{tag}";
+        try
+        {
+            var results = await hub.ImportSetAsync([
+                (EntitySpecs.Find("RevenueTransaction")!, [new()
+                {
+                    ["encounterNo"] = encounter.EncounterNo, ["payerCode"] = payer, ["grossAmount"] = "420.38", ["discount"] = "420.38", ["netAmount"] = "0",
+                    ["postedAt"] = "2026-10-28", ["sourceSystem"] = "VIDA-HIS", ["sourceRef"] = revenueRef,
+                    ["hisUnitPrice"] = "420.38", ["hisQuantity"] = "1", ["hisDiscountAmount"] = "120.38", ["waivedAmount"] = "300", ["patientShare"] = "0", ["companyShare"] = "0",
+                    ["isZeroPrice"] = "true", ["packageProcedureId"] = "PK1", ["isAcceptedWithDrg"] = "true",
+                }]),
+                (EntitySpecs.Find("InvoicePackageItem")!, [new()
+                {
+                    ["hospitalCode"] = hospital.Code, ["encounterNo"] = encounter.EncounterNo, ["hisEncounterNo"] = encounter.EncounterNo, ["hisProcedureId"] = "NOT-LOADED",
+                    ["packageProcedureId"] = "PK1", ["transactionType"] = "2", ["invoiceNo"] = "1", ["lineItemNo"] = "1", ["invoiceDate"] = "2026-10-28",
+                    ["price"] = "100", ["discountedCharge"] = "80", ["patientShare"] = "0", ["patientPaid"] = "0", ["companyShare"] = "80", ["companyPaid"] = "0",
+                    ["sourceSystem"] = "VIDA-HIS", ["sourceRef"] = packageRef,
+                }]),
+            ], user, dryRun: false, "TEST", default, hospital.Code);
+            Assert.All(results, r => Assert.Equal(0, r.Rejected));
+            var line = await db.RevenueTransactions.AsNoTracking().FirstAsync(r => r.SourceRef == revenueRef);
+            Assert.Equal(420.38m, line.GrossAmount);
+            Assert.Equal(420.38m, line.Discount);
+            Assert.Equal(0m, line.NetAmount);
+            Assert.Equal(300m, line.WaivedAmount);
+            Assert.Equal(120.38m, line.HisDiscountAmount);
+            Assert.True(line.IsZeroPrice);
+            Assert.Equal("PK1", line.PackageProcedureId);
+            var item = await db.InvoicePackageItems.AsNoTracking().FirstAsync(r => r.SourceRef == packageRef);
+            Assert.Equal(encounter.Id, item.EncounterId);
+            Assert.Null(item.ProcedureId);
+            Assert.Equal(80m, item.CompanyShare);
+            Assert.Null((await db.Encounters.AsNoTracking().FirstAsync(e => e.Id == encounter.Id)).PackageId);
+        }
+        finally
+        {
+            await db.RevenueTransactions.Where(r => r.SourceRef == revenueRef).ExecuteDeleteAsync();
+            await db.InvoicePackageItems.Where(r => r.SourceRef == packageRef).ExecuteDeleteAsync();
+        }
+    }
+
+    [Fact]
+    public async Task CostingVersions_BelongToOneHospital()
+    {
+        using var scope = _factory.Services.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<VeritaDbContext>();
+        var q = scope.ServiceProvider.GetRequiredService<ReadQueries>();
+        var admin = await db.Users.FirstAsync(u => u.Email == "cfo@verita.health");
+        var p = new Principal(admin.Id, admin.Email, admin.Name, admin.Role, admin.Title, ["*"], ["*"]);
+        var codes = await db.CostingVersions.Select(v => v.HospitalId).Distinct().Join(db.Hospitals, id => id, h => h.Id, (_, h) => h.Code).ToListAsync();
+        Assert.True(codes.Count > 1);
+        var seen = new HashSet<Guid>();
+        foreach (var code in codes)
+        {
+            var models = await q.CostingModelsAsync(p, code, default);
+            Assert.NotEmpty(models.Versions);
+            Assert.All(models.Versions, v => Assert.Equal(code, v.Hospital));
+            Assert.All(models.Versions, v => Assert.True(seen.Add(v.Id)));
+        }
+    }
+
     [Fact]
     public async Task Four_eye_approval_refuses_self_approval_and_records_both_parties()
     {
@@ -145,8 +319,8 @@ public sealed class ApiTests : IClassFixture<WebApplicationFactory<Program>>
         var controller = P(await db.Users.FirstAsync(u => u.Email == "controller@verita.health"));
         var version = new CostingVersion
         {
-            Id = IdGen.Sequential(), Code = $"CV-TEST-{Guid.NewGuid():N}"[..20], Name = "Integration test version", Description = "Temporary",
-            EffectiveFrom = new DateOnly(2030, 1, 1), Status = "DRAFT", CreatedAt = DateTime.UtcNow,
+            Id = IdGen.Sequential(), HospitalId = (await db.Hospitals.FirstAsync()).Id, Code = $"CV-TEST-{Guid.NewGuid():N}"[..20], Name = "Integration test version", Description = "Temporary",
+            EffectiveFrom = new DateOnly(2020, 1, 1), EffectiveTo = new DateOnly(2020, 12, 31), Status = "DRAFT", CreatedAt = DateTime.UtcNow,
         };
         db.CostingVersions.Add(version);
         await db.SaveChangesAsync();
@@ -164,6 +338,34 @@ public sealed class ApiTests : IClassFixture<WebApplicationFactory<Program>>
         {
             await db.ApprovalRequests.Where(a => a.EntityId == version.Id).ExecuteDeleteAsync();
             await db.CostingVersions.Where(v => v.Id == version.Id).ExecuteDeleteAsync();
+        }
+    }
+
+    [Fact]
+    public async Task Draft_run_can_be_deleted_only_with_run_execute()
+    {
+        var manager = await As("costing.manager@verita.health");
+        var created = await manager.PostAsJsonAsync("/api/v1/runs", new { hospital = "NSH-RYD", period = "2026-08" });
+        created.EnsureSuccessStatusCode();
+        var code = (await Json(created)).GetProperty("code").GetString()!;
+        var deleted = false;
+        try
+        {
+            var admin = await (await As("admin@verita.health")).DeleteAsync($"/api/v1/runs/{code}");
+            Assert.Equal(HttpStatusCode.Forbidden, admin.StatusCode);
+
+            var kept = await manager.DeleteAsync($"/api/v1/runs/{Run}");
+            Assert.Equal(HttpStatusCode.Conflict, kept.StatusCode);
+            Assert.Equal("RUN_STATE", Code(await Json(kept)));
+
+            var gone = await manager.DeleteAsync($"/api/v1/runs/{code}");
+            Assert.Equal(HttpStatusCode.NoContent, gone.StatusCode);
+            Assert.Equal(HttpStatusCode.NotFound, (await manager.GetAsync($"/api/v1/runs/{code}")).StatusCode);
+            deleted = true;
+        }
+        finally
+        {
+            if (!deleted) await manager.DeleteAsync($"/api/v1/runs/{code}");
         }
     }
 

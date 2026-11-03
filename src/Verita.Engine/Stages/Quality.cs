@@ -141,6 +141,7 @@ public static class Quality
         foreach (var g in ctx.Services.GroupBy(s => s.ProcedureId))
         {
             if (!ctx.Procedures.TryGetValue(g.Key, out var proc)) continue;
+            if (Catalogue.SkipTdabcRecipe(proc.Category)) continue;
             if (proc.ActivityLines.Count == 0 && proc.ResourceLines.Count == 0)
                 Add("DQ-PROC-UNMAPPED", "Procedure", proc.Id.ToString(), proc.Name,
                     $"{proc.Name} was delivered {g.Count()} times but has no costing definition under {ctx.CostingVersionCode}.", g.Count().ToString());

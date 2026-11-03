@@ -11,7 +11,7 @@ import { apiV1 } from './api-url';
 type S = components['schemas'];
 export type Schema<K extends keyof S> = S[K];
 
-export type Meta = S['Meta'];
+export type Meta = S['Meta'] & { costingVersionStatus?: string | null };
 export interface Envelope<T> { meta: Meta; data: T; }
 
 export type ContextDto = S['ReadQueriesContextDto'];
@@ -34,6 +34,7 @@ export type ActivityRow = S['ReadQueriesActivityRow'];
 export type ActivityDetail = S['ReadQueriesActivityDetail'];
 export type ProcedureRow = S['ReadQueriesProcedureRow'];
 export type ProcedureDetail = S['ReadQueriesProcedureDetail'];
+export type RecipeLineDto = S['ReadQueriesRecipeLineDto'];
 export type PackageRow = S['ReadQueriesPackageRow'];
 export type PackageDetail = S['ReadQueriesPackageDetail'];
 export type DrgRow = S['ReadQueriesDrgRow'];
@@ -74,8 +75,16 @@ export class Api {
     return this.http.post<T>(`${this.base}/${path}`, body);
   }
 
-  /** A run-scoped read: ?run= carries the exact run the numbers came from (FR-11.13). */
-  run<T>(path: string, run: string | null, params?: Params): Observable<Envelope<T>> {
-    return this.get<Envelope<T>>(path, { ...params, run });
+  put<T>(path: string, body: unknown): Observable<T> {
+    return this.http.put<T>(`${this.base}/${path}`, body);
+  }
+
+  delete(path: string): Observable<void> {
+    return this.http.delete<void>(`${this.base}/${path}`);
+  }
+
+  /** A scoped read: ?hospital=&period= (ARCH-14). */
+  run<T>(path: string, scope: Params, params?: Params): Observable<Envelope<T>> {
+    return this.get<Envelope<T>>(path, { ...params, ...scope });
   }
 }

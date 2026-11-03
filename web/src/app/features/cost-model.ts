@@ -1,11 +1,12 @@
-import { Component, input } from '@angular/core';
+import { Component, computed, inject, input, signal } from '@angular/core';
 import { RouterLink } from '@angular/router';
 import {
   ActivityDetail as ActivityDetailDto, ActivityRow, AllocationDto, CostCentreDetail as CostCentreDetailDto, CostCentreRow,
-  DriverDetail as DriverDetailDto, DriverRow, PoolDetail as PoolDetailDto, PoolRow, ResourceDetail as ResourceDetailDto, ResourceRow, RuleRow,
+  Envelope, ResourceDetail as ResourceDetailDto, ResourceRow,
 } from '../core/api';
-import { runResource } from '../core/resource';
-import { Col, UI } from '../shared/ui';
+import { RunContext } from '../core/context';
+import { apiResource, catalogueResource } from '../core/resource';
+import { Col, UI, matchesNameOrCode } from '../shared/ui';
 
 export const allocationCols: Col<AllocationDto>[] = [
   { key: 'stage', label: 'Stage', type: 'num', dp: 0 },
@@ -17,18 +18,6 @@ export const allocationCols: Col<AllocationDto>[] = [
   { key: 'amount', label: 'Amount', type: 'money' },
 ];
 
-export const ruleCols: Col<RuleRow>[] = [
-  { key: 'stage', label: 'Stage', type: 'num', dp: 0 },
-  { key: 'name', label: 'Rule', sub: r => r.formula },
-  { key: 'sourcePool', label: 'Source pool', link: r => `/cost-pools/${r.sourcePoolId}` },
-  { key: 'methodology', label: 'Methodology' },
-  { key: 'method', label: 'Method' },
-  { key: 'driver', label: 'Driver', link: r => r.driverId ? `/cost-drivers/${r.driverId}` : null },
-  { key: 'poolShare', label: 'Pool share', type: 'num', dp: 4 },
-  { key: 'movedThisRun', label: 'Moved this run', type: 'money', dp: 0 },
-  { key: 'status', label: 'Status', type: 'chip' },
-];
-
 // ── Cost centres ────────────────────────────────────────────────────────────────
 
 @Component({
@@ -37,43 +26,50 @@ export const ruleCols: Col<RuleRow>[] = [
   template: `
     <v-page title="Cost centres" purpose="Where ledger money lands and where it goes next. Support and overhead centres close at zero after step-down.">
       <v-state [loading]="res.isLoading()" [error]="res.error()">
-        @if (res.value(); as r) { <v-table [rows]="r.data" [columns]="cols" caption="Cost centres" /> }
+        @if (res.value()) {
+          <v-list-search [(query)]="search" placeholder="Search by name or code" />
+          <v-table [rows]="filtered()" [columns]="cols" sortBy="cases" caption="Cost centres" [empty]="search().trim() ? 'No cost centres match this search.' : 'No rows.'" />
+        }
       </v-state>
     </v-page>
   `,
 })
 export class CostCentres {
-  res = runResource<CostCentreRow[]>(() => 'cost-centres');
+  res = catalogueResource<CostCentreRow[]>(() => 'cost-centres');
+  search = signal('');
+  filtered = computed(() => (this.res.value()?.data ?? []).filter(r => matchesNameOrCode(this.search(), r.name, r.code)));
   cols: Col<CostCentreRow>[] = [
     { key: 'stepDownSeq', label: 'Seq', type: 'num', dp: 0 },
-    { key: 'name', label: 'Cost centre', link: r => `/cost-centres/${r.id}`, sub: r => `${r.code} · ${r.department}` },
+    { key: 'code', label: 'Code', value: r => localCode(r.code) },
+    { key: 'name', label: 'Name', link: r => `/cost-centres/${r.id}` },
     { key: 'ccType', label: 'Type' },
-    { key: 'glPosted', label: 'GL posted', type: 'money', dp: 0 },
-    { key: 'direct', label: 'Allocation-pool direct', type: 'money', dp: 0 },
-    { key: 'received', label: 'Received', type: 'money', dp: 0 },
-    { key: 'allocatedOut', label: 'Allocated out', type: 'money', dp: 0 },
-    { key: 'final', label: 'Closing balance', type: 'money', dp: 2 },
-    { key: 'isClosed', label: 'Closed', value: r => r.isClosed ? 'Closed' : '' },
+    { key: 'cases', label: 'Cases', type: 'num', dp: 0 },
+    { key: 'cost', label: 'Cost', type: 'money', dp: 0 },
+    { key: 'revenue', label: 'Revenue', type: 'money', dp: 0 },
   ];
 }
 
 @Component({
   selector: 'v-cost-centre',
-  imports: [RouterLink, ...UI],
+  imports: [...UI],
   template: `
     <v-state [loading]="res.isLoading()" [error]="res.error()">
       @if (res.value(); as r) {
-        <v-page [title]="r.data.costCentre.name" [purpose]="r.data.costCentre.code + ' · ' + r.data.costCentre.ccType + ' · step-down sequence ' + r.data.costCentre.stepDownSeq">
+        <v-page [title]="r.data.costCentre.name" [purpose]="localCode(r.data.costCentre.code) + ' · ' + r.data.costCentre.ccType + ' · step-down sequence ' + r.data.costCentre.stepDownSeq">
           <div class="grid tiles">
-            <v-tile label="GL posted" [value]="r.data.costCentre.glPosted" />
-            <v-tile label="Received" [value]="r.data.costCentre.received" />
-            <v-tile label="Allocated out" [value]="r.data.costCentre.allocatedOut" />
-            <v-tile label="Closing balance" [value]="r.data.costCentre.final" />
+            <v-tile label="Cases" [value]="r.data.costCentre.cases" unit="" />
+            <v-tile label="Cost" [value]="r.data.costCentre.cost" />
+            <v-tile label="Revenue" [value]="r.data.costCentre.revenue" />
+            <v-tile label="Margin" [value]="margin(r.data.costCentre)" direction="higher-better" />
+            <v-tile label="Margin %" [value]="marginPct(r.data.costCentre)" unit="%" direction="higher-better" />
           </div>
-          <section class="card" style="margin-top:14px"><h2>Received from</h2><v-table [rows]="r.data.inbound" [columns]="alloc" empty="Nothing allocated into this centre." /></section>
-          <section class="card"><h2>Allocated to</h2><v-table [rows]="r.data.outbound" [columns]="alloc" empty="This centre allocated nothing onward." /></section>
-          <section class="card"><h2>Pools</h2>
-            @for (p of r.data.pools; track p.id) { <p><a [routerLink]="['/cost-pools', p.id]" queryParamsHandling="preserve">{{ p.name }}</a> <span class="faint">{{ p.stream }} · {{ p.allocMethod }}</span></p> }
+          <section class="card" style="margin-top:14px">
+            <h2>Packages</h2>
+            <v-table [rows]="r.data.packages" [columns]="pkgCols" sortBy="cases" empty="No packages billed at this centre." />
+          </section>
+          <section class="card">
+            <h2>Procedures</h2>
+            <v-table [rows]="r.data.procedures" [columns]="procCols" sortBy="cases" empty="No procedures billed at this centre." />
           </section>
         </v-page>
       }
@@ -82,76 +78,38 @@ export class CostCentres {
 })
 export class CostCentreDetail {
   id = input.required<string>();
-  res = runResource<CostCentreDetailDto>(() => `cost-centres/${this.id()}`);
-  alloc = allocationCols;
-}
-
-// ── Cost pools ──────────────────────────────────────────────────────────────────
-
-@Component({
-  selector: 'v-cost-pools',
-  imports: [...UI],
-  template: `
-    <v-page title="Cost pools" purpose="Homogeneous bundles of cost. A pool is consumption-stream when a resource draws its rate from it, otherwise allocation-stream — derived, never flagged by hand (CR-4).">
-      <v-state [loading]="res.isLoading()" [error]="res.error()">
-        @if (res.value(); as r) { <v-table [rows]="r.data" [columns]="cols" caption="Cost pools" /> }
-      </v-state>
-    </v-page>
-  `,
-})
-export class CostPools {
-  res = runResource<PoolRow[]>(() => 'cost-pools');
-  cols: Col<PoolRow>[] = [
-    { key: 'name', label: 'Pool', link: r => `/cost-pools/${r.id}`, sub: r => r.description },
-    { key: 'costCentre', label: 'Cost centre' },
-    { key: 'stream', label: 'Stream', type: 'chip', chip: r => r.stream === 'CONSUMPTION' ? 'info' : '' },
-    { key: 'allocMethod', label: 'Method' },
-    { key: 'primaryDriver', label: 'Driver' },
-    { key: 'resources', label: 'Resources funded', type: 'num', dp: 0 },
-    { key: 'directAmount', label: 'From the ledger', type: 'money', dp: 0 },
-    { key: 'status', label: 'Status', type: 'chip' },
+  localCode = localCode;
+  res = catalogueResource<CostCentreDetailDto>(() => `cost-centres/${this.id()}`);
+  pkgCols: Col<CostCentreDetailDto['packages'][number]>[] = [
+    { key: 'code', label: 'Code', value: r => localCode(r.code), link: r => `/packages/${r.id}` },
+    { key: 'name', label: 'Name' },
+    { key: 'unitPrice', label: 'Unit Price', type: 'money' },
+    { key: 'cases', label: 'Cases', type: 'num', dp: 0 },
+    { key: 'revenue', label: 'Revenue', type: 'money' },
+    { key: 'unitCost', label: 'Unit Cost', type: 'money' },
+    { key: 'totalCost', label: 'Total Cost', type: 'money' },
   ];
-}
-
-@Component({
-  selector: 'v-cost-pool',
-  imports: [...UI],
-  template: `
-    <v-state [loading]="res.isLoading()" [error]="res.error()">
-      @if (res.value(); as r) {
-        <v-page [title]="r.data.pool.name" [purpose]="r.data.pool.description">
-          <dl class="kv card">
-            <dt>Stream</dt><dd>{{ r.data.pool.stream }}</dd>
-            <dt>Cost centre</dt><dd>{{ r.data.pool.costCentre }}</dd>
-            <dt>Method</dt><dd>{{ r.data.pool.allocMethod }}</dd>
-            <dt>Effective</dt><dd>{{ r.data.pool.effectiveFrom }} – {{ r.data.pool.effectiveTo ?? 'open' }} (v{{ r.data.pool.version }}, {{ r.data.pool.status }})</dd>
-            <dt>From the ledger this run</dt><dd class="num" style="text-align:left">{{ r.data.pool.directAmount | money }}</dd>
-          </dl>
-          <section class="card"><h2>GL mappings</h2><v-table [rows]="r.data.mappings" [columns]="mapCols" /></section>
-          @if (r.data.fundedResources.length) { <section class="card"><h2>Resources funded by this pool</h2><v-table [rows]="r.data.fundedResources" [columns]="resCols" /></section> }
-          <section class="card"><h2>Allocation rules</h2><v-table [rows]="r.data.rules" [columns]="rules" empty="No rule allocates this pool." /></section>
-          <section class="card"><h2>Money moved this run</h2><v-table [rows]="r.data.allocations" [columns]="alloc" empty="Nothing was allocated from this pool." /></section>
-        </v-page>
-      }
-    </v-state>
-  `,
-})
-export class CostPoolDetail {
-  id = input.required<string>();
-  res = runResource<PoolDetailDto>(() => `cost-pools/${this.id()}`);
-  alloc = allocationCols;
-  rules = ruleCols;
-  mapCols: Col<PoolDetailDto['mappings'][number]>[] = [
-    { key: 'account', label: 'Account' }, { key: 'naturalClass', label: 'Natural class' }, { key: 'costCentre', label: 'Cost centre' },
-    { key: 'weight', label: 'Weight', type: 'num', dp: 4 }, { key: 'effectiveFrom', label: 'From' }, { key: 'effectiveTo', label: 'To', value: r => r.effectiveTo ?? 'open' },
+  procCols: Col<CostCentreDetailDto['procedures'][number]>[] = [
+    { key: 'code', label: 'Code', value: r => localCode(r.code), link: r => `/procedures/${r.id}` },
+    { key: 'name', label: 'Name' },
+    { key: 'unitPrice', label: 'Unit Price', type: 'money' },
+    { key: 'cases', label: 'Cases', type: 'num', dp: 0 },
+    { key: 'revenue', label: 'Revenue', type: 'money' },
+    { key: 'unitCost', label: 'Unit Cost', type: 'money' },
+    { key: 'totalCost', label: 'Total Cost', type: 'money' },
   ];
-  resCols: Col<ResourceRow>[] = [
-    { key: 'name', label: 'Resource', link: r => `/resources/${r.id}` }, { key: 'resourceType', label: 'Type' },
-    { key: 'costOfUsed', label: 'Consumed', type: 'money', dp: 0 }, { key: 'costOfUnused', label: 'Idle / not issued', type: 'money', dp: 0 },
-  ];
+  margin(c: CostCentreRow): number {
+    return Number(c.revenue) - Number(c.cost);
+  }
+  marginPct(c: CostCentreRow): number {
+    const rev = Number(c.revenue);
+    return rev === 0 ? 0 : this.margin(c) / rev * 100;
+  }
 }
 
 // ── Resources ───────────────────────────────────────────────────────────────────
+
+const isNotAssigned = (r: { id: string }) => /^0{8}-/.test(r.id);
 
 @Component({
   selector: 'v-resources',
@@ -165,17 +123,17 @@ export class CostPoolDetail {
   `,
 })
 export class Resources {
-  res = runResource<ResourceRow[]>(() => 'resources');
+  private ctx = inject(RunContext);
+  res = apiResource<Envelope<ResourceRow[]>>(() => this.ctx.hospitalParam() ? 'resources' : null, () => ({ hospital: this.ctx.hospitalParam() }));
   cols: Col<ResourceRow>[] = [
-    { key: 'name', label: 'Resource', link: r => `/resources/${r.id}`, sub: r => r.code },
+    { key: 'code', label: 'Code', value: r => localCode(r.code) },
+    { key: 'name', label: 'Name', link: r => `/resources/${r.id}` },
+    { key: 'physicians', label: 'Physicians', type: 'num', dp: 0 },
     { key: 'resourceType', label: 'Type' },
     { key: 'nature', label: 'Nature', type: 'nature' },
-    { key: 'rate', label: 'Rate', type: 'num', dp: 6, value: r => r.rate ?? '••••' },
+    { key: 'rate', label: 'Rate', type: 'num', dp: 6, value: r => isNotAssigned(r) ? '—' : r.rate == null ? '••••' : Number(r.rate) === 0 ? '—' : r.rate },
     { key: 'uom', label: 'Unit' },
     { key: 'costPool', label: 'Funding pool' },
-    { key: 'utilisationPct', label: 'Utilisation', type: 'pct' },
-    { key: 'costOfUsed', label: 'Consumed', type: 'money', dp: 0 },
-    { key: 'costOfUnused', label: 'Idle / not issued', type: 'money', dp: 0, dir: 'lower' },
   ];
 }
 
@@ -185,21 +143,12 @@ export class Resources {
   template: `
     <v-state [loading]="res.isLoading()" [error]="res.error()">
       @if (res.value(); as r) {
-        <v-page [title]="r.data.resource.name" [purpose]="r.data.resource.code + ' · ' + r.data.resource.resourceType + ' · ' + r.data.resource.costCentre">
-          @if (r.data.unitCost; as u) {
-            <section class="card"><h2>This run</h2>
-              <p class="mono">{{ u.calcExpression }}</p>
-              <div class="grid tiles">
-                <v-tile label="Utilisation" [value]="u.utilisationPct" unit="%" />
-                <v-tile label="Cost of used capacity" [value]="u.costOfUsed" />
-                <v-tile label="Cost of unused capacity" [value]="u.costOfUnused" />
-              </div>
-            </section>
-          }
-          <section class="card"><h2>Rates (effective-dated, never edited in place)</h2><v-table [rows]="r.data.rates" [columns]="rateCols" /></section>
-          @if (r.data.capacity.length) { <section class="card"><h2>Capacity model</h2><v-table [rows]="r.data.capacity" [columns]="capCols" /></section> }
-          @if (r.data.providers.length) { <section class="card"><h2>Providers sharing this role</h2> @for (p of r.data.providers; track p) { <p>{{ p }}</p> }</section> }
-          <section class="card"><h2>Used in activity recipes</h2><v-table [rows]="r.data.usedBy" [columns]="useCols" empty="Not part of any standard recipe." /></section>
+        <v-page [title]="unmapped(r.data.resource) ? 'Not assigned' : localCode(r.data.resource.code) + ' - ' + r.data.resource.name"
+          [purpose]="unmapped(r.data.resource) ? 'Doctors not mapped to any resource.' : r.data.resource.resourceType + ' · ' + r.data.resource.costCentre">
+          <section class="card"><h2>{{ unmapped(r.data.resource) ? 'Providers not mapped to a role' : 'Providers sharing this role' }}</h2>
+            <v-table [rows]="r.data.providers" [columns]="providerCols" [caption]="unmapped(r.data.resource) ? 'Providers not mapped to a role' : 'Providers sharing this role'"
+              [empty]="unmapped(r.data.resource) ? 'Every doctor is mapped to a resource.' : 'No doctors mapped to this role.'" />
+          </section>
         </v-page>
       }
     </v-state>
@@ -207,77 +156,23 @@ export class Resources {
 })
 export class ResourceDetail {
   id = input.required<string>();
-  res = runResource<ResourceDetailDto>(() => `resources/${this.id()}`);
-  rateCols: Col<ResourceDetailDto['rates'][number]>[] = [
-    { key: 'unitCost', label: 'Unit cost', type: 'num', dp: 6, value: r => r.unitCost ?? '••••' }, { key: 'uom', label: 'Unit' },
-    { key: 'basis', label: 'Basis' }, { key: 'sourceSystem', label: 'Source' }, { key: 'effectiveFrom', label: 'From' },
-    { key: 'effectiveTo', label: 'To', value: r => r.effectiveTo ?? 'open' }, { key: 'version', label: 'Version', type: 'num', dp: 0 },
-    { key: 'status', label: 'Status', type: 'chip' }, { key: 'effectiveInRun', label: 'In this run', value: r => r.effectiveInRun ? 'Effective' : '' },
-  ];
-  capCols: Col<ResourceDetailDto['capacity'][number]>[] = [
-    { key: 'theoreticalMinutes', label: 'Theoretical', type: 'num', dp: 0 }, { key: 'practicalRatio', label: 'Practical ratio', type: 'num', dp: 4 },
-    { key: 'practicalMinutes', label: 'Practical', type: 'num', dp: 0 }, { key: 'annualCost', label: 'Annual cost', type: 'money', dp: 0, value: r => r.annualCost ?? '••••' },
-    { key: 'effectiveFrom', label: 'From' }, { key: 'effectiveTo', label: 'To', value: r => r.effectiveTo ?? 'open' },
-  ];
-  useCols: Col<ResourceDetailDto['usedBy'][number]>[] = [
-    { key: 'activity', label: 'Activity', link: r => `/activities/${r.activityId}` }, { key: 'stdQuantity', label: 'Standard qty', type: 'num', dp: 4 }, { key: 'uom', label: 'Unit' },
+  unmapped = isNotAssigned;
+  localCode = localCode;
+  private ctx = inject(RunContext);
+  res = apiResource<Envelope<ResourceDetailDto>>(() => this.ctx.hospitalParam() ? `resources/${this.id()}` : null, () => ({ hospital: this.ctx.hospitalParam() }));
+  providerCols: Col<NonNullable<ResourceDetailDto['providers']>[number]>[] = [
+    { key: 'code', label: 'Id', value: r => localCode(r.code) },
+    { key: 'name', label: 'Doctor' },
+    { key: 'department', label: 'Department' },
+    { key: 'specialty', label: 'Specialty' },
+    { key: 'grade', label: 'Grade' },
+    { key: 'billedLines', label: 'Invoice lines', type: 'num', dp: 0 },
   ];
 }
 
-// ── Cost drivers ────────────────────────────────────────────────────────────────
-
-@Component({
-  selector: 'v-drivers',
-  imports: [...UI],
-  template: `
-    <v-page title="Cost drivers" purpose="The measurable things that cause cost. The source system, field and formula are what let a volume be checked at source when a number is challenged (FR-1.12).">
-      <v-state [loading]="res.isLoading()" [error]="res.error()">
-        @if (res.value(); as r) { <v-table [rows]="r.data" [columns]="cols" caption="Cost drivers" /> }
-      </v-state>
-    </v-page>
-  `,
-})
-export class Drivers {
-  res = runResource<DriverRow[]>(() => 'cost-drivers');
-  cols: Col<DriverRow>[] = [
-    { key: 'name', label: 'Driver', link: r => `/cost-drivers/${r.id}`, sub: r => r.formula },
-    { key: 'driverType', label: 'Type' },
-    { key: 'unit', label: 'Unit' },
-    { key: 'sourceSystem', label: 'Source', sub: r => r.sourceField },
-    { key: 'allocMethodology', label: 'Methodology' },
-    { key: 'volume', label: 'Volume this period', type: 'num', dp: 2 },
-    { key: 'status', label: 'Status', type: 'chip' },
-  ];
-}
-
-@Component({
-  selector: 'v-driver',
-  imports: [...UI],
-  template: `
-    <v-state [loading]="res.isLoading()" [error]="res.error()">
-      @if (res.value(); as r) {
-        <v-page [title]="r.data.driver.name" [purpose]="r.data.driver.description">
-          <dl class="kv card">
-            <dt>Formula</dt><dd class="mono">{{ r.data.driver.formula }}</dd>
-            <dt>Source</dt><dd>{{ r.data.driver.sourceSystem }} · {{ r.data.driver.sourceField }}</dd>
-            <dt>Type / unit</dt><dd>{{ r.data.driver.driverType }} · {{ r.data.driver.unit }} · {{ r.data.driver.frequency }}</dd>
-            <dt>Effective</dt><dd>{{ r.data.driver.effectiveFrom }} – {{ r.data.driver.effectiveTo ?? 'open' }}</dd>
-          </dl>
-          <section class="card"><h2>Measured volume this period</h2><v-table [rows]="r.data.volumes" [columns]="volCols" empty="No volume was measured — a rule using this driver routes its pool to NO_DRIVER_VOLUME (FR-3.13)." /></section>
-          <section class="card"><h2>Rules using this driver</h2><v-table [rows]="r.data.rules" [columns]="rules" empty="No allocation rule uses this driver." /></section>
-        </v-page>
-      }
-    </v-state>
-  `,
-})
-export class DriverDetail {
-  id = input.required<string>();
-  res = runResource<DriverDetailDto>(() => `cost-drivers/${this.id()}`);
-  rules = ruleCols;
-  volCols: Col<DriverDetailDto['volumes'][number]>[] = [
-    { key: 'costCentre', label: 'Cost centre' }, { key: 'quantity', label: 'Quantity', type: 'num', dp: 2 },
-    { key: 'share', label: 'Share', type: 'pct', dp: 2 }, { key: 'sourceSystem', label: 'Source' },
-  ];
+export function localCode(code: string): string {
+  const i = code.indexOf('.');
+  return i >= 0 ? code.slice(i + 1) : code;
 }
 
 // ── Activities ──────────────────────────────────────────────────────────────────
@@ -294,7 +189,7 @@ export class DriverDetail {
   `,
 })
 export class Activities {
-  res = runResource<ActivityRow[]>(() => 'activities');
+  res = catalogueResource<ActivityRow[]>(() => 'activities');
   cols: Col<ActivityRow>[] = [
     { key: 'name', label: 'Activity', link: r => `/activities/${r.id}`, sub: r => r.calcExpression ?? this.stateText(r.state) },
     { key: 'costCentre', label: 'Cost centre' },
@@ -331,7 +226,7 @@ export class Activities {
 })
 export class ActivityDetail {
   id = input.required<string>();
-  res = runResource<ActivityDetailDto>(() => `activities/${this.id()}`);
+  res = catalogueResource<ActivityDetailDto>(() => `activities/${this.id()}`);
   alloc = allocationCols;
   recipeCols: Col<ActivityDetailDto['recipe'][number]>[] = [
     { key: 'resource', label: 'Resource', link: r => `/resources/${r.resourceId}` }, { key: 'resourceType', label: 'Type' },

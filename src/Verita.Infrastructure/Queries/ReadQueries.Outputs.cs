@@ -29,15 +29,17 @@ public sealed partial class ReadQueries
 
     public sealed record ProcedureRow(Guid Id, string Code, string CatalogCode, string Name, string Category, string ProcType, string Department,
         string? ServiceLine, decimal Volume, decimal StandardUnit, decimal ActualUnit, decimal ActualTotal, decimal Revenue, decimal Variance,
-        decimal VariancePct, decimal ListPrice, string State);
+        decimal VariancePct, decimal ListPrice, decimal UnitCost, decimal TotalCost, string State);
     public sealed record ChainActivity(Guid ActivityId, string Activity, decimal Quantity, string CostCentre, decimal OverheadPerOccurrence,
         AllocationDto[] OverheadSources, RecipeLineDto[] Resources);
     public sealed record SourceTxn(Guid Id, string EncounterNo, string Activity, string Resource, decimal Quantity, string Uom, DateTime OccurredAt,
         string SourceSystem, string SourceRef);
     public sealed record CrossHospital(string Hospital, string HospitalName, string Run, string RunStatus, Guid ProcedureId, decimal StandardUnit,
         decimal ActualUnit, decimal Volume);
+    public sealed record ContainingPackage(Guid Id, string Code, string Name, decimal Quantity, decimal Price, int Cases);
     public sealed record ProcedureDetail(ProcedureRow Procedure, ComponentDto[] StandardComponents, decimal StandardTotal, ProcedureCost? Actual,
-        VarianceDetail? Variance, ChainActivity[] Chain, SourceTxn[] SampleTransactions, CrossHospital[] AcrossHospitals, Provenance Provenance);
+        VarianceDetail? Variance, ChainActivity[] Chain, SourceTxn[] SampleTransactions, CrossHospital[] AcrossHospitals, Provenance Provenance,
+        ContainingPackage[] Packages, RecipeLineDto[] Recipe);
 
     public async Task<ProcedureRow[]> ProceduresAsync(ScopedRun s, Principal p, CancellationToken ct)
     {
@@ -47,7 +49,17 @@ public sealed partial class ReadQueries
         var costs = (await db.ProcedureCosts.AsNoTracking().Where(c => c.RunId == s.Run.Id).ToListAsync(ct)).ToLookup(c => c.ProcedureId);
         var prices = (await db.ProcedureRates.AsNoTracking().Where(r => r.HospitalId == s.Hospital.Id).ToListAsync(ct)).Where(r => r.IsEffective(s.Period.EndDate))
             .GroupBy(r => r.ProcedureId).ToDictionary(g => g.Key, g => g.First().ListPrice);
+        var typeMargins = await TypeMarginMapAsync(s.Hospital.Id, s.Version.Id, CostingStreamDirect, ct);
+        var itemMargins = await ItemMarginMapAsync(s.Hospital.Id, s.Version.Id, CostingStreamDirect, ct);
         var showRevenue = p.Can("revenue.view");
+        decimal? MarginFor(Procedure x)
+        {
+            if (itemMargins.TryGetValue(x.Id, out var item)) return item;
+            var type = string.Equals(x.Category, "MEDICINE", StringComparison.OrdinalIgnoreCase) ? ProcedureTypeMedicine
+                : string.IsNullOrWhiteSpace(x.ProcType) ? "UNSPECIFIED" : x.ProcType;
+            if (typeMargins.TryGetValue(type, out var typePct)) return typePct;
+            return typeMargins.GetValueOrDefault(ProcedureTypeAll);
+        }
         return (await db.Procedures.AsNoTracking().Where(x => x.HospitalId == s.Hospital.Id).OrderBy(x => x.Code).ToListAsync(ct))
             .Where(x => DeptAllowed(p, deptCodes, x.DepartmentId))
             .Select(x =>
@@ -58,107 +70,686 @@ public sealed partial class ReadQueries
                 var stdTotal = (std?.UnitCost ?? 0) * vol;
                 var variance = act is null ? 0 : Money.R4(act.TotalCost - stdTotal);
                 var state = std is null ? "NOT_COSTED" : act is null ? "NO_CASES" : "COSTED";
+                var price = prices.GetValueOrDefault(x.Id);
+                var margin = MarginFor(x);
+                var unit = margin is { } pct && pct != 0 ? Money.R4(price * pct / 100m) : std?.UnitCost ?? 0;
                 return new ProcedureRow(x.Id, x.Code, x.CatalogCode, x.Name, x.Category, x.ProcType, depts[x.DepartmentId].Name,
                     x.ServiceLineId is { } sl ? sls.GetValueOrDefault(sl) : null, vol, std?.UnitCost ?? 0, act?.UnitCost ?? 0, act?.TotalCost ?? 0,
-                    showRevenue ? act?.Revenue ?? 0 : 0, variance, stdTotal == 0 ? 0 : Money.R4(variance / stdTotal * 100m), prices.GetValueOrDefault(x.Id), state);
+                    showRevenue ? act?.Revenue ?? 0 : 0, variance, stdTotal == 0 ? 0 : Money.R4(variance / stdTotal * 100m), price, unit, Money.R4(unit * vol), state);
             }).ToArray();
     }
 
     public async Task<ProcedureDetail> ProcedureAsync(ScopedRun s, Principal p, Guid id, CancellationToken ct)
     {
         var row = (await ProceduresAsync(s, p, ct)).FirstOrDefault(x => x.Id == id) ?? throw AppError.NotFound("Procedure");
-        var comps = await db.CostComponents.AsNoTracking().Where(c => c.RunId == s.Run.Id && c.Scope == "PROCEDURE" && c.ScopeId == id).ToListAsync(ct);
-        var actual = await db.ProcedureCosts.AsNoTracking().FirstOrDefaultAsync(c => c.RunId == s.Run.Id && c.ProcedureId == id && c.CostType == "ACTUAL", ct);
-        var varianceId = await db.Variances.AsNoTracking().Where(v => v.RunId == s.Run.Id && v.ScopeId == id).Select(v => (Guid?)v.Id).FirstOrDefaultAsync(ct);
-
-        // The traceability chain: procedure -> recipe activities -> resources and the overhead
-        // each activity received, with the rule and driver that sent it.
-        var lines = await (from l in db.ProcedureActivityLines.AsNoTracking()
-                           join d in db.CostingDefinitions on l.DefinitionId equals d.Id
-                           join a in db.Activities on l.ActivityId equals a.Id
-                           join c in db.CostCenters on a.CostCenterId equals c.Id
-                           where d.ProcedureId == id && d.CostingVersionId == s.Version.Id
-                           select new { a.Id, a.Name, l.Quantity, Cc = c.Name }).ToListAsync(ct);
-        var actIds = lines.Select(l => l.Id).ToHashSet();
-        var actCosts = await db.ActivityCosts.AsNoTracking().Where(a => a.RunId == s.Run.Id && actIds.Contains(a.ActivityId)).ToDictionaryAsync(a => a.ActivityId, ct);
-        var allocs = await AllocationsAsync(s.Run.Id, a => a.TargetActivityId is { } t && actIds.Contains(t), ct);
-        var chain = new List<ChainActivity>();
-        foreach (var l in lines)
+        var pkgs = await (from c in db.PackageComponents.AsNoTracking()
+                          join pk in db.Packages.AsNoTracking() on c.PackageId equals pk.Id
+                          where c.ProcedureId == id
+                          orderby pk.Name
+                          select new { pk.Id, pk.Code, pk.Name, pk.Price, c.Quantity }).ToListAsync(ct);
+        var pkgIds = pkgs.Select(x => x.Id).ToHashSet();
+        Dictionary<Guid, int> billed = [];
+        if (pkgIds.Count > 0)
         {
-            var detail = await ActivityAsync(s, p, l.Id, ct);
-            actCosts.TryGetValue(l.Id, out var ac);
-            chain.Add(new ChainActivity(l.Id, l.Name, l.Quantity, l.Cc, ac is null || ac.Volume == 0 ? 0 : Money.R4(ac.OverheadCost / ac.Volume),
-                allocs.Where(a => a.TargetActivityId == l.Id).ToArray(), detail.Recipe));
+            billed = (await (from es in db.EncounterServices.AsNoTracking()
+                             join ec in db.EncounterCosts.AsNoTracking() on es.EncounterId equals ec.EncounterId
+                             join pr in db.Procedures.AsNoTracking() on es.ProcedureId equals pr.Id
+                             join pkg in db.Packages.AsNoTracking() on new { pr.HospitalId, pr.Code } equals new { pkg.HospitalId, pkg.Code }
+                             where ec.RunId == s.Run.Id && pkgIds.Contains(pkg.Id)
+                             select new { pkg.Id, es.Quantity }).ToListAsync(ct))
+                .GroupBy(x => x.Id)
+                .ToDictionary(g => g.Key, g => (int)Math.Round(g.Sum(x => x.Quantity), MidpointRounding.AwayFromZero));
+        }
+        var packages = pkgs.Select(x => new ContainingPackage(x.Id, x.Code, x.Name, x.Quantity, x.Price, billed.GetValueOrDefault(x.Id))).ToArray();
+        return new ProcedureDetail(row, [], 0, null, null, [], [], [], Prov(s), packages, await ProcedureRecipeAsync(s, p, id, ct));
+    }
+
+    private async Task<RecipeLineDto[]> ProcedureRecipeAsync(ScopedRun s, Principal p, Guid procedureId, CancellationToken ct)
+    {
+        var units = await db.ResourceUnitCosts.AsNoTracking().Where(u => u.RunId == s.Run.Id).ToDictionaryAsync(u => u.ResourceId, u => u.UnitCost, ct);
+        var fallback = (await (
+                from rt in db.ResourceRates.AsNoTracking()
+                join res in db.Resources.AsNoTracking() on rt.ResourceId equals res.Id
+                where res.HospitalId == s.Hospital.Id
+                select rt).ToListAsync(ct))
+            .Where(r => r.IsEffective(s.Period.EndDate))
+            .GroupBy(r => r.ResourceId)
+            .ToDictionary(g => g.Key, g => g.OrderByDescending(x => x.EffectiveFrom).First().UnitCost);
+        var lines = await (
+            from l in db.ProcedureResourceLines.AsNoTracking()
+            join d in db.CostingDefinitions.AsNoTracking() on l.DefinitionId equals d.Id
+            join r in db.Resources on l.ResourceId equals r.Id
+            where d.ProcedureId == procedureId && d.CostingVersionId == s.Version.Id
+            orderby r.Name
+            select new { r.Id, r.Name, r.ResourceType, l.Quantity, l.Uom }).ToListAsync(ct);
+        return lines.Select(x =>
+        {
+            decimal rate = 0;
+            var has = units.TryGetValue(x.Id, out rate) || fallback.TryGetValue(x.Id, out rate);
+            var masked = has ? Masked(p, x.ResourceType, rate) : null;
+            return new RecipeLineDto(x.Id, x.Name, x.ResourceType, x.Quantity, x.Uom, has ? masked : null,
+                has && masked is not null ? Money.R4(x.Quantity * rate) : null);
+        }).ToArray();
+    }
+
+    public async Task<RecipeLineDto[]> AddProcedureRecipeAsync(ScopedRun s, Principal p, Guid procedureId, Guid resourceId,
+        decimal quantity, string uom, decimal? rate, CancellationToken ct)
+    {
+        if (quantity <= 0) throw AppError.Invalid("Std qty must be greater than zero.");
+        uom = uom.Trim();
+        if (uom.Length == 0) throw AppError.Invalid("Unit is required.");
+        var proc = await db.Procedures.FirstOrDefaultAsync(x => x.Id == procedureId && x.HospitalId == s.Hospital.Id, ct)
+            ?? throw AppError.NotFound("Procedure");
+        var res = await db.Resources.FirstOrDefaultAsync(x => x.Id == resourceId && x.HospitalId == s.Hospital.Id && x.IsActive, ct)
+            ?? throw AppError.NotFound("Resource");
+
+        var def = await db.CostingDefinitions.FirstOrDefaultAsync(d => d.ProcedureId == procedureId && d.CostingVersionId == s.Version.Id, ct);
+        if (def is null)
+        {
+            def = new CostingDefinition { Id = IdGen.Sequential(), ProcedureId = procedureId, CostingVersionId = s.Version.Id };
+            db.CostingDefinitions.Add(def);
         }
 
-        var (start, end) = Runs.RunContextLoader.PeriodBounds(s.Period);
-        var sample = await (from t in db.ActivityTransactions.AsNoTracking()
-                            join sv in db.EncounterServices on t.EncounterServiceId equals sv.Id
-                            join e in db.Encounters on t.EncounterId equals e.Id
-                            join a in db.Activities on t.ActivityId equals a.Id
-                            join r in db.Resources on t.ResourceId equals r.Id
-                            where sv.ProcedureId == id && e.HospitalId == s.Hospital.Id && e.AdmitAt >= start && e.AdmitAt < end
-                            orderby t.OccurredAt descending
-                            select new SourceTxn(t.Id, e.EncounterNo, a.Name, r.Name, t.Quantity, t.Uom, t.OccurredAt, t.SourceSystem, t.SourceRef)).Take(12).ToArrayAsync(ct);
-
-        // FR-11.9: the same procedure at every hospital in scope, same period, joined on catalogue code.
-        var proc = await db.Procedures.AsNoTracking().FirstAsync(x => x.Id == id, ct);
-        var across = (await (from pr in db.Procedures.AsNoTracking()
-                             join r in db.CalculationRuns on pr.HospitalId equals r.HospitalId
-                             join h in db.Hospitals on r.HospitalId equals h.Id
-                             where pr.CatalogCode == proc.CatalogCode && r.PeriodId == s.Period.Id && r.RunType != "SIMULATION"
-                             select new { pr.Id, HCode = h.Code, h.Name, RunCode = r.Code, RunId = r.Id, r.Status, r.CreatedAt }).ToListAsync(ct))
-            .Where(x => p.HasHospital(x.HCode)).GroupBy(x => x.HCode).Select(g => g.OrderByDescending(x => x.Status == "PUBLISHED").ThenByDescending(x => x.CreatedAt).First()).ToList();
-        var acrossRows = new List<CrossHospital>();
-        foreach (var a in across)
+        var line = await db.ProcedureResourceLines.FirstOrDefaultAsync(l => l.DefinitionId == def.Id && l.ResourceId == resourceId, ct);
+        var created = line is null;
+        if (line is null)
         {
-            var pcs = await db.ProcedureCosts.AsNoTracking().Where(c => c.RunId == a.RunId && c.ProcedureId == a.Id).ToListAsync(ct);
-            var st = pcs.FirstOrDefault(c => c.CostType == "STANDARD");
-            var ac = pcs.FirstOrDefault(c => c.CostType == "ACTUAL");
-            acrossRows.Add(new CrossHospital(a.HCode, a.Name, a.RunCode, a.Status, a.Id, st?.UnitCost ?? 0, ac?.UnitCost ?? 0, ac?.Volume ?? 0));
+            db.ProcedureResourceLines.Add(new ProcedureResourceLine
+            {
+                Id = IdGen.Sequential(), DefinitionId = def.Id, ResourceId = resourceId, Quantity = Money.R6(quantity), Uom = uom,
+            });
+        }
+        else
+        {
+            line.Quantity = Money.R6(quantity);
+            line.Uom = uom;
         }
 
-        return new ProcedureDetail(row, Components(p, comps), comps.Sum(c => c.Amount), actual,
-            varianceId is { } vid ? await VarianceAsync(s, vid, ct) : null, chain.ToArray(), sample, acrossRows.ToArray(), Prov(s));
+        if (rate is > 0)
+        {
+            var asOf = s.Period.EndDate;
+            var existing = (await db.ResourceRates.Where(r => r.ResourceId == resourceId).ToListAsync(ct))
+                .Where(r => r.IsEffective(asOf)).OrderByDescending(r => r.EffectiveFrom).FirstOrDefault();
+            if (existing is null)
+            {
+                db.ResourceRates.Add(new ResourceRate
+                {
+                    Id = IdGen.Sequential(), ResourceId = resourceId, UnitCost = Money.R6(rate.Value), Uom = uom,
+                    Basis = "TDABC", SourceSystem = "DATA-ENTRY", EffectiveFrom = s.Period.StartDate, Status = "PUBLISHED",
+                });
+            }
+        }
+
+        await db.SaveChangesAsync(ct);
+        await audit.WriteAsync(p, created ? "CREATE" : "UPDATE", "ProcedureResourceLine", proc.Id.ToString(), proc.Code,
+            metadata: new { resource = res.Code, quantity, uom, rate }, ct: ct);
+        return await ProcedureRecipeAsync(s, p, procedureId, ct);
+    }
+
+    public async Task<RecipeLineDto[]> DeleteProcedureRecipeAsync(ScopedRun s, Principal p, Guid procedureId, Guid resourceId,
+        CancellationToken ct)
+    {
+        var proc = await db.Procedures.FirstOrDefaultAsync(x => x.Id == procedureId && x.HospitalId == s.Hospital.Id, ct)
+            ?? throw AppError.NotFound("Procedure");
+        var def = await db.CostingDefinitions.FirstOrDefaultAsync(d => d.ProcedureId == procedureId && d.CostingVersionId == s.Version.Id, ct)
+            ?? throw AppError.NotFound("Recipe line");
+        var line = await db.ProcedureResourceLines.FirstOrDefaultAsync(l => l.DefinitionId == def.Id && l.ResourceId == resourceId, ct)
+            ?? throw AppError.NotFound("Recipe line");
+        var res = await db.Resources.AsNoTracking().FirstOrDefaultAsync(x => x.Id == resourceId, ct);
+        db.ProcedureResourceLines.Remove(line);
+        await db.SaveChangesAsync(ct);
+        await audit.WriteAsync(p, "DELETE", "ProcedureResourceLine", proc.Id.ToString(), proc.Code,
+            metadata: new { resource = res?.Code, quantity = line.Quantity, uom = line.Uom }, ct: ct);
+        return await ProcedureRecipeAsync(s, p, procedureId, ct);
     }
 
     // ═══ Packages and DRGs ═══════════════════════════════════════════════════════════
 
-    public sealed record PackageRow(Guid Id, string Code, string Name, string Description, decimal Price, int CoveredLOS, int Cases, decimal StandardCost,
-        decimal ActualCost, decimal Revenue, decimal Variance, decimal VariancePct, decimal OperatingMargin, decimal MarginPct, decimal StandardPerCase, decimal ActualPerCase);
-    public sealed record PackageComponentDto(Guid ProcedureId, string Procedure, decimal Quantity, decimal StandardUnit, decimal StandardLine);
-    public sealed record PackageDetail(PackageRow Package, PackageComponentDto[] Components, EncounterRow[] Encounters, string Explanation);
+    public sealed record PackageRow(Guid Id, string Code, string Name, string Description, decimal Price, decimal CompositionPrice, int CoveredLOS, int Cases, decimal StandardCost,
+        decimal ActualCost, decimal Revenue, decimal Variance, decimal VariancePct, decimal OperatingMargin, decimal MarginPct, decimal StandardPerCase, decimal ActualPerCase,
+        string ProcType, decimal UnitCost, decimal TotalCost);
+    public sealed record ProcedureCostingItem(Guid Id, string Code, string Name, decimal? MarginPct, decimal ListPrice);
+    public sealed record ProcedureTypeRow(string Code, string Name, int Procedures, decimal? MarginPct, ProcedureCostingItem[] Items);
+    public sealed record PackageComponentDto(Guid ProcedureId, string Procedure, decimal Quantity, decimal StandardUnit, decimal StandardLine, string Code, string Category, string ProcType, decimal Price, bool IsMedicine, decimal Cost);
+    public sealed record PackageDetail(PackageRow Package, PackageComponentDto[] Components, EncounterRow[] Encounters, string Explanation, int EncounterCount, decimal? AverageEncounterFee);
 
     public async Task<PackageRow[]> PackagesAsync(ScopedRun s, Principal p, CancellationToken ct)
     {
         var costs = await db.PackageCosts.AsNoTracking().Where(c => c.RunId == s.Run.Id).ToDictionaryAsync(c => c.PackageId, ct);
+        var std = await db.ProcedureCosts.AsNoTracking()
+            .Where(c => c.RunId == s.Run.Id && c.CostType == "STANDARD")
+            .ToDictionaryAsync(c => c.ProcedureId, c => c.UnitCost, ct);
+        var prices = (await db.ProcedureRates.AsNoTracking().Where(r => r.HospitalId == s.Hospital.Id).ToListAsync(ct))
+            .Where(r => r.IsEffective(s.Period.EndDate))
+            .GroupBy(r => r.ProcedureId).ToDictionary(g => g.Key, g => g.First().ListPrice);
+        var comps = (await (from c in db.PackageComponents.AsNoTracking()
+                            join pkg in db.Packages.AsNoTracking() on c.PackageId equals pkg.Id
+                            where pkg.HospitalId == s.Hospital.Id
+                            select new { c.PackageId, c.ProcedureId, c.Quantity }).ToListAsync(ct));
+        var estimated = comps
+            .GroupBy(x => x.PackageId)
+            .ToDictionary(g => g.Key, g => Money.R4(g.Sum(x => x.Quantity * std.GetValueOrDefault(x.ProcedureId))));
+        var composition = comps
+            .GroupBy(x => x.PackageId)
+            .ToDictionary(g => g.Key, g => Money.R4(g.Sum(x => x.Quantity * prices.GetValueOrDefault(x.ProcedureId))));
+        var procs = await db.Procedures.AsNoTracking()
+            .Where(pr => pr.HospitalId == s.Hospital.Id)
+            .Select(pr => new { pr.Id, pr.Code, pr.ProcType, pr.Category })
+            .ToListAsync(ct);
+        var types = procs.ToDictionary(pr => pr.Code, pr => pr.ProcType);
+        var procById = procs.ToDictionary(pr => pr.Id);
+        var typeMargins = await TypeMarginMapAsync(s.Hospital.Id, s.Version.Id, CostingStreamDirect, ct);
+        var itemMargins = await ItemMarginMapAsync(s.Hospital.Id, s.Version.Id, CostingStreamDirect, ct);
+        decimal ChildUnit(Guid procedureId)
+        {
+            if (!procById.TryGetValue(procedureId, out var pr)) return std.GetValueOrDefault(procedureId);
+            return ProcedureUnitCost(pr.Id, pr.Category, pr.ProcType, prices, std, itemMargins, typeMargins);
+        }
+        var unitCostByPkg = comps
+            .GroupBy(x => x.PackageId)
+            .ToDictionary(g => g.Key, g => Money.R4(g.Sum(x => x.Quantity * ChildUnit(x.ProcedureId))));
+        var billed = (await (from es in db.EncounterServices.AsNoTracking()
+                             join ec in db.EncounterCosts.AsNoTracking() on es.EncounterId equals ec.EncounterId
+                             join pr in db.Procedures.AsNoTracking() on es.ProcedureId equals pr.Id
+                             join pkg in db.Packages.AsNoTracking() on new { pr.HospitalId, pr.Code } equals new { pkg.HospitalId, pkg.Code }
+                             where ec.RunId == s.Run.Id && pkg.HospitalId == s.Hospital.Id
+                             select new { pkg.Id, es.Quantity }).ToListAsync(ct))
+            .GroupBy(x => x.Id)
+            .ToDictionary(g => g.Key, g => (int)Math.Round(g.Sum(x => x.Quantity), MidpointRounding.AwayFromZero));
         var showRevenue = p.Can("revenue.view");
         return (await db.Packages.AsNoTracking().Where(x => x.HospitalId == s.Hospital.Id).OrderBy(x => x.Code).ToListAsync(ct)).Select(x =>
         {
             costs.TryGetValue(x.Id, out var c);
-            var cases = c?.CaseCount ?? 0;
-            return new PackageRow(x.Id, x.Code, x.Name, x.Description, x.Price, x.CoveredLOS, cases, c?.StandardCost ?? 0, c?.ActualCost ?? 0,
+            var cases = billed.GetValueOrDefault(x.Id);
+            var estimate = estimated.GetValueOrDefault(x.Id);
+            var unit = unitCostByPkg.GetValueOrDefault(x.Id);
+            return new PackageRow(x.Id, x.Code, x.Name, x.Description, x.Price, composition.GetValueOrDefault(x.Id), x.CoveredLOS, cases, c?.StandardCost ?? 0, c?.ActualCost ?? 0,
                 showRevenue ? c?.Revenue ?? 0 : 0, c?.Variance ?? 0, c?.VariancePct ?? 0, showRevenue ? c?.OperatingMargin ?? 0 : 0, showRevenue ? c?.MarginPct ?? 0 : 0,
-                cases == 0 ? 0 : Money.R4((c?.StandardCost ?? 0) / cases), cases == 0 ? 0 : Money.R4((c?.ActualCost ?? 0) / cases));
+                estimate, cases == 0 ? 0 : Money.R4((c?.ActualCost ?? 0) / cases), types.GetValueOrDefault(x.Code) ?? "", unit, Money.R4(unit * cases));
         }).ToArray();
+    }
+
+    public const string ProcedureTypeAll = "ALL";
+    public const string ProcedureTypeMedicine = "MEDICINE";
+    public const string CostingStreamDirect = "DIRECT";
+    public const string CostingStreamIndirect = "INDIRECT";
+
+    public sealed record ProcedureTypeItemsPage(ProcedureCostingItem[] Items, int Total);
+
+    private static void EnsureVersionEditable(ScopedRun s)
+    {
+        if (s.Version.Status is "PUBLISHED" or "RETIRED")
+            throw AppError.Conflict("VERSION_IMMUTABLE", "A published costing version is never edited; create a new version (FR-10.5).");
+    }
+
+    public async Task<Hospital> HospitalInScopeAsync(Principal p, string? hospital, CancellationToken ct)
+    {
+        var code = string.IsNullOrWhiteSpace(hospital) ? (await RunScope.HospitalCodesInScope(db, p, ct)).FirstOrDefault() : hospital.Trim();
+        if (code is null) throw AppError.NotFound("Hospital");
+        if (!p.HasHospital(code)) throw AppError.OutOfScope($"Hospital {code}");
+        return await db.Hospitals.AsNoTracking().FirstOrDefaultAsync(h => h.Code == code, ct) ?? throw AppError.NotFound($"Hospital {code}");
+    }
+
+    /// <summary>
+    /// Direct and Indirect costing belong to a hospital and a costing version, not to a run or a
+    /// period. With no version named: the latest open version holding this hospital's costing, else
+    /// the published one that does, else the most recent. Contracted prices are read as of today,
+    /// kept inside the version's effective dates.
+    /// </summary>
+    public async Task<ScopedRun> ConfigScopeAsync(Principal p, string? hospital, string? version, CancellationToken ct)
+    {
+        var h = await HospitalInScopeAsync(p, hospital, ct);
+        var versions = await db.CostingVersions.AsNoTracking().Where(x => x.HospitalId == h.Id).ToListAsync(ct);
+        CostingVersion? v;
+        if (!string.IsNullOrWhiteSpace(version))
+        {
+            var code = version.Trim();
+            v = versions.FirstOrDefault(x => x.Code == code) ?? throw AppError.NotFound($"Costing version {code}");
+        }
+        else
+        {
+            var configured = (await db.ProcedureTypeCostings.AsNoTracking().Where(x => x.HospitalId == h.Id).Select(x => x.CostingVersionId).Distinct().ToListAsync(ct))
+                .Concat(await db.ProcedureMargins.AsNoTracking().Where(x => x.HospitalId == h.Id).Select(x => x.CostingVersionId).Distinct().ToListAsync(ct))
+                .Concat(await db.EncounterOverheads.AsNoTracking().Where(x => x.HospitalId == h.Id).Select(x => x.CostingVersionId).Distinct().ToListAsync(ct))
+                .ToHashSet();
+            v = versions.Where(x => configured.Contains(x.Id) && x.Status is "DRAFT" or "REVIEW").OrderByDescending(x => x.CreatedAt).FirstOrDefault()
+                ?? versions.Where(x => configured.Contains(x.Id)).OrderByDescending(x => x.EffectiveFrom).FirstOrDefault()
+                ?? versions.OrderByDescending(x => x.EffectiveFrom).FirstOrDefault()
+                ?? throw AppError.NotFound("Costing version");
+        }
+        var asOf = DateOnly.FromDateTime(DateTime.UtcNow);
+        if (v.EffectiveTo is { } to && asOf > to) asOf = to;
+        if (asOf < v.EffectiveFrom) asOf = v.EffectiveFrom;
+        return new ScopedRun(new CalculationRun { HospitalId = h.Id, CostingVersionId = v.Id }, h, new Period { Code = "", StartDate = asOf, EndDate = asOf }, v);
+    }
+
+    /// <summary>
+    /// Catalogue screens always show their data; a run only adds the calculated figures. With no
+    /// run for the hospital and period, the scope carries an empty run, so results read as nothing.
+    /// </summary>
+    public async Task<ScopedRun> CatalogueScopeAsync(Principal p, string? run, string? hospital, string? period, CancellationToken ct)
+    {
+        try
+        {
+            return await Scope(p, run, hospital, period, ct);
+        }
+        catch (AppError e) when (e.Code == "NOT_COSTED")
+        {
+            var config = await ConfigScopeAsync(p, hospital, null, ct);
+            var h = config.Hospital;
+            var periods = await db.Periods.AsNoTracking().Where(x => x.HospitalId == h.Id || x.HospitalId == null).ToListAsync(ct);
+            var own = periods.Where(x => x.HospitalId == h.Id).ToList();
+            var named = periods.FirstOrDefault(x => x.Code == period?.Trim());
+            var scope = named ?? (own.Count > 0 ? own : periods).OrderByDescending(x => x.EndDate).FirstOrDefault() ?? config.Period;
+            var version = (await db.CostingVersions.AsNoTracking().Where(v => v.HospitalId == h.Id && v.Status == "PUBLISHED").ToListAsync(ct))
+                .Where(v => v.IsEffective(scope.EndDate)).OrderByDescending(v => v.EffectiveFrom).FirstOrDefault() ?? config.Version;
+            return new ScopedRun(new CalculationRun { HospitalId = h.Id, PeriodId = scope.Id, CostingVersionId = version.Id, Status = "" }, h, scope, version);
+        }
+    }
+
+    public sealed record VersionOption(string Code, string Status);
+    public sealed record ConfigVersions(string Current, VersionOption[] Options);
+
+    public async Task<ConfigVersions> ConfigVersionsAsync(Principal p, string? hospital, string? version, CancellationToken ct)
+    {
+        var s = await ConfigScopeAsync(p, hospital, version, ct);
+        var options = await db.CostingVersions.AsNoTracking().Where(v => v.HospitalId == s.Hospital.Id).OrderBy(v => v.EffectiveFrom).Select(v => new VersionOption(v.Code, v.Status)).ToArrayAsync(ct);
+        return new ConfigVersions(s.Version.Code, options);
+    }
+
+    private Task<Dictionary<string, decimal>> TypeMarginMapAsync(Guid hospitalId, Guid versionId, string stream, CancellationToken ct) =>
+        db.ProcedureTypeCostings.AsNoTracking()
+            .Where(x => x.HospitalId == hospitalId && x.CostingVersionId == versionId && x.Stream == stream)
+            .ToDictionaryAsync(x => x.ProcType, x => x.MarginPct, StringComparer.OrdinalIgnoreCase, ct);
+
+    private Task<Dictionary<Guid, decimal>> ItemMarginMapAsync(Guid hospitalId, Guid versionId, string stream, CancellationToken ct) =>
+        db.ProcedureMargins.AsNoTracking()
+            .Where(x => x.HospitalId == hospitalId && x.CostingVersionId == versionId && x.Stream == stream)
+            .ToDictionaryAsync(x => x.ProcedureId, x => x.MarginPct, ct);
+
+    private Task<Dictionary<string, decimal?>> TypeMarginNullableMapAsync(Guid hospitalId, Guid versionId, string stream, CancellationToken ct) =>
+        db.ProcedureTypeCostings.AsNoTracking()
+            .Where(x => x.HospitalId == hospitalId && x.CostingVersionId == versionId && x.Stream == stream)
+            .ToDictionaryAsync(x => x.ProcType, x => (decimal?)x.MarginPct, StringComparer.OrdinalIgnoreCase, ct);
+
+    public async Task<ProcedureTypeRow[]> ProcedureTypesAsync(ScopedRun s, Principal p, CancellationToken ct,
+        string stream = CostingStreamDirect)
+    {
+        var procs = await CostingProceduresAsync(s, p, ct);
+        var typeMargins = await TypeMarginNullableMapAsync(s.Hospital.Id, s.Version.Id, stream, ct);
+        decimal? TypeMargin(string code) => typeMargins.GetValueOrDefault(code);
+        var types = procs
+            .Where(x => !x.Medicine)
+            .GroupBy(x => string.IsNullOrWhiteSpace(x.ProcType) ? "UNSPECIFIED" : x.ProcType)
+            .Select(g => new ProcedureTypeRow(g.Key, TypeDisplayName(g.Key), g.Count(), TypeMargin(g.Key), []))
+            .OrderBy(x => x.Name)
+            .ToList();
+        return
+        [
+            new ProcedureTypeRow(ProcedureTypeAll, "All", procs.Count, TypeMargin(ProcedureTypeAll), []),
+            .. types,
+            new ProcedureTypeRow(ProcedureTypeMedicine, "Medicine", procs.Count(x => x.Medicine), TypeMargin(ProcedureTypeMedicine), []),
+        ];
+    }
+
+    public async Task<ProcedureTypeRow[]> ProcedureTypeSearchAsync(ScopedRun s, Principal p, string search, int take, CancellationToken ct,
+        string stream = CostingStreamDirect)
+    {
+        var q = (search ?? "").Trim();
+        if (q.Length == 0) return await ProcedureTypesAsync(s, p, ct, stream);
+        take = Math.Clamp(take <= 0 ? 100 : take, 1, 200);
+        var procs = (await CostingProceduresAsync(s, p, ct)).Where(x => MatchesSearch(x, q)).ToList();
+        var typeMargins = await TypeMarginNullableMapAsync(s.Hospital.Id, s.Version.Id, stream, ct);
+        decimal? TypeMargin(string code) => typeMargins.GetValueOrDefault(code);
+        var groups = procs
+            .GroupBy(x => x.Medicine ? ProcedureTypeMedicine
+                : string.IsNullOrWhiteSpace(x.ProcType) ? "UNSPECIFIED" : x.ProcType)
+            .Select(g => new
+            {
+                Code = g.Key,
+                Name = g.Key == ProcedureTypeMedicine ? "Medicine" : TypeDisplayName(g.Key),
+                Total = g.Count(),
+                Page = g.OrderBy(x => x.Name).ThenBy(x => x.Code, StringComparer.OrdinalIgnoreCase).Take(take).ToList(),
+            })
+            .OrderBy(g => g.Name)
+            .ToList();
+        var ids = groups.SelectMany(g => g.Page.Select(x => x.Id)).ToHashSet();
+        var asOf = s.Period.EndDate;
+        var itemMargins = await db.ProcedureMargins.AsNoTracking()
+            .Where(x => x.HospitalId == s.Hospital.Id && x.CostingVersionId == s.Version.Id && x.Stream == stream && ids.Contains(x.ProcedureId))
+            .ToDictionaryAsync(x => x.ProcedureId, x => (decimal?)x.MarginPct, ct);
+        var prices = (await db.ProcedureRates.AsNoTracking()
+                .Where(r => r.HospitalId == s.Hospital.Id && ids.Contains(r.ProcedureId))
+                .ToListAsync(ct))
+            .Where(r => r.IsEffective(asOf))
+            .GroupBy(r => r.ProcedureId)
+            .ToDictionary(g => g.Key, g => g.OrderByDescending(r => r.EffectiveFrom).First().ListPrice);
+        return groups.Select(g =>
+        {
+            var parent = TypeMargin(g.Code);
+            return new ProcedureTypeRow(g.Code, g.Name, g.Total, parent, g.Page.Select(x =>
+                new ProcedureCostingItem(x.Id, x.Code, x.Name, itemMargins.GetValueOrDefault(x.Id) ?? parent,
+                    prices.GetValueOrDefault(x.Id))).ToArray());
+        }).ToArray();
+    }
+
+    public async Task<ProcedureTypeItemsPage> ProcedureTypeItemsAsync(ScopedRun s, Principal p, string typeCode, int skip, int take,
+        string? search, CancellationToken ct, string stream = CostingStreamDirect)
+    {
+        typeCode = (typeCode ?? "").Trim();
+        if (typeCode.Length == 0 || typeCode.Equals(ProcedureTypeAll, StringComparison.OrdinalIgnoreCase))
+            throw AppError.Invalid("Expand a procedure type, not All.");
+        take = Math.Clamp(take <= 0 ? 100 : take, 1, 200);
+        skip = Math.Max(0, skip);
+        var q = (search ?? "").Trim();
+        var procs = (await CostingProceduresAsync(s, p, ct))
+            .Where(x => MatchesType(x, typeCode) && MatchesSearch(x, q))
+            .OrderBy(x => x.Name).ThenBy(x => x.Code, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+        var parent = (await db.ProcedureTypeCostings.AsNoTracking()
+            .FirstOrDefaultAsync(x => x.HospitalId == s.Hospital.Id && x.CostingVersionId == s.Version.Id && x.Stream == stream && x.ProcType == typeCode, ct))?.MarginPct;
+        var page = procs.Skip(skip).Take(take).ToList();
+        var ids = page.Select(x => x.Id).ToHashSet();
+        var itemMargins = await db.ProcedureMargins.AsNoTracking()
+            .Where(x => x.HospitalId == s.Hospital.Id && x.CostingVersionId == s.Version.Id && x.Stream == stream && ids.Contains(x.ProcedureId))
+            .ToDictionaryAsync(x => x.ProcedureId, x => (decimal?)x.MarginPct, ct);
+        var asOf = s.Period.EndDate;
+        var prices = (await db.ProcedureRates.AsNoTracking()
+                .Where(r => r.HospitalId == s.Hospital.Id && ids.Contains(r.ProcedureId))
+                .ToListAsync(ct))
+            .Where(r => r.IsEffective(asOf))
+            .GroupBy(r => r.ProcedureId)
+            .ToDictionary(g => g.Key, g => g.OrderByDescending(r => r.EffectiveFrom).First().ListPrice);
+        var items = page.Select(x => new ProcedureCostingItem(x.Id, x.Code, x.Name,
+            itemMargins.GetValueOrDefault(x.Id) ?? parent, prices.GetValueOrDefault(x.Id))).ToArray();
+        return new ProcedureTypeItemsPage(items, procs.Count);
+    }
+
+    public sealed record ProcedureTypeMarginItem(string Code, decimal? MarginPct);
+    public sealed record ProcedureMarginItem(Guid Id, decimal? MarginPct);
+
+    public async Task<ProcedureTypeRow[]> SaveProcedureTypeMarginsAsync(ScopedRun s, Principal p,
+        IReadOnlyList<ProcedureTypeMarginItem> items, IReadOnlyList<ProcedureMarginItem>? procedures, CancellationToken ct,
+        string stream = CostingStreamDirect)
+    {
+        stream = stream == CostingStreamIndirect ? CostingStreamIndirect : CostingStreamDirect;
+        EnsureVersionEditable(s);
+        var types = await ProcedureTypesAsync(s, p, ct, stream);
+        var allowed = types.Select(x => x.Code).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        if (items.Count == 0) throw AppError.Invalid("Nothing to save.");
+        foreach (var item in items)
+        {
+            if (string.IsNullOrWhiteSpace(item.Code) || !allowed.Contains(item.Code.Trim()))
+                throw AppError.Invalid($"Unknown procedure type '{item.Code}'.");
+            if (item.MarginPct is { } pct && (pct < 0 || pct > 999.999999m))
+                throw AppError.Invalid("Margin Cost (%) must be between 0 and 999.999999.");
+        }
+
+        var existing = await db.ProcedureTypeCostings.Where(x => x.HospitalId == s.Hospital.Id && x.CostingVersionId == s.Version.Id && x.Stream == stream).ToListAsync(ct);
+        var byType = existing.ToDictionary(x => x.ProcType, StringComparer.OrdinalIgnoreCase);
+        var typeValue = new Dictionary<string, decimal?>(StringComparer.OrdinalIgnoreCase);
+        foreach (var item in items)
+        {
+            var code = item.Code.Trim();
+            typeValue[code] = item.MarginPct is { } raw && raw != 0 ? Money.R6(raw) : null;
+            if (item.MarginPct is not { } pct || pct == 0)
+            {
+                if (byType.Remove(code, out var gone)) db.ProcedureTypeCostings.Remove(gone);
+                continue;
+            }
+            var value = Money.R6(pct);
+            if (byType.TryGetValue(code, out var row))
+            {
+                row.MarginPct = value;
+            }
+            else
+            {
+                var added = new ProcedureTypeCosting
+                {
+                    Id = IdGen.Sequential(), HospitalId = s.Hospital.Id, CostingVersionId = s.Version.Id, ProcType = code, Stream = stream, MarginPct = value,
+                };
+                db.ProcedureTypeCostings.Add(added);
+                byType[code] = added;
+            }
+        }
+
+        if (procedures is { Count: > 0 })
+        {
+            var procs = (await CostingProceduresAsync(s, p, ct)).ToDictionary(x => x.Id);
+            var existingItems = await db.ProcedureMargins.Where(x => x.HospitalId == s.Hospital.Id && x.CostingVersionId == s.Version.Id && x.Stream == stream).ToListAsync(ct);
+            var byProc = existingItems.ToDictionary(x => x.ProcedureId);
+            foreach (var item in procedures)
+            {
+                if (!procs.TryGetValue(item.Id, out var hit))
+                    throw AppError.Invalid("Unknown procedure in margin list.");
+                if (item.MarginPct is { } pct && (pct < 0 || pct > 999.999999m))
+                    throw AppError.Invalid("Margin Cost (%) must be between 0 and 999.999999.");
+                var typeCode = hit.Medicine ? ProcedureTypeMedicine
+                    : string.IsNullOrWhiteSpace(hit.ProcType) ? "UNSPECIFIED" : hit.ProcType;
+                var parent = typeValue.GetValueOrDefault(typeCode) ?? types.FirstOrDefault(t => t.Code == typeCode)?.MarginPct;
+                var value = item.MarginPct is { } raw && raw != 0 ? Money.R6(raw) : (decimal?)null;
+                var inherits = value is null || parent is decimal parentVal && value == parentVal;
+                if (inherits)
+                {
+                    if (byProc.Remove(item.Id, out var gone)) db.ProcedureMargins.Remove(gone);
+                    continue;
+                }
+                if (byProc.TryGetValue(item.Id, out var row))
+                {
+                    row.MarginPct = value!.Value;
+                }
+                else
+                {
+                    var added = new ProcedureMargin
+                    {
+                        Id = IdGen.Sequential(), HospitalId = s.Hospital.Id, CostingVersionId = s.Version.Id, ProcedureId = item.Id, Stream = stream, MarginPct = value!.Value,
+                    };
+                    db.ProcedureMargins.Add(added);
+                    byProc[item.Id] = added;
+                }
+            }
+        }
+
+        await db.SaveChangesAsync(ct);
+        await audit.WriteAsync(p, "UPDATE", "ProcedureTypeCosting", s.Hospital.Id.ToString(), s.Hospital.Code,
+            metadata: new { stream, items = items.Select(x => new { x.Code, x.MarginPct }), procedureCount = procedures?.Count }, ct: ct);
+        return await ProcedureTypesAsync(s, p, ct, stream);
+    }
+
+    public sealed record EncounterOverheadRow(Guid Id, Guid CostCenterId, string CostCenterCode, string CostCenterName, string Description,
+        decimal? OverheadPct, decimal? OverheadAmount);
+    public sealed record CostCentrePick(Guid Id, string Code, string Name);
+    public sealed record EncounterOverheadPage(EncounterOverheadRow[] Items, CostCentrePick[] CostCentres);
+    public sealed record EncounterOverheadBody(Guid CostCenterId, string? Description, decimal? OverheadPct, decimal? OverheadAmount);
+
+    public async Task<EncounterOverheadPage> EncounterOverheadsAsync(ScopedRun s, Principal p, CancellationToken ct)
+    {
+        var depts = await db.Departments.AsNoTracking().ToDictionaryAsync(d => d.Id, ct);
+        var deptCodes = depts.ToDictionary(d => d.Key, d => d.Value.CatalogCode);
+        var centres = (await db.CostCenters.AsNoTracking().Where(c => c.HospitalId == s.Hospital.Id).OrderBy(c => c.Code).ToListAsync(ct))
+            .Where(c => DeptAllowed(p, deptCodes, c.DepartmentId))
+            .ToList();
+        var picks = centres.Select(c => new CostCentrePick(c.Id, c.Code, c.Name)).ToArray();
+        var allowed = centres.Select(c => c.Id).ToHashSet();
+        var names = centres.ToDictionary(c => c.Id);
+        var rows = await db.EncounterOverheads.AsNoTracking()
+            .Where(x => x.HospitalId == s.Hospital.Id && x.CostingVersionId == s.Version.Id)
+            .ToListAsync(ct);
+        var items = rows
+            .Where(x => allowed.Contains(x.CostCenterId) && names.ContainsKey(x.CostCenterId))
+            .OrderBy(x => names[x.CostCenterId].Code).ThenBy(x => x.Description)
+            .Select(x => ToEncounterOverheadRow(x, names[x.CostCenterId]))
+            .ToArray();
+        return new EncounterOverheadPage(items, picks);
+    }
+
+    public async Task<EncounterOverheadPage> SaveEncounterOverheadAsync(ScopedRun s, Principal p, Guid? id,
+        EncounterOverheadBody body, CancellationToken ct)
+    {
+        EnsureVersionEditable(s);
+        var cc = await db.CostCenters.FirstOrDefaultAsync(c => c.Id == body.CostCenterId && c.HospitalId == s.Hospital.Id, ct)
+            ?? throw AppError.NotFound("Cost centre");
+        var depts = await db.Departments.AsNoTracking().ToDictionaryAsync(d => d.Id, ct);
+        var deptCodes = depts.ToDictionary(d => d.Key, d => d.Value.CatalogCode);
+        if (!DeptAllowed(p, deptCodes, cc.DepartmentId)) throw AppError.Forbidden("masterdata.view");
+        var pct = NormalizePct(body.OverheadPct, "Overhead (%)");
+        var amount = NormalizeAmount(body.OverheadAmount);
+        var description = (body.Description ?? "").Trim();
+
+        EncounterOverhead row;
+        if (id is { } existingId)
+        {
+            row = await db.EncounterOverheads.FirstOrDefaultAsync(x => x.Id == existingId && x.HospitalId == s.Hospital.Id && x.CostingVersionId == s.Version.Id, ct)
+                ?? throw AppError.NotFound("Encounter overhead");
+            row.CostCenterId = cc.Id;
+            row.Description = description;
+            row.OverheadPct = pct;
+            row.OverheadAmount = amount;
+            await db.SaveChangesAsync(ct);
+            await audit.WriteAsync(p, "UPDATE", "EncounterOverhead", row.Id.ToString(), cc.Code,
+                after: new { cc.Code, description, pct, amount }, ct: ct);
+        }
+        else
+        {
+            row = new EncounterOverhead
+            {
+                Id = IdGen.Sequential(), HospitalId = s.Hospital.Id, CostingVersionId = s.Version.Id, CostCenterId = cc.Id,
+                Description = description, OverheadPct = pct, OverheadAmount = amount,
+            };
+            db.EncounterOverheads.Add(row);
+            await db.SaveChangesAsync(ct);
+            await audit.WriteAsync(p, "CREATE", "EncounterOverhead", row.Id.ToString(), cc.Code,
+                after: new { cc.Code, description, pct, amount }, ct: ct);
+        }
+        return await EncounterOverheadsAsync(s, p, ct);
+    }
+
+    public async Task<EncounterOverheadPage> DeleteEncounterOverheadAsync(ScopedRun s, Principal p, Guid id, CancellationToken ct)
+    {
+        EnsureVersionEditable(s);
+        var row = await db.EncounterOverheads.FirstOrDefaultAsync(x => x.Id == id && x.HospitalId == s.Hospital.Id && x.CostingVersionId == s.Version.Id, ct)
+            ?? throw AppError.NotFound("Encounter overhead");
+        db.EncounterOverheads.Remove(row);
+        await db.SaveChangesAsync(ct);
+        await audit.WriteAsync(p, "DELETE", "EncounterOverhead", row.Id.ToString(), row.CostCenterId.ToString(), ct: ct);
+        return await EncounterOverheadsAsync(s, p, ct);
+    }
+
+    private static EncounterOverheadRow ToEncounterOverheadRow(EncounterOverhead x, CostCenter cc) =>
+        new(x.Id, x.CostCenterId, cc.Code, cc.Name, x.Description,
+            x.OverheadPct == 0 ? null : x.OverheadPct, x.OverheadAmount == 0 ? null : x.OverheadAmount);
+
+    private static decimal NormalizePct(decimal? raw, string label)
+    {
+        if (raw is null || raw == 0) return 0;
+        if (raw < 0 || raw > 999.999999m) throw AppError.Invalid($"{label} must be between 0 and 999.999999.");
+        return Money.R6(raw.Value);
+    }
+
+    private static decimal NormalizeAmount(decimal? raw)
+    {
+        if (raw is null || raw == 0) return 0;
+        if (raw < 0) throw AppError.Invalid("Max Cap (Fixed) cannot be negative.");
+        return Money.R4(raw.Value);
+    }
+
+    private sealed record CostingProc(Guid Id, string Code, string Name, string CatalogCode, string ProcType, bool Medicine);
+
+    private async Task<List<CostingProc>> CostingProceduresAsync(ScopedRun s, Principal p, CancellationToken ct)
+    {
+        var depts = await db.Departments.AsNoTracking().ToDictionaryAsync(d => d.Id, ct);
+        var deptCodes = depts.ToDictionary(d => d.Key, d => d.Value.CatalogCode);
+        var packageCodes = (await db.Packages.AsNoTracking()
+            .Where(x => x.HospitalId == s.Hospital.Id)
+            .Select(x => x.Code).ToListAsync(ct)).ToHashSet();
+        return (await db.Procedures.AsNoTracking()
+                .Where(x => x.HospitalId == s.Hospital.Id)
+                .Select(x => new { x.Id, x.Code, x.Name, x.CatalogCode, x.ProcType, x.Category, x.DepartmentId })
+                .ToListAsync(ct))
+            .Where(x => DeptAllowed(p, deptCodes, x.DepartmentId) && !packageCodes.Contains(x.Code))
+            .Select(x => new CostingProc(x.Id, x.Code, x.Name, x.CatalogCode, x.ProcType,
+                string.Equals(x.Category, "MEDICINE", StringComparison.OrdinalIgnoreCase)))
+            .ToList();
+    }
+
+    private static bool MatchesType(CostingProc x, string typeCode)
+    {
+        if (typeCode.Equals(ProcedureTypeMedicine, StringComparison.OrdinalIgnoreCase)) return x.Medicine;
+        if (x.Medicine) return false;
+        var code = string.IsNullOrWhiteSpace(x.ProcType) ? "UNSPECIFIED" : x.ProcType;
+        return code.Equals(typeCode, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool MatchesSearch(CostingProc x, string q)
+    {
+        if (q.Length == 0) return true;
+        if (x.Name.Contains(q, StringComparison.OrdinalIgnoreCase)) return true;
+        if (x.Code.Contains(q, StringComparison.OrdinalIgnoreCase)) return true;
+        if (x.CatalogCode.Contains(q, StringComparison.OrdinalIgnoreCase)) return true;
+        var i = x.Code.IndexOf('.');
+        return i >= 0 && x.Code[(i + 1)..].Contains(q, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static string TypeDisplayName(string code) =>
+        string.Join(' ', code.Split('_', StringSplitOptions.RemoveEmptyEntries)
+            .Select(w => char.ToUpperInvariant(w[0]) + w[1..].ToLowerInvariant()));
+
+    private static decimal ProcedureUnitCost(Guid id, string category, string procType,
+        IReadOnlyDictionary<Guid, decimal> prices, IReadOnlyDictionary<Guid, decimal> recipe,
+        IReadOnlyDictionary<Guid, decimal> itemMargins, IReadOnlyDictionary<string, decimal> typeMargins)
+    {
+        decimal? margin = itemMargins.TryGetValue(id, out var item) ? item
+            : typeMargins.TryGetValue(
+                string.Equals(category, "MEDICINE", StringComparison.OrdinalIgnoreCase) ? ProcedureTypeMedicine
+                : string.IsNullOrWhiteSpace(procType) ? "UNSPECIFIED" : procType, out var typePct) ? typePct
+            : typeMargins.GetValueOrDefault(ProcedureTypeAll);
+        return margin is { } pct && pct != 0 ? Money.R4(prices.GetValueOrDefault(id) * pct / 100m) : recipe.GetValueOrDefault(id);
     }
 
     public async Task<PackageDetail> PackageAsync(ScopedRun s, Principal p, Guid id, CancellationToken ct)
     {
         var row = (await PackagesAsync(s, p, ct)).FirstOrDefault(x => x.Id == id) ?? throw AppError.NotFound("Package");
         var std = await db.ProcedureCosts.AsNoTracking().Where(c => c.RunId == s.Run.Id && c.CostType == "STANDARD").ToDictionaryAsync(c => c.ProcedureId, c => c.UnitCost, ct);
+        var prices = (await db.ProcedureRates.AsNoTracking().Where(r => r.HospitalId == s.Hospital.Id).ToListAsync(ct))
+            .Where(r => r.IsEffective(s.Period.EndDate))
+            .GroupBy(r => r.ProcedureId).ToDictionary(g => g.Key, g => g.First().ListPrice);
+        var typeMargins = await TypeMarginMapAsync(s.Hospital.Id, s.Version.Id, CostingStreamDirect, ct);
+        var itemMargins = await ItemMarginMapAsync(s.Hospital.Id, s.Version.Id, CostingStreamDirect, ct);
         var comps = (await (from c in db.PackageComponents.AsNoTracking()
                             join pr in db.Procedures on c.ProcedureId equals pr.Id
                             where c.PackageId == id
-                            select new { pr.Id, pr.Name, c.Quantity }).ToListAsync(ct))
-            .Select(x => new PackageComponentDto(x.Id, x.Name, x.Quantity, std.GetValueOrDefault(x.Id), Money.R4(std.GetValueOrDefault(x.Id) * x.Quantity))).ToArray();
-        var encs = (await EncountersAsync(s, p, new EncounterQuery { PackageId = id, PageSize = 200 }, ct)).Rows;
+                            select new { pr.Id, pr.Name, pr.Code, pr.ProcType, pr.Category, c.Quantity }).ToListAsync(ct))
+            .Select(x =>
+            {
+                var unit = ProcedureUnitCost(x.Id, x.Category, x.ProcType, prices, std, itemMargins, typeMargins);
+                return new PackageComponentDto(x.Id, x.Name, x.Quantity, std.GetValueOrDefault(x.Id), Money.R4(std.GetValueOrDefault(x.Id) * x.Quantity), x.Code, x.Category, x.ProcType, prices.GetValueOrDefault(x.Id),
+                    string.Equals(x.Category, "MEDICINE", StringComparison.OrdinalIgnoreCase), Money.R4(unit * x.Quantity));
+            }).ToArray();
+        var encPage = await EncountersAsync(s, p, new EncounterQuery { BilledPackageId = id, PageSize = 1 }, ct, auditPhi: false);
         var perCase = row.Cases == 0 ? 0 : (row.ActualCost - row.StandardCost) / row.Cases;
         var explanation = row.Cases == 0 ? "No cases this period."
             : Math.Abs(perCase) < 1 ? "Actual cost is in line with the standard."
             : $"Each case ran SAR {Math.Abs(perCase):N0} {(perCase > 0 ? "above" : "below")} standard across {row.Cases} cases" +
               (p.Can("revenue.view") ? $"; the contracted price of SAR {row.Price:N0} {(row.ActualPerCase > row.Price ? "no longer covers" : "still covers")} the average case." : ".");
-        return new PackageDetail(row, comps, encs, explanation);
+        return new PackageDetail(row, comps, [], explanation, encPage.Total, await AverageEncounterFeeAsync(s, id, encPage.Total, ct));
+    }
+
+    /// <summary>Billed net of this package procedure, divided by encounters in the run that invoiced it.</summary>
+    private async Task<decimal?> AverageEncounterFeeAsync(ScopedRun s, Guid packageId, int encounterCount, CancellationToken ct)
+    {
+        if (encounterCount <= 0) return null;
+        var billedEncounters = from es in db.EncounterServices.AsNoTracking()
+                               join pr in db.Procedures.AsNoTracking() on es.ProcedureId equals pr.Id
+                               join pkg in db.Packages.AsNoTracking() on new { pr.HospitalId, pr.Code } equals new { pkg.HospitalId, pkg.Code }
+                               join ec in db.EncounterCosts.AsNoTracking() on es.EncounterId equals ec.EncounterId
+                               where pkg.Id == packageId && ec.RunId == s.Run.Id
+                               select es.EncounterId;
+        var net = await (from rt in db.RevenueTransactions.AsNoTracking()
+                         join pr in db.Procedures.AsNoTracking() on rt.ProcedureId equals pr.Id
+                         join pkg in db.Packages.AsNoTracking() on new { pr.HospitalId, pr.Code } equals new { pkg.HospitalId, pkg.Code }
+                         where pkg.Id == packageId && billedEncounters.Contains(rt.EncounterId)
+                         select rt.NetAmount).SumAsync(ct);
+        return Money.R4(net / encounterCount);
     }
 
     public sealed record DrgRow(Guid Id, string Code, string Name, string Mdc, decimal RelativeWeight, decimal ExpectedLOS, int Cases, decimal Mean, decimal Median,
@@ -169,9 +760,13 @@ public sealed partial class ReadQueries
 
     public async Task<DrgRow[]> DrgsAsync(ScopedRun s, Principal p, CancellationToken ct)
     {
+        var used = await db.Encounters.AsNoTracking()
+            .Where(e => e.HospitalId == s.Hospital.Id && e.DrgId != null)
+            .Select(e => e.DrgId!.Value).Distinct().ToListAsync(ct);
+        if (used.Count == 0) return [];
         var sums = await db.DrgCostSummaries.AsNoTracking().Where(d => d.RunId == s.Run.Id).ToDictionaryAsync(d => d.DrgId, ct);
         var showRevenue = p.Can("revenue.view");
-        return (await db.Drgs.AsNoTracking().OrderBy(d => d.Code).ToListAsync(ct)).Select(d =>
+        return (await db.Drgs.AsNoTracking().Where(d => used.Contains(d.Id)).OrderBy(d => d.Code).ToListAsync(ct)).Select(d =>
         {
             sums.TryGetValue(d.Id, out var x);
             return new DrgRow(d.Id, d.Code, d.Name, d.Mdc, d.RelativeWt, d.ExpectedLOS, x?.CaseCount ?? 0, x?.AvgCost ?? 0, x?.MedianCost ?? 0, x?.P25Cost ?? 0,
