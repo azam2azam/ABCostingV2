@@ -50,6 +50,8 @@ public sealed class VeritaDbContext(DbContextOptions<VeritaDbContext> options) :
     public DbSet<Drg> Drgs => Set<Drg>();
     // Clinical
     public DbSet<Payer> Payers => Set<Payer>();
+    public DbSet<Insurer> Insurers => Set<Insurer>();
+    public DbSet<PayerAdministrator> PayerAdministrators => Set<PayerAdministrator>();
     public DbSet<Patient> Patients => Set<Patient>();
     public DbSet<Encounter> Encounters => Set<Encounter>();
     public DbSet<EncounterService> EncounterServices => Set<EncounterService>();
@@ -248,6 +250,8 @@ public sealed class VeritaDbContext(DbContextOptions<VeritaDbContext> options) :
         Fk<Encounter, Department>(x => x.DepartmentId);
         Fk<Encounter, ServiceLine>(x => x.ServiceLineId);
         Fk<Encounter, Payer>(x => x.PayerId);
+        Fk<Payer, Insurer>(x => x.InsurerId);
+        Fk<Payer, PayerAdministrator>(x => x.AdministratorId);
         Fk<Encounter, Drg>(x => x.DrgId);
         Fk<Encounter, Package>(x => x.PackageId);
         Fk<Encounter, Provider>(x => x.ProviderId);
@@ -310,8 +314,8 @@ public sealed class VeritaDbContext(DbContextOptions<VeritaDbContext> options) :
 
         Unique<Hospital>(x => x.Code); Unique<Facility>(x => x.Code); Unique<ServiceLine>(x => x.Code); Unique<Department>(x => x.Code);
         mb.Entity<Hospital>().HasIndex(x => new { x.HisSetupId, x.HisProjectId });
-        Unique<CostCenter>(x => new { x.HospitalId, x.Code }); Unique<GLAccount>(x => x.Code); Unique<Period>(x => x.Code); Unique<CostPool>(x => x.Code);
-        mb.Entity<Period>().HasIndex(x => x.HospitalId);
+        Unique<Insurer>(x => x.Code); Unique<PayerAdministrator>(x => x.Code);
+        Unique<CostCenter>(x => new { x.HospitalId, x.Code }); Unique<GLAccount>(x => x.Code); mb.Entity<Period>().HasIndex(x => new { x.HospitalId, x.Code }).IsUnique(); Unique<CostPool>(x => x.Code);
         Unique<CostDriver>(x => x.Code); Unique<Resource>(x => x.Code); Unique<Provider>(x => x.Code); Unique<Activity>(x => x.Code);
         Unique<Procedure>(x => x.Code); Unique<Package>(x => x.Code); Unique<Drg>(x => x.Code); Unique<Payer>(x => x.Code);
         Unique<Patient>(x => new { x.HospitalId, x.Mrn }); Unique<Encounter>(x => new { x.HospitalId, x.EncounterNo }); Unique<AllocationRule>(x => x.Code);

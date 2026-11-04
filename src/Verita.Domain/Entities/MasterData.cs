@@ -103,7 +103,7 @@ public class Period
     public DateOnly EndDate { get; set; }
     public int Days { get; set; }
     public string Status { get; set; } = "OPEN";
-    /// <summary>Null = shared calendar. Set when a hospital uses a window that is not a calendar month.</summary>
+    /// <summary>The hospital this period belongs to. Null only while a fixture loads, before AssignSharedAsync.</summary>
     public Guid? HospitalId { get; set; }
 }
 

@@ -40,7 +40,7 @@ public static class EntitySpecs
 
         // ── Financial ────────────────────────────────────────────────────────────
         new("GLAccount", typeof(GLAccount), "Financial", "Ledger account, shared by the group.", ["Code"], []),
-        new("Period", typeof(Period), "Financial", "Accounting month, shared by the group.", ["Code"], []),
+        new("Period", typeof(Period), "Financial", "A hospital's accounting period. Days are worked out from the dates.", ["HospitalId", "Code"], [Hosp], Hidden: ["Days"]),
         new("CostDriver", typeof(CostDriver), "Financial", "Measurable cause of cost, with its source system and formula.", ["Code"],
             [Hosp, R("costCentreCode", "CostCenterId", typeof(CostCenter), opt: true)]),
         new("CostPool", typeof(CostPool), "Financial", "Homogeneous bundle of cost. Funded by a resource = consumption stream; otherwise allocated by rule.", ["Code"],

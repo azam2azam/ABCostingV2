@@ -63,6 +63,24 @@ public sealed class RunService(IDbContextFactory<VeritaDbContext> factory, Verit
             ? $"{period.Code} costing — {hospitalName}"
             : $"{period.StartDate:yyyy-MM-dd} – {period.EndDate:yyyy-MM-dd} costing — {hospitalName}";
 
+    /// <summary>Add a period to a hospital's calendar. It may not overlap one the hospital already has.</summary>
+    public async Task<string> AddPeriodAsync(Guid hospitalId, string? code, DateOnly start, DateOnly end, Principal actor, CancellationToken ct = default)
+    {
+        if (end < start) throw AppError.Invalid("The period ends before it starts.");
+        await using var db = await factory.CreateDbContextAsync(ct);
+        var owned = await db.Periods.AsNoTracking().Where(p => p.HospitalId == hospitalId).ToListAsync(ct);
+        var name = string.IsNullOrWhiteSpace(code) ? start.ToString("yyyy MMM", System.Globalization.CultureInfo.InvariantCulture) : code.Trim();
+        if (owned.Any(p => string.Equals(p.Code, name, StringComparison.OrdinalIgnoreCase)))
+            throw AppError.Conflict("PERIOD_EXISTS", $"This hospital already has a period named {name}.");
+        if (owned.FirstOrDefault(p => p.StartDate <= end && p.EndDate >= start) is { } clash)
+            throw AppError.Conflict("PERIOD_OVERLAP", $"These dates overlap {clash.Code} ({clash.StartDate:yyyy-MM-dd} – {clash.EndDate:yyyy-MM-dd}).");
+        var period = new Period { Id = IdGen.Sequential(), Code = name, StartDate = start, EndDate = end, Days = end.DayNumber - start.DayNumber + 1, Status = "OPEN", HospitalId = hospitalId };
+        db.Periods.Add(period);
+        await db.SaveChangesAsync(ct);
+        await audit.WriteAsync(actor, "CREATE", "Period", period.Id.ToString(), name, ct: ct);
+        return name;
+    }
+
     /// <summary>Remove a hospital's own period, only while nothing was calculated or posted against it.</summary>
     public async Task DeletePeriodAsync(Guid periodId, Principal actor, CancellationToken ct = default)
     {

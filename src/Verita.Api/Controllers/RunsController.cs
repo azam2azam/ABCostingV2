@@ -41,9 +41,7 @@ public sealed class RunsController(RunService runs, RunQueue queue, VeritaDbCont
         var p = await Me();
         if (!p.HasHospital(req.Hospital)) throw AppError.OutOfScope($"Hospital {req.Hospital}");
         var hospital = await db.Hospitals.FirstOrDefaultAsync(h => h.Code == req.Hospital, ct) ?? throw AppError.NotFound($"Hospital {req.Hospital}");
-        var period = await db.Periods.FirstOrDefaultAsync(x => x.Code == req.Period, ct) ?? throw AppError.NotFound($"Period {req.Period}");
-        if (period.HospitalId is { } hid && hid != hospital.Id)
-            throw AppError.Invalid($"Period {period.Code} belongs to another hospital.");
+        var period = await db.Periods.FirstOrDefaultAsync(x => x.HospitalId == hospital.Id && x.Code == req.Period, ct) ?? throw AppError.NotFound($"Period {req.Period}");
         var run = await runs.CreateAsync(hospital.Id, period.Id, p.Email, req.Name, ct: ct);
         return Created($"/api/v1/runs/{run.Id}", (await Q.RunsAsync(p, ct)).First(r => r.Id == run.Id));
     }
@@ -55,8 +53,9 @@ public sealed class RunsController(RunService runs, RunQueue queue, VeritaDbCont
     [Authorize(Policy = "run.execute")]
     public async Task<AppliedVersion> Applied([FromQuery] string hospital, [FromQuery] string period, CancellationToken ct)
     {
-        var row = await db.Periods.AsNoTracking().FirstOrDefaultAsync(x => x.Code == period, ct) ?? throw AppError.NotFound($"Period {period}");
+        if (!(await Me()).HasHospital(hospital)) throw AppError.OutOfScope($"Hospital {hospital}");
         var owner = await db.Hospitals.AsNoTracking().FirstOrDefaultAsync(x => x.Code == hospital, ct) ?? throw AppError.NotFound($"Hospital {hospital}");
+        var row = await db.Periods.AsNoTracking().FirstOrDefaultAsync(x => x.HospitalId == owner.Id && x.Code == period, ct) ?? throw AppError.NotFound($"Period {period}");
         var version = await RunService.AppliedVersionAsync(db, owner.Id, row, ct);
         return new AppliedVersion(version?.Code, version?.Name, version?.Status);
     }
@@ -92,6 +91,19 @@ public sealed class RunsController(RunService runs, RunQueue queue, VeritaDbCont
         return NoContent();
     }
 
+    public sealed record NewPeriod(string Hospital, string? Code, DateOnly StartDate, DateOnly EndDate);
+
+    [HttpPost("periods")]
+    [Authorize(Policy = "masterdata.edit")]
+    public async Task<IActionResult> AddPeriod(NewPeriod req, CancellationToken ct)
+    {
+        var p = await Me();
+        if (!p.HasHospital(req.Hospital)) throw AppError.OutOfScope($"Hospital {req.Hospital}");
+        var hospital = await db.Hospitals.AsNoTracking().FirstOrDefaultAsync(h => h.Code == req.Hospital, ct) ?? throw AppError.NotFound($"Hospital {req.Hospital}");
+        var code = await runs.AddPeriodAsync(hospital.Id, req.Code, req.StartDate, req.EndDate, p, ct);
+        return Created($"/api/v1/periods/{code}", new { code });
+    }
+
     [HttpDelete("periods/{id:guid}")]
     [Authorize(Policy = "masterdata.edit")]
     public async Task<IActionResult> DeletePeriod(Guid id, CancellationToken ct)
@@ -114,7 +126,7 @@ public sealed class RunsController(RunService runs, RunQueue queue, VeritaDbCont
 }
 
 [Route("api/v1")]
-public sealed class GovernanceController(GovernanceService governance) : VeritaController
+public sealed class GovernanceController(GovernanceService governance, VeritaDbContext db) : VeritaController
 {
     [HttpGet("governance")]
     [Authorize(Policy = "governance.view")]
@@ -128,6 +140,14 @@ public sealed class GovernanceController(GovernanceService governance) : VeritaC
     {
         var p = await Me();
         if (body.EntityType == "CALCULATION_RUN") await Q.Scope(p, body.EntityId.ToString(), null, null, ct);
+        if (body.EntityType == "COSTING_VERSION")
+        {
+            var owner = await (from v in db.CostingVersions.AsNoTracking()
+                               join h in db.Hospitals.AsNoTracking() on v.HospitalId equals h.Id
+                               where v.Id == body.EntityId
+                               select h.Code).FirstOrDefaultAsync(ct) ?? throw AppError.NotFound("Costing version");
+            if (!p.HasHospital(owner)) throw AppError.OutOfScope(owner);
+        }
         var req = await governance.RequestAsync(body.EntityType, body.EntityId, body.Note, p, ct);
         return Ok(new { req.Id, req.Stage });
     }

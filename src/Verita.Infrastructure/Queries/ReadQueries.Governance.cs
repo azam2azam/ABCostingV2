@@ -14,7 +14,7 @@ public sealed partial class ReadQueries
     public sealed record DiffLine(string Procedure, string Kind, string Item, decimal? From, decimal? To);
     public sealed record VersionDiff(string FromVersion, string ToVersion, DiffLine[] Changes);
     public sealed record CostingModelsDto(VersionDto[] Versions, VersionDiff[] DirectDiffs, VersionDiff[] IndirectDiffs, ApprovalDto[] Approvals);
-    public sealed record NewVersionBody(Guid FromVersionId, string Code, string Name, string? Description, DateOnly EffectiveFrom, DateOnly? EffectiveTo);
+    public sealed record NewVersionBody(Guid? FromVersionId, string Code, string Name, string? Description, DateOnly EffectiveFrom, DateOnly? EffectiveTo, string? Hospital = null);
 
     public async Task<CostingModelsDto> CostingModelsAsync(Principal p, string? hospital, CancellationToken ct)
     {
@@ -106,21 +106,35 @@ public sealed partial class ReadQueries
         var name = (body.Name ?? "").Trim();
         if (code.Length == 0) throw AppError.Invalid("Version code is required.");
         if (name.Length == 0) name = code;
-        var from = await db.CostingVersions.AsNoTracking().FirstOrDefaultAsync(v => v.Id == body.FromVersionId, ct)
-            ?? throw AppError.NotFound("Source costing version");
-        var hospitalCode = await db.Hospitals.AsNoTracking().Where(h => h.Id == from.HospitalId).Select(h => h.Code).FirstAsync(ct);
+        var from = body.FromVersionId is { } source
+            ? await db.CostingVersions.AsNoTracking().FirstOrDefaultAsync(v => v.Id == source, ct) ?? throw AppError.NotFound("Source costing version")
+            : null;
+        var owner = from is not null
+            ? await db.Hospitals.AsNoTracking().FirstAsync(h => h.Id == from.HospitalId, ct)
+            : await HospitalInScopeAsync(p, body.Hospital, ct);
+        var hospitalCode = owner.Code;
         if (!p.HasHospital(hospitalCode)) throw AppError.OutOfScope(hospitalCode);
-        if (await db.CostingVersions.AnyAsync(v => v.HospitalId == from.HospitalId && v.Code == code, ct))
+        // Only a hospital's first version starts blank; later ones carry its costing forward.
+        if (from is null && await db.CostingVersions.AnyAsync(v => v.HospitalId == owner.Id, ct))
+            throw AppError.Invalid("Choose a source version.");
+        if (await db.CostingVersions.AnyAsync(v => v.HospitalId == owner.Id && v.Code == code, ct))
             throw AppError.Conflict("VERSION_EXISTS", $"{hospitalCode} already has a costing version named {code}.");
         if (body.EffectiveTo is { } to && to < body.EffectiveFrom)
             throw AppError.Invalid("effectiveTo is before effectiveFrom.");
 
         var version = new CostingVersion
         {
-            Id = IdGen.Sequential(), HospitalId = from.HospitalId, Code = code, Name = name, Description = (body.Description ?? "").Trim(),
+            Id = IdGen.Sequential(), HospitalId = owner.Id, Code = code, Name = name, Description = (body.Description ?? "").Trim(),
             EffectiveFrom = body.EffectiveFrom, EffectiveTo = body.EffectiveTo, Status = "DRAFT", CreatedAt = DateTime.UtcNow,
         };
         db.CostingVersions.Add(version);
+        if (from is null)
+        {
+            await db.SaveChangesAsync(ct);
+            await audit.WriteAsync(p, "CREATE", "CostingVersion", version.Id.ToString(), version.Code,
+                after: new { source = (string?)null, code = version.Code, version.Name, version.EffectiveFrom }, ct: ct);
+            return await CostingModelsAsync(p, hospitalCode, ct);
+        }
 
         var defs = await db.CostingDefinitions.AsNoTracking().Where(d => d.CostingVersionId == from.Id).ToListAsync(ct);
         var defMap = defs.ToDictionary(d => d.Id, _ => IdGen.Sequential());

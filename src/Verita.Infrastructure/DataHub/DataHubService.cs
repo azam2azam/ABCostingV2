@@ -129,7 +129,7 @@ public sealed class DataHubService(IDbContextFactory<VeritaDbContext> factory, I
     private static async Task<Dictionary<string, RefTarget>> CodesOf<T>(VeritaDbContext db, string key, Dictionary<Guid, string> hospitals, CancellationToken ct) where T : class
     {
         var hospitalProp = typeof(T).GetProperty("HospitalId");
-        // A shared row (a Period open to every hospital) has no HospitalId.
+        // A shared row has no HospitalId.
         var rows = hospitalProp?.PropertyType == typeof(Guid?)
             ? (await db.Set<T>().AsNoTracking().Select(e => new { Id = EF.Property<Guid>(e, "Id"), K = EF.Property<string>(e, key), H = EF.Property<Guid?>(e, "HospitalId") }).ToListAsync(ct))
                 .Select(x => new { x.Id, x.K, H = x.H ?? Guid.Empty }).ToList()
@@ -150,8 +150,8 @@ public sealed class DataHubService(IDbContextFactory<VeritaDbContext> factory, I
             if (!r.K.StartsWith(hc + ".", StringComparison.OrdinalIgnoreCase))
                 dict.TryAdd($"{hc}.{r.K}", target);
         }
-        // Encounter numbers, MRNs and costing version codes repeat across hospitals, so a bare one only resolves within a hospital.
-        if (typeof(T) == typeof(Encounter) || typeof(T) == typeof(Patient) || typeof(T) == typeof(CostingVersion))
+        // Encounter numbers, MRNs, costing version and period codes repeat across hospitals, so a bare one only resolves within a hospital.
+        if (typeof(T) == typeof(Encounter) || typeof(T) == typeof(Patient) || typeof(T) == typeof(CostingVersion) || typeof(T) == typeof(Period))
             foreach (var repeated in rows.GroupBy(r => r.K, StringComparer.OrdinalIgnoreCase).Where(g => g.Count() > 1))
                 dict.Remove(repeated.Key);
         return dict;
@@ -192,6 +192,41 @@ public sealed class DataHubService(IDbContextFactory<VeritaDbContext> factory, I
                 $"UPDATE t SET EncounterId = m.ToId FROM [{table}] t JOIN OPENJSON({{0}}) WITH (FromId uniqueidentifier, ToId uniqueidentifier) m ON t.EncounterId = m.FromId", [json], ct);
         await db.Database.ExecuteSqlRawAsync(
             "DELETE e FROM [Encounter] e JOIN OPENJSON({0}) WITH (FromId uniqueidentifier) m ON e.Id = m.FromId", [json], ct);
+    }
+
+    /// <summary>Links every payer to its insurer and administrator, creating the ones not seen before. Only rows that differ are written.</summary>
+    private async Task MapPayerPartiesAsync(CancellationToken ct)
+    {
+        await using var db = await Db(ct);
+        var payers = await db.Payers.AsNoTracking().Select(x => new { x.Id, x.Name, x.InsurerId, x.AdministratorId }).ToListAsync(ct);
+        var insurers = await db.Insurers.AsNoTracking().ToDictionaryAsync(x => x.Code, x => x.Id, StringComparer.OrdinalIgnoreCase, ct);
+        var administrators = await db.PayerAdministrators.AsNoTracking().ToDictionaryAsync(x => x.Code, x => x.Id, StringComparer.OrdinalIgnoreCase, ct);
+        Guid? InsurerOf(string? name)
+        {
+            if (name is null) return null;
+            var code = name.ToUpperInvariant();
+            if (insurers.TryGetValue(code, out var id)) return id;
+            db.Insurers.Add(new Insurer { Id = id = IdGen.Sequential(), Code = code, Name = name });
+            return insurers[code] = id;
+        }
+        Guid? AdministratorOf(string? name)
+        {
+            if (name is null) return null;
+            if (administrators.TryGetValue(name, out var id)) return id;
+            db.PayerAdministrators.Add(new PayerAdministrator { Id = id = IdGen.Sequential(), Code = name, Name = name });
+            return administrators[name] = id;
+        }
+        var changes = payers.Select(x =>
+        {
+            var (insurer, administrator) = PayerParties.Split(x.Name);
+            return new { x.Id, x.InsurerId, x.AdministratorId, To = InsurerOf(insurer), ToAdministrator = AdministratorOf(administrator) };
+        }).Where(x => x.InsurerId != x.To || x.AdministratorId != x.ToAdministrator)
+            .Select(x => new { x.Id, I = x.To, A = x.ToAdministrator }).ToList();
+        await db.SaveChangesAsync(ct);
+        if (changes.Count == 0) return;
+        await db.Database.ExecuteSqlRawAsync(
+            "UPDATE p SET InsurerId = m.I, AdministratorId = m.A FROM [Payer] p JOIN OPENJSON({0}) WITH (Id uniqueidentifier, I uniqueidentifier, A uniqueidentifier) m ON p.Id = m.Id",
+            [JsonSerializer.Serialize(changes)], ct);
     }
 
     /// <summary>Older packs loaded refunds as negative revenue. Each one saved as a refund line stops counting as revenue.</summary>
@@ -494,8 +529,12 @@ public sealed class DataHubService(IDbContextFactory<VeritaDbContext> factory, I
                 if (r.Target == typeof(CostingVersion) && lookups.TryGetValue("procedureCode", out var procCodes)
                     && TryResolve(procCodes, values.GetValueOrDefault("procedureCode")?.Trim() ?? "", hospital, out var boundProc))
                     hospital = boundProc.HospitalCode ?? hospital;
+                // A driver volume names no hospital: its period belongs to the driver's.
+                if (r.Target == typeof(Period) && string.IsNullOrEmpty(hospital) && lookups.TryGetValue("driverCode", out var driverCodes)
+                    && TryResolve(driverCodes, values.GetValueOrDefault("driverCode")?.Trim() ?? "", null, out var boundDriver))
+                    hospital = boundDriver.HospitalCode;
                 var found = TryResolve(lookups[r.Column], code, hospital, out var target)
-                    && (r.Target != typeof(Encounter) && r.Target != typeof(Patient) && r.Target != typeof(CostingVersion)
+                    && (r.Target != typeof(Encounter) && r.Target != typeof(Patient) && r.Target != typeof(CostingVersion) && r.Target != typeof(Period)
                         || string.IsNullOrEmpty(hospital) || string.Equals(target.HospitalCode, hospital, StringComparison.OrdinalIgnoreCase));
                 if (!found && _importHospital is not null && HisImportPack.UnmappedFallback(spec.Name, r.Column) is { } fallback)
                 {
@@ -540,7 +579,7 @@ public sealed class DataHubService(IDbContextFactory<VeritaDbContext> factory, I
             if (values.TryGetValue("hospitalCode", out var hcode) && !string.IsNullOrEmpty(hcode) && !p.HasHospital(hcode))
                 errors.Add($"Hospital {hcode} is outside your scope.");
             if (spec.Refs.All(r => r.Column != "hospitalCode") && !p.AllHospitals && spec.Group is "Organisation" or "Financial" or "Catalogue" &&
-                spec.Name is "ServiceLine" or "GLAccount" or "Period" or "Drg" or "Payer" or "CostingVersion" or "Hospital")
+                spec.Name is "ServiceLine" or "GLAccount" or "Drg" or "Payer" or "CostingVersion" or "Hospital")
                 errors.Add($"{spec.Name} is shared by the whole group; only a group-wide user can change it.");
 
             // Scalar columns.
@@ -617,6 +656,7 @@ public sealed class DataHubService(IDbContextFactory<VeritaDbContext> factory, I
                     if (string.IsNullOrEmpty(values.GetValueOrDefault(name)?.Trim())) continue; // empty cell = leave unchanged
                     if (!Equals(prop.GetValue(current), prop.GetValue(entity))) { prop.SetValue(current, prop.GetValue(entity)); changed = true; }
                 }
+                if (current is Period edited) edited.Days = edited.EndDate.DayNumber - edited.StartDate.DayNumber + 1;
                 if (current is User cu && values.GetValueOrDefault("password") is { Length: > 0 } pw) { cu.PasswordHash = new PasswordHasher<User>().HashPassword(cu, pw); changed = true; }
                 if (!changed) { unchanged++; continue; }
                 pending.Add(new Pending(rowNo, key, current, false, values, before));
@@ -656,7 +696,7 @@ public sealed class DataHubService(IDbContextFactory<VeritaDbContext> factory, I
         var created = pending.Count(x => x.IsNew);
         var updated = pending.Count(x => !x.IsNew);
         Guid? batchId = null;
-        if (!dryRun && (pending.Count > 0 || rejects.Count > 0 || merges.Count > 0 || refunds.Count > 0))
+        if (!dryRun && (pending.Count > 0 || rejects.Count > 0 || merges.Count > 0 || refunds.Count > 0 || spec.Type == typeof(Payer)))
         {
             foreach (var def in newDefinitions) db.CostingDefinitions.Add(def);
             foreach (var x in pending.Where(x => x.IsNew)) db.Add(x.Entity);
@@ -679,6 +719,7 @@ public sealed class DataHubService(IDbContextFactory<VeritaDbContext> factory, I
             var refused = rejects.Select(r => r.Key).ToHashSet();
             await MergeReplacedErEncountersAsync(merges.Where(m => !refused.Contains(m.Key)).ToList(), replaced, existing, ct);
             await RemoveRefundsFromRevenueAsync(refunds.Where(r => !refused.Contains(r.Key)).ToList(), ct);
+            if (spec.Type == typeof(Payer)) await MapPayerPartiesAsync(ct);
 
             await using var log = await Db(ct);
             var batch = new ImportBatch
@@ -784,6 +825,9 @@ public sealed class DataHubService(IDbContextFactory<VeritaDbContext> factory, I
                 break;
             case Period pe when pe.EndDate < pe.StartDate:
                 errors.Add("endDate is before startDate.");
+                break;
+            case Period pe:
+                pe.Days = pe.EndDate.DayNumber - pe.StartDate.DayNumber + 1;
                 break;
             case ActivityTransaction t when t.Quantity < 0:
                 errors.Add("quantity is negative (DQ-COST-NEGATIVE would block the run).");

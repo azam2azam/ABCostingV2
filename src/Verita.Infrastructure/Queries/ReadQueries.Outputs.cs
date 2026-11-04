@@ -335,12 +335,17 @@ public sealed partial class ReadQueries
         }
         catch (AppError e) when (e.Code == "NOT_COSTED")
         {
+            var h = await HospitalInScopeAsync(p, hospital, ct);
+            var periods = await db.Periods.AsNoTracking().Where(x => x.HospitalId == h.Id).ToListAsync(ct);
+            var named = periods.FirstOrDefault(x => x.Code == period?.Trim()) ?? periods.OrderByDescending(x => x.EndDate).FirstOrDefault();
+            // A new hospital has no costing model yet: its catalogue still opens, with nothing costed.
+            if (!await db.CostingVersions.AsNoTracking().AnyAsync(v => v.HospitalId == h.Id, ct))
+            {
+                var today = DateOnly.FromDateTime(DateTime.UtcNow);
+                return new ScopedRun(new CalculationRun { HospitalId = h.Id, Status = "" }, h, named ?? new Period { Code = "", StartDate = today, EndDate = today }, new CostingVersion { Code = "", Status = "" });
+            }
             var config = await ConfigScopeAsync(p, hospital, null, ct);
-            var h = config.Hospital;
-            var periods = await db.Periods.AsNoTracking().Where(x => x.HospitalId == h.Id || x.HospitalId == null).ToListAsync(ct);
-            var own = periods.Where(x => x.HospitalId == h.Id).ToList();
-            var named = periods.FirstOrDefault(x => x.Code == period?.Trim());
-            var scope = named ?? (own.Count > 0 ? own : periods).OrderByDescending(x => x.EndDate).FirstOrDefault() ?? config.Period;
+            var scope = named ?? config.Period;
             var version = (await db.CostingVersions.AsNoTracking().Where(v => v.HospitalId == h.Id && v.Status == "PUBLISHED").ToListAsync(ct))
                 .Where(v => v.IsEffective(scope.EndDate)).OrderByDescending(v => v.EffectiveFrom).FirstOrDefault() ?? config.Version;
             return new ScopedRun(new CalculationRun { HospitalId = h.Id, PeriodId = scope.Id, CostingVersionId = version.Id, Status = "" }, h, scope, version);
@@ -384,11 +389,13 @@ public sealed partial class ReadQueries
             .Select(g => new ProcedureTypeRow(g.Key, TypeDisplayName(g.Key), g.Count(), TypeMargin(g.Key), []))
             .OrderBy(x => x.Name)
             .ToList();
+        var medicines = procs.Count(x => x.Medicine);
+        ProcedureTypeRow[] medicine = medicines > 0 ? [new ProcedureTypeRow(ProcedureTypeMedicine, "Medicine", medicines, TypeMargin(ProcedureTypeMedicine), [])] : [];
         return
         [
             new ProcedureTypeRow(ProcedureTypeAll, "All", procs.Count, TypeMargin(ProcedureTypeAll), []),
             .. types,
-            new ProcedureTypeRow(ProcedureTypeMedicine, "Medicine", procs.Count(x => x.Medicine), TypeMargin(ProcedureTypeMedicine), []),
+            .. medicine,
         ];
     }
 

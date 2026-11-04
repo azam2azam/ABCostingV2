@@ -579,6 +579,14 @@ Deduplicate on `sourceRef`. If the same order is invoiced, keep the **invoice** 
 
 Include `HIS_InvoicePackageItem` exploded components if the header is a package — VERITA costs components, not the bundle (bundle sits on `Encounter.packageCode`).
 
+### Periods
+
+Every period belongs to one hospital, and its code is unique within that hospital. Add one on the Periods screen, or let a facts import create the calendar months it needs (named like `2026 Oct`).
+
+### Payer, `Insurer` and `PayerAdministrator`
+
+`Payer` stays one row per `HIS_Company`, with the full account name; `Encounter.PayerId` points at it. Each import of `Payer` also splits every name into `Payer.InsurerId` and `Payer.AdministratorId`, with no calculation run involved: the text before the first `_`, split on `/`, minus the known administrators (`TCS`, `GLOBEMED`, `S.NEXTCARE`, `MEDNET` and their spellings) is the insurer. A name without `_` is its own insurer. A name holding only an administrator has no insurer.
+
 ### 9.4 `RevenueTransaction` — Direct from invoice lines
 
 | VERITA | HIS |

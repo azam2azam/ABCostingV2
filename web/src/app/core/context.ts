@@ -94,7 +94,8 @@ export class RunContext {
   /** Query params every scoped request and nav link should carry. */
   readonly scopeParams = computed<{ hospital?: string; period?: string }>(() => {
     const hospital = this.hospitalParam(), period = this.periodParam();
-    return hospital && period ? { hospital, period } : {};
+    if (!hospital) return {};
+    return period ? { hospital, period } : { hospital };
   });
 
   /** DRGs are a group catalogue; the module only opens when this hospital has assigned ones. */
@@ -106,10 +107,7 @@ export class RunContext {
 
   periodsOf(hospital: string | null): ContextDto['periods'] {
     if (!hospital) return [];
-    const all = this.context()?.periods ?? [];
-    const own = all.filter(p => p.hospital === hospital);
-    const list = own.length ? own : all.filter(p => !p.hospital);
-    return [...list].reverse();
+    return (this.context()?.periods ?? []).filter(p => p.hospital === hospital).reverse();
   }
 
   async load(force = false): Promise<void> {
@@ -137,13 +135,12 @@ export class RunContext {
     return runs.find(r => r.status === 'PUBLISHED') ?? runs.find(r => r.status !== 'FAILED' && r.status !== 'DRAFT') ?? runs[0] ?? null;
   }
 
-  defaultScope(): { hospital: string; period: string } | null {
+  defaultScope(): { hospital: string; period: string | null } | null {
     const run = this.defaultRun();
     if (run) return { hospital: run.hospital, period: run.period };
     const h = this.hospitals()[0];
     if (!h) return null;
-    const period = this.periodsOf(h.code)[0]?.code;
-    return period ? { hospital: h.code, period } : null;
+    return { hospital: h.code, period: this.periodsOf(h.code)[0]?.code ?? null };
   }
 
   preferredPeriod(hospital: string): string | null {
@@ -169,19 +166,16 @@ export class RunContext {
   }
 
   /** Build hospital+period from the URL, an old ?run=, or the default in scope. */
-  resolveScope(q: { hospital?: string | null; period?: string | null; run?: string | null }): { hospital: string; period: string } | null {
+  resolveScope(q: { hospital?: string | null; period?: string | null; run?: string | null }): { hospital: string; period: string | null } | null {
     const hospital = q.hospital || null;
     const period = q.period || null;
     const run = q.run || null;
-    if (hospital && period) return { hospital, period };
+    if (hospital && period && this.periodsOf(hospital).some(p => p.code === period)) return { hospital, period };
     if (run) {
       const row = this.runs().find(r => r.code === run || r.id === run);
       if (row) return { hospital: row.hospital, period: row.period };
     }
-    if (hospital) {
-      const p = this.preferredPeriod(hospital);
-      if (p) return { hospital, period: p };
-    }
+    if (hospital && this.hospitals().some(h => h.code === hospital)) return { hospital, period: this.preferredPeriod(hospital) };
     return this.defaultScope();
   }
 
@@ -199,7 +193,7 @@ export class RunContext {
     return `?hospital=${encodeURIComponent(s.hospital)}&period=${encodeURIComponent(s.period)}`;
   }
 
-  selectScope(hospital: string, period: string): void {
+  selectScope(hospital: string, period: string | null): void {
     void this.router.navigate([], {
       relativeTo: this.route,
       queryParams: { hospital, period, run: null },
@@ -220,22 +214,11 @@ export const runGuard: CanActivateFn = async (route) => {
   });
   if (!scope) return true;
   if (route.queryParamMap.get('hospital') === scope.hospital
-    && route.queryParamMap.get('period') === scope.period
+    && (route.queryParamMap.get('period') ?? null) === scope.period
     && !route.queryParamMap.get('run')) return true;
   const tree = router.parseUrl(router.getCurrentNavigation()?.extractedUrl.toString() ?? '/');
   const { run: _ignored, ...rest } = tree.queryParams;
-  tree.queryParams = { ...rest, hospital: scope.hospital, period: scope.period };
+  const { period: _stale, ...others } = rest;
+  tree.queryParams = scope.period ? { ...others, hospital: scope.hospital, period: scope.period } : { ...others, hospital: scope.hospital };
   return tree;
-};
-
-/** DRGs module is hidden when the opened hospital has no assigned DRGs. */
-export const drgGuard: CanActivateFn = async (route) => {
-  const ctx = inject(RunContext);
-  const router = inject(Router);
-  await ctx.load();
-  const hospital = route.queryParamMap.get('hospital') ?? ctx.hospitalParam() ?? ctx.defaultScope()?.hospital;
-  const has = !!hospital && ctx.hospitals().some(h => h.code === hospital && h.hasDrgs);
-  if (has) return true;
-  const { run: _ignored, ...rest } = route.queryParams;
-  return router.createUrlTree(['/dashboard'], { queryParams: rest });
 };

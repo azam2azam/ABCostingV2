@@ -6,7 +6,6 @@ import { ActivatedRoute, Router, RouterLink } from '@angular/router';
 import { firstValueFrom } from 'rxjs';
 import { Api, CostingModelsDto, Envelope, RunDetail as RunDetailDto, RunListItem } from '../core/api';
 import { Auth, toApiError } from '../core/auth';
-import { formatMoney } from '../core/decimal';
 import { RunContext, runInFlight, runLiveStatus } from '../core/context';
 import { apiResource, runResource, catalogueResource } from '../core/resource';
 import { Icon } from '../shared/icon';
@@ -14,325 +13,23 @@ import { Col, UI, matchesNameOrCode } from '../shared/ui';
 
 // ── Configuration ───────────────────────────────────────────────────────────────
 
-type Pct = string | number | null | undefined;
-interface CompareTypeRow { code: string; name: string; procedures: number; fromPct?: Pct; toPct?: Pct; changed: number; }
-interface CompareItem { id: string; code: string; name: string; listPrice: string | number; fromPct?: Pct; toPct?: Pct; }
-interface CompareItemsPage { items: CompareItem[]; total: number; }
-interface CompareOverheadRow {
-  costCenterCode: string; costCenterName: string; description: string;
-  fromPct?: Pct; toPct?: Pct; fromAmount?: Pct; toAmount?: Pct;
-}
-interface CompareTypeDraft extends CompareTypeRow { expanded: boolean; items: CompareItem[]; itemTotal: number; loadingItems: boolean; }
-
-/**
- * Direct or Indirect costing for two versions side by side, laid out like the Direct and
- * Indirect costing screens: types first, each expandable to its procedures with the difference.
- */
-@Component({
-  selector: 'v-compare-costing',
-  imports: [NgTemplateOutlet, FormsModule, RouterLink, Icon, ...UI],
-  template: `
-    @if (stream() === 'indirect') {
-      <section class="card overhead-block">
-        <div class="head">
-          <h2>{{ title() }} · Encounter level overheads (Cost will be considered for every encounter)</h2>
-        </div>
-        @if (!ready()) {
-          <ng-container [ngTemplateOutlet]="notReady" />
-        } @else {
-          <v-state [loading]="overheads.isLoading()" [error]="overheads.error()">
-            <div class="table-wrap">
-              <table class="data">
-                <caption class="sr-only">Encounter level overheads, {{ from() }} to {{ to() }}</caption>
-                <thead>
-                  <tr>
-                    <th scope="col">Cost Center Code</th>
-                    <th scope="col">Description</th>
-                    <th class="num" scope="col">Overhead %<span class="ver">{{ from() }}</span></th>
-                    <th class="num" scope="col">Overhead %<span class="ver">{{ to() }}</span></th>
-                    <th class="num" scope="col" title="If Overhead (%) is not given, it will be considered as Fixed.">Max Cap (Fixed)<span class="ver">{{ from() }}</span></th>
-                    <th class="num" scope="col" title="If Overhead (%) is not given, it will be considered as Fixed.">Max Cap (Fixed)<span class="ver">{{ to() }}</span></th>
-                  </tr>
-                </thead>
-                <tbody>
-                  @for (o of overheadRows(); track o.costCenterCode + o.description) {
-                    <tr [class.changed]="highlight() && (pctText(o.fromPct) !== pctText(o.toPct) || pctText(o.fromAmount) !== pctText(o.toAmount))">
-                      <td>{{ local(o.costCenterCode) }}</td>
-                      <td>{{ o.description || '—' }}</td>
-                      <td class="num">{{ fmtPct(o.fromPct) }}</td>
-                      <td class="num">{{ fmtPct(o.toPct) }}</td>
-                      <td class="num">{{ o.fromAmount | money }}</td>
-                      <td class="num">{{ o.toAmount | money }}</td>
-                    </tr>
-                  } @empty {
-                    <tr><td class="faint" colspan="6">No encounter-level overheads.</td></tr>
-                  }
-                </tbody>
-              </table>
-            </div>
-          </v-state>
-        }
-      </section>
-    }
-    <section class="card overhead-block">
-      <h2>{{ stream() === 'indirect' ? title() + ' · Procedure/activity overheads' : title() }}</h2>
-      @if (!ready()) {
-        <ng-container [ngTemplateOutlet]="notReady" />
-      } @else {
-        @if (message()) { <p class="notice bad">{{ message() }}</p> }
-        @if (hint()) { <p class="muted margin-hint">{{ hint() }}</p> }
-        <div class="tools">
-          <input type="search" class="item-search" placeholder="Search procedures by name or code"
-            [ngModel]="search()" (ngModelChange)="setSearch($event)" [attr.aria-label]="'Search procedures in ' + title()" />
-        </div>
-        @if (types.isLoading() && rows().length) { <p class="faint search-status">Searching…</p> }
-        @else if ((query() || changedOnly()) && visibleRows().length <= 1) { <p class="faint search-status">No procedures match this search.</p> }
-        <v-state [loading]="types.isLoading() && !rows().length" [error]="types.error()">
-          <div class="table-wrap">
-            <table class="data">
-              <caption class="sr-only">{{ title() }} by procedure/activity type, {{ from() }} to {{ to() }}</caption>
-              <thead>
-                <tr>
-                  <th class="exp" scope="col"></th>
-                  <th scope="col">Procedure/Activity type</th>
-                  <th class="num" scope="col">Procedure/Activity</th>
-                  <th class="num" scope="col">Changed</th>
-                  <th scope="col">{{ pctLabel() }}<span class="ver">{{ from() }}</span></th>
-                  <th scope="col">{{ pctLabel() }}<span class="ver">{{ to() }}</span></th>
-                </tr>
-              </thead>
-              <tbody>
-                @for (row of visibleRows(); track row.code) {
-                  <tr [class.changed]="highlight() && row.changed > 0">
-                    <td class="exp">
-                      @if (row.code !== 'ALL') {
-                        <button class="btn icon-only" type="button"
-                          [attr.aria-expanded]="row.expanded" [attr.aria-label]="'Expand ' + row.name"
-                          (click)="toggle(row.code)">
-                          <v-icon name="chevron" />
-                        </button>
-                      }
-                    </td>
-                    <td>{{ row.name }}</td>
-                    <td class="num">{{ row.procedures }}</td>
-                    <td class="num">{{ row.changed }}</td>
-                    <td><span class="cell-value">{{ pctText(row.fromPct) }}</span></td>
-                    <td><span class="cell-value">{{ pctText(row.toPct) }}</span></td>
-                  </tr>
-                  @if (row.expanded) {
-                    <tr class="expand-row">
-                      <td colspan="6">
-                        <div class="expand-pane">
-                          <table class="data nested">
-                            <thead>
-                              <tr>
-                                <th scope="col">Id</th>
-                                <th scope="col">Name</th>
-                                <th class="num" scope="col">Contracted price</th>
-                                <th scope="col">{{ pctLabel() }}<span class="ver">{{ from() }}</span></th>
-                                <th scope="col">{{ pctLabel() }}<span class="ver">{{ to() }}</span></th>
-                                <th class="num" scope="col">{{ amountLabel() }}<span class="ver">{{ from() }}</span></th>
-                                <th class="num" scope="col">{{ amountLabel() }}<span class="ver">{{ to() }}</span></th>
-                                <th class="num" scope="col">Difference</th>
-                              </tr>
-                            </thead>
-                            <tbody>
-                              @for (item of row.items; track item.id) {
-                                <tr [class.changed]="highlight() && pctText(item.fromPct) !== pctText(item.toPct)">
-                                  <td><a [routerLink]="['/procedures', item.id]" queryParamsHandling="preserve">{{ local(item.code) }}</a></td>
-                                  <td>{{ item.name }}</td>
-                                  <td class="num">{{ item.listPrice | money }}</td>
-                                  <td><span class="cell-value" [class.faint]="!pctText(item.fromPct)">{{ pctText(item.fromPct) || '—' }}</span></td>
-                                  <td><span class="cell-value" [class.faint]="!pctText(item.toPct)">{{ pctText(item.toPct) || '—' }}</span></td>
-                                  <td class="num"><span class="cell-value">{{ amountText(item.listPrice, item.fromPct) }}</span></td>
-                                  <td class="num"><span class="cell-value">{{ amountText(item.listPrice, item.toPct) }}</span></td>
-                                  <td class="num">{{ diffText(diff(item)) }}</td>
-                                </tr>
-                              } @empty {
-                                <tr><td class="faint" colspan="8">{{ search().trim() || changedOnly() ? 'No procedures match this search.' : 'No procedures in this type.' }}</td></tr>
-                              }
-                            </tbody>
-                          </table>
-                          @if (row.loadingItems) { <p class="faint more">Loading…</p> }
-                          @else if (row.itemTotal > row.items.length) {
-                            <p class="faint more">Showing {{ row.items.length }} of {{ row.itemTotal }}.
-                              <button class="btn" type="button" (click)="loadItems(row.code, false)">Show 100 more</button>
-                            </p>
-                          }
-                        </div>
-                      </td>
-                    </tr>
-                  }
-                } @empty {
-                  <tr><td class="faint" colspan="6">{{ search().trim() ? 'No procedures match this search.' : 'No procedures in this hospital.' }}</td></tr>
-                }
-              </tbody>
-            </table>
-          </div>
-        </v-state>
-      }
-    </section>
-    <ng-template #notReady>
-      <p class="faint">{{ !from() || !to() ? 'No version pair to compare.' : 'Choose a hospital and period to compare.' }}</p>
-    </ng-template>
-  `,
-  styles: `
-    .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
-    .cell-value {
-      display: inline-block; width: 8rem; box-sizing: border-box; text-align: right; cursor: default;
-      font: 14px var(--font); padding: 6px 8px;
-      border: 1px solid var(--border); border-radius: var(--radius-sm);
-      background: var(--surface); color: var(--text);
-    }
-    .notice { margin: 0 0 12px; }
-    .margin-hint { margin: 0 0 12px; max-width: 72ch; }
-    td.exp, th.exp { width: 40px; padding-right: 0; }
-    button.icon-only { padding: 4px; width: 28px; height: 28px; justify-content: center; border-radius: 8px; }
-    button.icon-only v-icon { transition: transform .15s; }
-    button.icon-only[aria-expanded] v-icon { transform: rotate(-90deg); }
-    button.icon-only[aria-expanded="true"] v-icon { transform: rotate(0); }
-    tr.expand-row td { background: var(--surface-2); padding: 0; }
-    .expand-pane { padding: 8px 12px 14px 40px; }
-    table.nested { background: var(--surface-solid); }
-    .more { margin-top: 8px; }
-    .tools { display: flex; gap: 14px; align-items: center; flex-wrap: wrap; margin: 0 0 10px; }
-    .item-search {
-      width: min(28rem, 100%); font: 14px var(--font); padding: 6px 8px;
-      border: 1px solid var(--border); border-radius: var(--radius-sm);
-      background: var(--surface); color: var(--text);
-    }
-    tr.changed > td { background: var(--warn-soft); }
-    .search-status { margin: 0 0 10px; }
-    .ver { display: block; }
-    .overhead-block { margin-top: 14px; position: relative; z-index: 0; }
-    .overhead-block h2 { margin: 0 0 12px; }
-    .head { display: flex; gap: 12px; align-items: flex-end; justify-content: space-between; flex-wrap: wrap; margin-bottom: 12px; }
-    .head h2 { margin: 0; max-width: 72ch; }
-    .overhead-block > .faint { margin: 0; }
-  `,
-})
-export class CompareCosting {
-  stream = input.required<'direct' | 'indirect'>();
-  title = input.required<string>();
-  from = input.required<string>();
-  to = input.required<string>();
-  pctLabel = input('Margin Cost (%)');
-  amountLabel = input('Evaluated cost');
-  ctx = inject(RunContext);
-  private api = inject(Api);
-  search = signal('');
-  query = signal('');
-  changedOnly = input(false);
-  highlight = input(false);
-  rows = signal<CompareTypeDraft[]>([]);
-  message = signal<string | null>(null);
-  private searchTimer: ReturnType<typeof setTimeout> | null = null;
-  local = hisProcedureId;
-  fmtPct = formatOverheadPct;
-  types = apiResource<Envelope<CompareTypeRow[]>>(
-    () => this.ready() ? `costing-models/compare/${this.stream()}` : null,
-    () => ({ hospital: this.ctx.hospitalParam(), from: this.from(), to: this.to(), search: this.query() }));
-  overheads = apiResource<Envelope<CompareOverheadRow[]>>(
-    () => this.stream() === 'indirect' && this.ready() ? 'costing-models/compare/encounter-overheads' : null,
-    () => ({ hospital: this.ctx.hospitalParam(), from: this.from(), to: this.to() }));
-  overheadRows = computed(() => this.overheads.value()?.data ?? []);
-  visibleRows = computed(() => {
-    const filtered = !!this.query() || this.changedOnly();
-    return this.rows().filter(r => !filtered || r.code === 'ALL' || (this.changedOnly() ? r.changed > 0 : r.procedures > 0));
-  });
-  ready = computed(() => !!this.from() && !!this.to() && !!this.ctx.hospitalParam());
-  /** Same hint as the Direct costing screen; Indirect shows none. */
-  hint = computed(() => this.stream() === 'direct' ? 'If Margin Cost (%) is 0 or blank, it will follow recipe costing.' : '');
-
-  constructor() {
-    effect(() => {
-      this.changedOnly();
-      untracked(() => {
-        for (const r of this.rows()) if (r.expanded) void this.loadItems(r.code, true);
-      });
-    });
-    effect(() => {
-      const data = this.types.value()?.data;
-      if (!data) return;
-      untracked(() => {
-        const prev = new Map(this.rows().map(r => [r.code, r]));
-        this.rows.set(data.map(x => {
-          const old = prev.get(x.code);
-          return { ...x, expanded: !!old?.expanded, items: [], itemTotal: 0, loadingItems: false };
-        }));
-        for (const r of this.rows()) if (r.expanded) void this.loadItems(r.code, true);
-      });
-    });
-  }
-
-  setSearch(value: string): void {
-    this.search.set(value);
-    if (this.searchTimer) clearTimeout(this.searchTimer);
-    this.searchTimer = setTimeout(() => this.query.set(value.trim()), 250);
-  }
-  toggle(code: string): void {
-    const row = this.rows().find(r => r.code === code);
-    if (!row) return;
-    const opening = !row.expanded;
-    this.rows.update(rows => rows.map(r => r.code === code ? { ...r, expanded: opening } : r));
-    if (opening && row.items.length === 0) void this.loadItems(code, true);
-  }
-  async loadItems(code: string, reset: boolean): Promise<void> {
-    const row = this.rows().find(r => r.code === code);
-    if (!row || (row.loadingItems && !reset)) return;
-    this.rows.update(rows => rows.map(r => r.code === code ? { ...r, loadingItems: true } : r));
-    try {
-      const page = await firstValueFrom(this.api.run<CompareItemsPage>(
-        `costing-models/compare/${this.stream()}/${encodeURIComponent(code)}`, { hospital: this.ctx.hospitalParam() },
-        { from: this.from(), to: this.to(), skip: reset ? 0 : row.items.length, take: 100, search: this.query() || undefined, changedOnly: this.changedOnly() || undefined }));
-      this.rows.update(rows => rows.map(r => {
-        if (r.code !== code) return r;
-        const items = reset ? page.data.items : [...r.items, ...page.data.items.filter(n => !r.items.some(o => o.id === n.id))];
-        return { ...r, items, itemTotal: page.data.total, loadingItems: false };
-      }));
-    } catch (err) {
-      this.rows.update(rows => rows.map(r => r.code === code ? { ...r, loadingItems: false } : r));
-      this.message.set(toApiError(err).message);
-    }
-  }
-
-  pctText(v: Pct): string { return marginText(v); }
-  /** Contracted price × % / 100; null when there is no % (Direct follows recipe; Indirect is 0). */
-  amount(price: string | number, pct: Pct): number | null {
-    const m = Number(pct);
-    if (pct == null || pct === '' || !Number.isFinite(m) || m === 0) return this.stream() === 'indirect' ? 0 : null;
-    const p = Number(price);
-    return Number.isFinite(p) ? Math.round(p * (m / 100) * 1e4) / 1e4 : null;
-  }
-  amountText(price: string | number, pct: Pct): string {
-    const a = this.amount(price, pct);
-    return a === null ? '—' : formatMoney(String(a), { dp: 2 });
-  }
-  diff(item: CompareItem): number | null {
-    const a = this.amount(item.listPrice, item.fromPct);
-    const b = this.amount(item.listPrice, item.toPct);
-    if (a === null || b === null) return null;
-    return Math.round((b - a) * 1e4) / 1e4;
-  }
-  diffText(d: number | null): string {
-    if (d === null) return '—';
-    if (d === 0) return '0.00';
-    return (d > 0 ? '+' : '') + formatMoney(String(d), { dp: 2 });
-  }
-}
-
 @Component({
   selector: 'v-costing-models',
-  imports: [FormsModule, CompareCosting, ...UI],
+  imports: [FormsModule, ...UI],
   template: `
-    <v-page title="Costing models" purpose="Versioned costing definitions. A published version is never edited; a change is a new version that copies recipes and Direct/Indirect costing. Direct and Indirect diffs below are computed, not described (FR-10.6).">
+    <v-page title="Costing models" purpose="Versioned costing definitions. A published version is never edited; a change is a new version that copies recipes and Direct/Indirect costing.">
       <button actions class="btn primary" type="button" (click)="openForm()" [disabled]="busy() || !!form()">New version</button>
       @if (message()) { <p class="notice" [class.bad]="!!error()">{{ message() }}</p> }
       @if (form(); as f) {
         <form class="card form" (ngSubmit)="create()">
           <h2>New costing version</h2>
+          @if (!versions().length) {
+            <p class="muted">This is the hospital's first version, so it starts blank. Enter its percentages on Direct Costing and Indirect Costing.</p>
+          } @else {
           <p class="muted">Copies recipes, Direct costing, Indirect costing and encounter overheads from the source version. The new version starts as Draft and can be edited.</p>
+          }
           <div class="fields">
+            @if (versions().length) {
             <label class="field">Source version
               <select name="fromVersionId" [ngModel]="f.fromVersionId" (ngModelChange)="patch({ fromVersionId: $event })" required>
                 @for (v of versions(); track v.id) {
@@ -340,6 +37,7 @@ export class CompareCosting {
                 }
               </select>
             </label>
+            }
             <label class="field">Code
               <input name="code" [ngModel]="f.code" (ngModelChange)="patch({ code: $event })" required />
             </label>
@@ -362,39 +60,24 @@ export class CompareCosting {
           </div>
         </form>
       }
+      @if (decision(); as d) {
+        <form class="card form" (ngSubmit)="confirmDecision()">
+          <h2>{{ decisionTitle() }}</h2>
+          <p class="muted">{{ d.version.code }} · {{ d.version.effectiveFrom }} to {{ d.version.effectiveTo ?? 'open' }}</p>
+          <div class="fields">
+            <label class="field wide">{{ d.kind === 'request' ? 'What changed and why' : 'Note (optional)' }}
+              <input name="decisionNote" [ngModel]="decisionNote()" (ngModelChange)="decisionNote.set($event)" [required]="d.kind === 'request'" />
+            </label>
+          </div>
+          <div class="row">
+            <button class="btn primary" type="submit" [disabled]="busy()">{{ busy() ? 'Saving…' : decisionTitle() }}</button>
+            <button class="btn" type="button" (click)="closeDecision()" [disabled]="busy()">Cancel</button>
+          </div>
+        </form>
+      }
       <v-state [loading]="res.isLoading()" [error]="res.error()">
         @if (res.value(); as r) {
           <v-table [rows]="r.versions" [columns]="cols" caption="Costing versions" />
-          <section class="card compare-pick">
-            <h2>Compare versions</h2>
-            @if (fromOptions().length && fromCode()) {
-              <div class="compare-fields">
-                <label class="field">From
-                  <select name="compareFrom" [ngModel]="fromCode()" (ngModelChange)="pickFrom($event)" aria-label="From costing version">
-                    @for (v of fromOptions(); track v.id) {
-                      <option [value]="v.code">{{ v.code }} · {{ v.status }}</option>
-                    }
-                  </select>
-                </label>
-                <label class="field">To
-                  <select name="compareTo" [ngModel]="toCode()" (ngModelChange)="pickTo($event)" aria-label="To costing version">
-                    @for (v of toOptions(); track v.id) {
-                      <option [value]="v.code">{{ v.code }} · {{ v.status }}</option>
-                    }
-                  </select>
-                </label>
-              </div>
-            } @else {
-              <p class="faint">Need at least two costing versions to compare.</p>
-            }
-            <div class="compare-options">
-              <label class="check"><input type="checkbox" name="showChangedOnly" [ngModel]="showChangedOnly()" (ngModelChange)="showChangedOnly.set($event)" /> Show Changed only</label>
-              <label class="check"><input type="checkbox" name="highlightChanged" [ngModel]="highlightChanged()" (ngModelChange)="highlightChanged.set($event)" /> Highlight Changed</label>
-            </div>
-          </section>
-          <v-compare-costing stream="direct" title="Direct Costing" [from]="fromCode()" [to]="toCode()" [changedOnly]="showChangedOnly()" [highlight]="highlightChanged()" />
-          <v-compare-costing stream="indirect" title="Indirect Costing" pctLabel="Overhead (%)" amountLabel="Overhead (SAR)"
-            [from]="fromCode()" [to]="toCode()" [changedOnly]="showChangedOnly()" [highlight]="highlightChanged()" />
         }
       </v-state>
     </v-page>
@@ -408,45 +91,14 @@ export class CompareCosting {
     .field input, .field select { font: 14px var(--font); text-transform: none; letter-spacing: normal; font-weight: 400; color: var(--text); padding: 6px 8px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--surface); }
     .row { display: flex; gap: 8px; }
     .notice { margin: 0 0 12px; }
-    .compare-options { display: flex; gap: 18px; flex-wrap: wrap; margin-top: 14px; }
-    .check { display: inline-flex; gap: 6px; align-items: center; font-size: 14px; }
-    .compare-pick { margin-top: 14px; }
-    .compare-pick h2 { margin: 0 0 12px; }
-    .compare-pick .faint { margin: 0; }
-    .compare-fields { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 10px; }
   `,
 })
 export class CostingModels {
   private api = inject(Api);
   private ctx = inject(RunContext);
-  showChangedOnly = signal(false);
-  highlightChanged = signal(false);
+  private auth = inject(Auth);
   res = apiResource<CostingModelsDto>(() => 'costing-models', () => ({ hospital: this.ctx.hospitalParam() }));
   versions = computed(() => this.res.value()?.versions ?? []);
-  fromCode = signal('');
-  private toPick = signal('');
-  fromOptions = computed(() => this.versions().slice(0, -1));
-  /** Any later version; defaults to the one right after From. */
-  toOptions = computed(() => {
-    const all = this.versions();
-    const i = all.findIndex(v => v.code === this.fromCode());
-    return i >= 0 ? all.slice(i + 1) : [];
-  });
-  toCode = computed(() => {
-    const opts = this.toOptions();
-    return opts.find(v => v.code === this.toPick())?.code ?? opts[0]?.code ?? '';
-  });
-  private seedCompare = effect(() => {
-    const opts = this.fromOptions();
-    if (!opts.length) return;
-    if (opts.some(v => v.code === this.fromCode())) return;
-    this.fromCode.set(opts.at(-1)!.code);
-  });
-  pickFrom(code: string): void {
-    if (!code || code === this.fromCode()) return;
-    this.fromCode.set(code);
-  }
-  pickTo(code: string): void { this.toPick.set(code); }
   form = signal<NewVersionForm | null>(null);
   busy = signal(false);
   error = signal(false);
@@ -455,8 +107,79 @@ export class CostingModels {
     { key: 'name', label: 'Version', sub: r => r.description }, { key: 'code', label: 'Code' },
     { key: 'effectiveFrom', label: 'From' }, { key: 'effectiveTo', label: 'To', value: r => r.effectiveTo ?? 'open' },
     { key: 'status', label: 'Status', type: 'chip' }, { key: 'definitions', label: 'Definitions', type: 'num', dp: 0 }, { key: 'runs', label: 'Runs', type: 'num', dp: 0 },
+    { key: 'approval', label: 'Approval', sortable: false, value: r => this.approvalText(r), sub: r => this.approvalDetail(r) },
+    { key: 'decide', label: '', type: 'button', sortable: false, button: r => this.decideLabel(r), onButton: r => this.openDecision(r, this.openRequest(r) ? 'approve' : 'request') },
+    { key: 'reject', label: '', type: 'button', sortable: false, button: r => this.canDecide(r) ? 'Reject' : null, onButton: r => this.openDecision(r, 'reject') },
   ];
+  decision = signal<VersionDecision | null>(null);
+  decisionNote = signal('');
+  decisionTitle = computed(() => ({ request: 'Request approval', approve: 'Approve', reject: 'Reject' })[this.decision()?.kind ?? 'request']);
+  private approvalsOf(r: VersionRow) { return (this.res.value()?.approvals ?? []).filter(a => a.entityId === r.id); }
+  private latestRequest(r: VersionRow) {
+    return [...this.approvalsOf(r)].sort((a, b) => b.requestedAt.localeCompare(a.requestedAt))[0] ?? null;
+  }
+  private openRequest(r: VersionRow) {
+    const latest = this.latestRequest(r);
+    return latest && !['PUBLISHED', 'REJECTED', 'RETIRED'].includes(latest.stage) ? latest : null;
+  }
+  /** The API refuses the same cases; this only decides which buttons to show. */
+  private canDecide(r: VersionRow): boolean {
+    const open = this.openRequest(r);
+    if (!open || open.requestedBy === this.auth.user()?.email) return false;
+    return this.auth.can(open.stage === 'CLINICAL_APPROVAL' ? 'approval.clinical' : 'approval.finance');
+  }
+  private decideLabel(r: VersionRow): string | null {
+    if (this.canDecide(r)) return 'Approve';
+    return r.status === 'DRAFT' && !this.openRequest(r) && this.auth.can('approval.request') ? 'Request approval' : null;
+  }
+  private approvalText(r: VersionRow): string {
+    const stage = this.latestRequest(r)?.stage;
+    if (stage === 'FINANCE_APPROVAL') return 'Waiting on Finance';
+    if (stage === 'CLINICAL_APPROVAL') return 'Waiting on Clinical';
+    if (stage === 'REJECTED') return 'Rejected';
+    return stage === 'PUBLISHED' ? 'Approved' : '—';
+  }
+  private approvalDetail(r: VersionRow): string | null {
+    const latest = this.latestRequest(r);
+    if (!latest) return null;
+    if (latest.stage === 'REJECTED') return [`By ${latest.reviewedBy}`, latest.reviewNote].filter(Boolean).join(': ');
+    return `Requested by ${latest.requestedBy}: ${latest.requestNote}`;
+  }
+  openDecision(version: VersionRow, kind: VersionDecision['kind']): void {
+    this.form.set(null);
+    this.decisionNote.set('');
+    this.decision.set({ kind, version, requestId: this.openRequest(version)?.id ?? null });
+    this.message.set(null);
+    this.error.set(false);
+  }
+  closeDecision(): void { this.decision.set(null); }
+  async confirmDecision(): Promise<void> {
+    const d = this.decision();
+    if (!d) return;
+    const note = this.decisionNote().trim();
+    if (d.kind === 'request' && !note) { this.error.set(true); this.message.set('Say what changed and why.'); return; }
+    this.busy.set(true);
+    this.message.set(null);
+    this.error.set(false);
+    try {
+      const result = d.kind === 'request'
+        ? await firstValueFrom(this.api.post<{ stage: string }>('approvals', { entityType: 'COSTING_VERSION', entityId: d.version.id, note }))
+        : await firstValueFrom(this.api.post<{ stage: string }>(`approvals/${d.requestId}/decide`, { approve: d.kind === 'approve', note: note || null }));
+      this.decision.set(null);
+      this.res.reload();
+      await this.ctx.load(true);
+      this.message.set(result.stage === 'PUBLISHED' ? `${d.version.code} is published.`
+        : result.stage === 'REJECTED' ? `${d.version.code} was rejected and is back in Draft.`
+        : `${d.version.code} is waiting on ${result.stage === 'CLINICAL_APPROVAL' ? 'Clinical' : 'Finance'} approval.`);
+    } catch (err) {
+      this.error.set(true);
+      this.message.set(toApiError(err).message);
+    } finally {
+      this.busy.set(false);
+    }
+  }
   openForm(): void {
+    this.decision.set(null);
     const from = this.versions().at(-1);
     this.form.set({
       fromVersionId: from?.id ?? '', code: '', name: '', description: '',
@@ -473,7 +196,7 @@ export class CostingModels {
   async create(): Promise<void> {
     const f = this.form();
     if (!f) return;
-    if (!f.fromVersionId) { this.error.set(true); this.message.set('Choose a source version.'); return; }
+    if (this.versions().length && !f.fromVersionId) { this.error.set(true); this.message.set('Choose a source version.'); return; }
     if (!f.code.trim()) { this.error.set(true); this.message.set('Version code is required.'); return; }
     if (!f.effectiveFrom) { this.error.set(true); this.message.set('Effective from is required.'); return; }
     this.busy.set(true);
@@ -481,7 +204,7 @@ export class CostingModels {
     this.error.set(false);
     try {
       await firstValueFrom(this.api.post<CostingModelsDto>('costing-models', {
-        fromVersionId: f.fromVersionId, code: f.code.trim(), name: f.name.trim() || f.code.trim(),
+        fromVersionId: f.fromVersionId || null, hospital: this.ctx.hospitalParam(), code: f.code.trim(), name: f.name.trim() || f.code.trim(),
         description: f.description.trim(), effectiveFrom: f.effectiveFrom, effectiveTo: f.effectiveTo || null,
       }));
       this.form.set(null);
@@ -495,6 +218,9 @@ export class CostingModels {
     }
   }
 }
+
+type VersionRow = CostingModelsDto['versions'][number];
+interface VersionDecision { kind: 'request' | 'approve' | 'reject'; version: VersionRow; requestId: string | null; }
 
 interface NewVersionForm {
   fromVersionId: string; code: string; name: string; description: string; effectiveFrom: string; effectiveTo: string;
@@ -1280,7 +1006,15 @@ interface PeriodRow {
   template: `
     <v-page title="Periods" purpose="The costing periods of the selected hospital, with the run and costing model linked to each.">
       @if (message()) { <p class="notice" [class.bad]="error()">{{ message() }}</p> }
-      <v-table [rows]="rows()" [columns]="cols()" caption="Periods" empty="No periods for this hospital." />
+      @if (canEdit()) {
+        <form class="card" style="display:flex;flex-wrap:wrap;gap:12px;align-items:flex-end;margin-bottom:14px" (submit)="add($event)">
+          <label>From <input type="date" required [value]="start()" (input)="start.set($any($event.target).value)" /></label>
+          <label>To <input type="date" required [value]="end()" (input)="end.set($any($event.target).value)" /></label>
+          <label>Name <input type="text" placeholder="e.g. 2026 Oct" [value]="code()" (input)="code.set($any($event.target).value)" /></label>
+          <button class="btn primary" type="submit" [disabled]="busy() || !start() || !end()">Add period</button>
+        </form>
+      }
+      <v-table [rows]="rows()" [columns]="cols()" caption="Periods" empty="No periods for this hospital yet. Add one above, or import facts to create its months." />
     </v-page>
   `,
 })
@@ -1291,6 +1025,30 @@ export class Periods {
   busy = signal(false);
   error = signal(false);
   message = signal<string | null>(null);
+  start = signal('');
+  end = signal('');
+  code = signal('');
+  canEdit = computed(() => this.auth.can('masterdata.edit'));
+  async add(event: Event): Promise<void> {
+    event.preventDefault();
+    const hospital = this.ctx.hospitalParam();
+    if (!hospital || this.busy()) return;
+    this.busy.set(true);
+    this.message.set(null);
+    this.error.set(false);
+    try {
+      const made = await firstValueFrom(this.api.post<{ code: string }>('periods', { hospital, code: this.code() || null, startDate: this.start(), endDate: this.end() }));
+      await this.ctx.load(true);
+      if (!this.ctx.periodParam()) this.ctx.selectScope(hospital, made.code);
+      this.start.set(''); this.end.set(''); this.code.set('');
+      this.message.set(`Period ${made.code} added.`);
+    } catch (err) {
+      this.error.set(true);
+      this.message.set(toApiError(err).message);
+    } finally {
+      this.busy.set(false);
+    }
+  }
   rows = computed<PeriodRow[]>(() => {
     const hospital = this.ctx.hospitalParam();
     return this.ctx.periodsOf(hospital).map(p => {
@@ -1312,8 +1070,7 @@ export class Periods {
     if (this.auth.can('masterdata.edit')) {
       cols.push({
         key: 'delete', label: '', type: 'button', sortable: false,
-        // Only the hospital's own periods with no run; shared calendar periods serve other hospitals too.
-        button: r => !r.run && r.hospital === this.ctx.hospitalParam() ? 'Delete' : null,
+        button: r => !r.run ? 'Delete' : null,
         onButton: r => void this.remove(r),
       });
     }
@@ -1526,9 +1283,7 @@ export class Runs {
   });
   periodsForHospital = computed(() => {
     const h = this.ctx.hospitalParam();
-    const all = this.ctx.context()?.periods ?? [];
-    const own = all.filter(p => p.hospital === h);
-    return own.length ? own : all.filter(p => !p.hospital);
+    return (this.ctx.context()?.periods ?? []).filter(p => p.hospital === h);
   });
   cols = computed<Col<RunListItem>[]>(() => {
     const cols: Col<RunListItem>[] = [
@@ -1554,6 +1309,7 @@ export class Runs {
     const h = this.ctx.hospitalParam();
     const p = this.period() || this.periodsForHospital().at(-1)?.code;
     if (!h) return;
+    if (!p) { this.message.set('This hospital has no periods yet. Add one under Periods first.'); return; }
     this.busy.set(true);
     try {
       const run = await firstValueFrom(this.api.post<RunListItem>('runs', { hospital: h, period: p }));

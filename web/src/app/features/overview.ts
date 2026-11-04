@@ -1,4 +1,4 @@
-import { Component, computed, effect, inject, signal } from '@angular/core';
+import { Component, computed, inject, signal } from '@angular/core';
 import { RouterLink } from '@angular/router';
 import { DashboardDto, ProfitDto } from '../core/api';
 import { Auth } from '../core/auth';
@@ -27,24 +27,14 @@ import { Col, UI } from '../shared/ui';
 })
 export class ProfitTables {
   private auth = inject(Auth);
-  private ctx = inject(RunContext);
   canRevenue = computed(() => this.auth.can('revenue.view'));
-  dims = computed(() => {
-    const dims = [
-      { key: 'hospital', label: 'Hospital' }, { key: 'serviceLine', label: 'Service line' }, { key: 'department', label: 'Department' },
-      { key: 'resource', label: 'Resources' }, { key: 'physician', label: 'Physician' }, { key: 'payer', label: 'Payer' },
-    ];
-    if (this.ctx.hasDrgs()) dims.push({ key: 'drg', label: 'DRG' });
-    dims.push({ key: 'encounterType', label: 'Encounter type' }, { key: 'segment', label: 'Patient segment' });
-    return dims;
-  });
+  dims = computed(() => [
+    { key: 'hospital', label: 'Hospital' }, { key: 'serviceLine', label: 'Service line' }, { key: 'department', label: 'Department' },
+    { key: 'resource', label: 'Resources' }, { key: 'physician', label: 'Physician' }, { key: 'payer', label: 'Payer' },
+    { key: 'encounterType', label: 'Encounter type' }, { key: 'segment', label: 'Patient segment' },
+  ]);
   dim = signal('hospital');
   res = runResource<ProfitDto>(() => 'profitability', () => ({ dimension: this.dim() }));
-  constructor() {
-    effect(() => {
-      if (!this.ctx.hasDrgs() && this.dim() === 'drg') this.dim.set('hospital');
-    });
-  }
   cols = computed<Col[]>(() => {
     const base: Col[] = [
       { key: 'label', label: this.dims().find(d => d.key === this.dim())?.label ?? 'Item', link: r => r.link ? '/' + r.link : null },

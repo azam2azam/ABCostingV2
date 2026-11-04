@@ -2,12 +2,12 @@ import { Component, computed, inject, input, signal } from '@angular/core';
 import { RouterLink } from '@angular/router';
 import { firstValueFrom } from 'rxjs';
 import {
-  Api, ComponentDto, DrgDetail as DrgDetailDto, DrgRow, PackageDetail as PackageDetailDto, PackageRow,
+  Api, ComponentDto, PackageDetail as PackageDetailDto, PackageRow,
   ProcedureDetail as ProcedureDetailDto, ProcedureRow, RecipeLineDto,
 } from '../core/api';
 import { toApiError } from '../core/auth';
 import { RunContext } from '../core/context';
-import { catalogueResource, runResource } from '../core/resource';
+import { catalogueResource } from '../core/resource';
 import { Col, UI, matchesNameOrCode } from '../shared/ui';
 
 export const componentCols: Col<ComponentDto>[] = [
@@ -48,14 +48,6 @@ export function recipeToComponents(
     sourceSystem: null, sourceRef: null, resourceId: x.resourceId, activityId,
   }));
 }
-
-const encounterCols: Col<any>[] = [
-  { key: 'encounterNo', label: 'Encounter', link: r => `/patient-encounters/${r.id}`, sub: r => `${r.patient} · ${r.mrn}` },
-  { key: 'lengthOfStay', label: 'LOS', type: 'num', dp: 0 },
-  { key: 'totalCost', label: 'Actual cost', type: 'money' },
-  { key: 'revenue', label: 'Revenue', type: 'money' },
-  { key: 'operatingMargin', label: 'Margin', type: 'money', dir: 'higher' },
-];
 
 @Component({
   selector: 'v-procedures',
@@ -307,66 +299,4 @@ export class PackageDetail {
       cost: rows.reduce((s, r) => s + Number(r.cost), 0),
     };
   });
-}
-
-@Component({
-  selector: 'v-drgs',
-  imports: [...UI],
-  template: `
-    <v-page title="DRGs" purpose="Cost distribution by case-mix group. Outliers use Tukey's rule (cost above P75 + 1.5 × IQR), not a standard-deviation threshold (FR-5.13).">
-      <v-state [loading]="res.isLoading()" [error]="res.error()">
-        @if (res.value(); as r) { <v-table [rows]="r.data" [columns]="cols" caption="DRGs" /> }
-      </v-state>
-    </v-page>
-  `,
-})
-export class Drgs {
-  res = runResource<DrgRow[]>(() => 'drgs');
-  cols: Col<DrgRow>[] = [
-    { key: 'name', label: 'DRG', link: r => `/drgs/${r.id}`, sub: r => r.code },
-    { key: 'cases', label: 'Cases', type: 'num', dp: 0 },
-    { key: 'mean', label: 'Mean', type: 'money', dp: 0 },
-    { key: 'median', label: 'Median', type: 'money', dp: 0 },
-    { key: 'p25', label: 'P25', type: 'money', dp: 0 },
-    { key: 'p75', label: 'P75', type: 'money', dp: 0 },
-    { key: 'p90', label: 'P90', type: 'money', dp: 0 },
-    { key: 'cv', label: 'CV', type: 'num', dp: 3 },
-    { key: 'avgLOS', label: 'Avg LOS', type: 'num', dp: 1 },
-    { key: 'avgMargin', label: 'Avg margin', type: 'money', dp: 0, dir: 'higher' },
-    { key: 'outliers', label: 'Outliers', type: 'num', dp: 0 },
-  ];
-}
-
-@Component({
-  selector: 'v-drg',
-  imports: [...UI],
-  template: `
-    <v-state [loading]="res.isLoading()" [error]="res.error()">
-      @if (res.value(); as r) {
-        <v-page [title]="r.data.drg.code + ' ' + r.data.drg.name" [purpose]="r.data.explanation">
-          <div class="grid tiles">
-            <v-tile label="Cases" [value]="r.data.drg.cases" unit="" />
-            <v-tile label="Median cost" [value]="r.data.drg.median" />
-            <v-tile label="Outlier fence" [value]="r.data.outlierFence" note="P75 + 1.5 × IQR" />
-            <v-tile label="Outliers" [value]="r.data.drg.outliers" unit="" />
-          </div>
-          <section class="card" style="margin-top:14px"><h2>Why the expensive cases are expensive</h2>
-            <p class="muted">Average cost composition of the outliers against the rest, by component (FR-5.14).</p>
-            <v-table [rows]="r.data.whyExpensive" [columns]="whyCols" />
-          </section>
-          <section class="card"><h2>Outlier encounters</h2><v-table [rows]="r.data.outliers" [columns]="enc" empty="No outliers this period." /></section>
-        </v-page>
-      }
-    </v-state>
-  `,
-})
-export class DrgDetail {
-  id = input.required<string>();
-  res = runResource<DrgDetailDto>(() => `drgs/${this.id()}`);
-  enc = encounterCols;
-  whyCols: Col<DrgDetailDto['whyExpensive'][number]>[] = [
-    { key: 'label', label: 'Component' }, { key: 'outlierAverage', label: 'Outliers (avg)', type: 'money' },
-    { key: 'othersAverage', label: 'Others (avg)', type: 'money' }, { key: 'difference', label: 'Difference', type: 'money', dir: 'lower' },
-    { key: 'shareOfGap', label: 'Share of gap', type: 'pct' },
-  ];
 }

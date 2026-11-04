@@ -90,13 +90,12 @@ public static class Security
             new("procedures", "Procedure/Activity", "costing.view", "Standard and actual cost per procedure/activity, fully decomposed into its cost components."),
             new("resources", "Resources", "masterdata.view", "Everything that costs money and is consumed, with effective-dated rates and capacity models."),
             new("patient-encounters", "Patient Encounters", "patient.view", "Patient encounters and what was invoiced for each, with the source reference of every line."),
-            new("drgs", "DRGs", "costing.view", "Case-mix cost distribution, length of stay, reimbursement, margin and high-cost outliers."),
         ]),
         new("Configuration", [
+            new("periods", "Periods", "costing.view", "The costing periods of the selected hospital, with the run and costing model linked to each."),
             new("costing-models", "Costing Models", "costing.view", "Versioned costing definitions with their effective dates, diffs and approval history."),
             new("direct-costing", "Direct Costing", "costing.view", "Procedure/activity types in this hospital, and how many sit under each."),
             new("indirect-costing", "Indirect Costing", "costing.view", "Indirect overhead cost on each procedure/activity type, as a percentage of contracted price, and the amount in SAR."),
-            new("periods", "Periods", "costing.view", "The costing periods of the selected hospital, with the run and costing model linked to each."),
         ]),
         new("Execution", [
             new("runs", "Calculation Runs", "costing.view", "Controlled costing runs, their eleven stages, money in and out, and lifecycle state."),

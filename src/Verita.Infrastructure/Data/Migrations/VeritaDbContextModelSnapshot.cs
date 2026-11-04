@@ -2331,6 +2331,29 @@ namespace Verita.Infrastructure.Data.Migrations
                     b.ToTable("ImportBatch", (string)null);
                 });
 
+            modelBuilder.Entity("Verita.Domain.Entities.Insurer", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<string>("Code")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("nvarchar(200)");
+
+                    b.Property<string>("Name")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("nvarchar(200)");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("Code")
+                        .IsUnique();
+
+                    b.ToTable("Insurer", (string)null);
+                });
+
             modelBuilder.Entity("Verita.Domain.Entities.InvoicePackageItem", b =>
                 {
                     b.Property<Guid>("Id")
@@ -2657,6 +2680,9 @@ namespace Verita.Infrastructure.Data.Migrations
                     b.Property<Guid>("Id")
                         .HasColumnType("uniqueidentifier");
 
+                    b.Property<Guid?>("AdministratorId")
+                        .HasColumnType("uniqueidentifier");
+
                     b.Property<string>("Code")
                         .IsRequired()
                         .HasMaxLength(200)
@@ -2665,6 +2691,9 @@ namespace Verita.Infrastructure.Data.Migrations
                     b.Property<decimal>("ContractRate")
                         .HasPrecision(9, 6)
                         .HasColumnType("decimal(9,6)");
+
+                    b.Property<Guid?>("InsurerId")
+                        .HasColumnType("uniqueidentifier");
 
                     b.Property<string>("Name")
                         .IsRequired()
@@ -2688,8 +2717,12 @@ namespace Verita.Infrastructure.Data.Migrations
 
                     b.HasKey("Id");
 
+                    b.HasIndex("AdministratorId");
+
                     b.HasIndex("Code")
                         .IsUnique();
+
+                    b.HasIndex("InsurerId");
 
                     b.ToTable("Payer", null, t =>
                         {
@@ -2706,6 +2739,29 @@ namespace Verita.Infrastructure.Data.Migrations
                                     .HasPeriodEnd("PeriodEnd")
                                     .HasColumnName("PeriodEnd");
                             }));
+                });
+
+            modelBuilder.Entity("Verita.Domain.Entities.PayerAdministrator", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<string>("Code")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("nvarchar(200)");
+
+                    b.Property<string>("Name")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("nvarchar(200)");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("Code")
+                        .IsUnique();
+
+                    b.ToTable("PayerAdministrator", (string)null);
                 });
 
             modelBuilder.Entity("Verita.Domain.Entities.Period", b =>
@@ -2737,10 +2793,9 @@ namespace Verita.Infrastructure.Data.Migrations
 
                     b.HasKey("Id");
 
-                    b.HasIndex("Code")
-                        .IsUnique();
-
-                    b.HasIndex("HospitalId");
+                    b.HasIndex("HospitalId", "Code")
+                        .IsUnique()
+                        .HasFilter("[HospitalId] IS NOT NULL");
 
                     b.ToTable("Period", (string)null);
                 });
@@ -5013,6 +5068,19 @@ namespace Verita.Infrastructure.Data.Migrations
                         .HasForeignKey("HospitalId")
                         .OnDelete(DeleteBehavior.NoAction)
                         .IsRequired();
+                });
+
+            modelBuilder.Entity("Verita.Domain.Entities.Payer", b =>
+                {
+                    b.HasOne("Verita.Domain.Entities.PayerAdministrator", null)
+                        .WithMany()
+                        .HasForeignKey("AdministratorId")
+                        .OnDelete(DeleteBehavior.NoAction);
+
+                    b.HasOne("Verita.Domain.Entities.Insurer", null)
+                        .WithMany()
+                        .HasForeignKey("InsurerId")
+                        .OnDelete(DeleteBehavior.NoAction);
                 });
 
             modelBuilder.Entity("Verita.Domain.Entities.Period", b =>

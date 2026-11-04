@@ -265,7 +265,7 @@ Identity and charge master. No period filter except “active”.
 | `18_Procedure.csv` | `HIS_Procedure` where not medicine | `procType` from category/flags |
 | `19_ProcedureRate.csv` | `HIS_Procedure.PublishedPrice` (fallback `Price`) + `HIS_ProcedurePrice` cash/default | `effectiveFrom` = 2000-01-01 or price `EffectiveDate` |
 | `24_Package.csv` | `HIS_Procedure` where `IsPackage=1` | |
-| `25_PackageComponent.csv` | `HIS_ProcedurePackageDetail` | |
+| `25_PackageComponent.csv` | `HIS_ProcedurePackageDetail` | One row per package and procedure. `quantity` is the number of active HIS lines. |
 | `26_Drg.csv` | `HIS_DRGSpecification` | Shared catalogue (no ProjectID) |
 | `27_Payer.csv` | `HIS_Company` used by this project | Plus synthetic `PAY-SELF` |
 

@@ -188,14 +188,8 @@ public sealed class HisImportService(IDbContextFactory<VeritaDbContext> factory,
         if (!HisImportPack.TryFactRange(identity, fileName, out var from, out var to)) return;
         await using var db = await factory.CreateDbContextAsync(ct);
         var hospital = await db.Hospitals.AsNoTracking().FirstOrDefaultAsync(h => h.Code == hospitalCode, ct);
-        if (hospital is not null && await db.Periods.AnyAsync(p => p.HospitalId == hospital.Id, ct))
-        {
-            foreach (var code in await OpenPeriods.EnsureHospitalMonthsAsync(db, hospital.Id, from, to, ct))
-                log.LogInformation("Facts import created period {Period} for {Hospital}", code, hospitalCode);
-            return;
-        }
-        var createdPeriods = await OpenPeriods.EnsureAsync(db, OpenPeriods.Months(from, to).ToList(), ct);
-        foreach (var code in createdPeriods)
+        if (hospital is null) return;
+        foreach (var code in await OpenPeriods.EnsureHospitalMonthsAsync(db, hospital.Id, from, to, ct))
             log.LogInformation("Facts import created period {Period} for {Hospital}", code, hospitalCode);
     }
 }

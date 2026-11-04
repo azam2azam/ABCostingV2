@@ -92,6 +92,7 @@ public sealed class FixtureImporter(VeritaDbContext db, string demoPassword)
             LoadedAt = DateTime.UtcNow, LoadedBy = "verita-tools",
         }));
         await db.SaveChangesAsync(ct);
+        await db.Database.ExecuteSqlRawAsync(OpenPeriods.AssignSharedSql, ct);
         return loaded;
     }
 

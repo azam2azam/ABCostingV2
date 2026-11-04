@@ -154,7 +154,7 @@ export class Shell {
   scopeQuery = computed(() => this.ctx.scopeParams());
   initials = computed(() => (this.auth.user()?.name ?? '?').split(' ').filter(Boolean).slice(0, 2).map(p => p[0]).join('').toUpperCase());
   groups = computed(() => this.meta.navigation()
-    .map(g => ({ ...g, items: g.items.filter(i => this.auth.can(i.permission) && i.path !== 'activities' && (i.path !== 'drgs' || this.ctx.hasDrgs())) }))
+    .map(g => ({ ...g, items: g.items.filter(i => this.auth.can(i.permission) && i.path !== 'activities') }))
     .filter(g => g.items.length > 0));
 
   constructor() {
@@ -164,8 +164,7 @@ export class Shell {
 
   pickHospital(code: string): void {
     if (!code || code === this.ctx.hospitalParam()) return;
-    const period = this.ctx.preferredPeriod(code) ?? this.ctx.periodParam() ?? '';
-    if (period) this.ctx.selectScope(code, period);
+    this.ctx.selectScope(code, this.ctx.preferredPeriod(code));
   }
 
   pickPeriod(code: string): void {

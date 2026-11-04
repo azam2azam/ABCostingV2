@@ -1,6 +1,6 @@
 import { CanActivateFn, Routes } from '@angular/router';
 import { authGuard } from './core/auth';
-import { drgGuard, moduleGuard, runGuard } from './core/context';
+import { moduleGuard, runGuard } from './core/context';
 import { Forbidden, Login } from './layout/login';
 import { Shell } from './layout/shell';
 
@@ -30,7 +30,6 @@ export const routes: Routes = [
       r('activities', model, 'Activities'), r('activities/:id', model, 'ActivityDetail'),
       r('procedures', outputs, 'Procedures'), r('procedures/:id', outputs, 'ProcedureDetail'),
       r('packages', outputs, 'Packages'), r('packages/:id', outputs, 'PackageDetail'),
-      r('drgs', outputs, 'Drgs', true, [drgGuard]), r('drgs/:id', outputs, 'DrgDetail', true, [drgGuard]),
       r('costing-models', exec, 'CostingModels', false),
       r('direct-costing', exec, 'DirectCosting'),
       r('indirect-costing', exec, 'IndirectCosting'),

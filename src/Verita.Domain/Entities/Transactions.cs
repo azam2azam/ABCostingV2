@@ -10,6 +10,50 @@ public class Payer
     public string PayerType { get; set; } = "";
     /// <summary>Contracted reimbursement as a fraction of list price.</summary>
     [Share] public decimal ContractRate { get; set; } = 1m;
+    /// <summary>Set on import from Name (see PayerParties). Empty when the name holds only an administrator.</summary>
+    public Guid? InsurerId { get; set; }
+    public Guid? AdministratorId { get; set; }
+}
+
+/// <summary>The company that carries the risk, such as BUPA. Several employer accounts (Payer) sit under one.</summary>
+public class Insurer
+{
+    public Guid Id { get; set; }
+    public string Code { get; set; } = "";
+    public string Name { get; set; } = "";
+}
+
+/// <summary>The claims administrator (TPA) handling an account for an insurer, such as TCS.</summary>
+public class PayerAdministrator
+{
+    public Guid Id { get; set; }
+    public string Code { get; set; } = "";
+    public string Name { get; set; } = "";
+}
+
+/// <summary>
+/// Reads the insurer and administrator out of a HIS account name: insurer[/administrator]_employer_number,
+/// with the two companies in either order. A name without "_" is its own insurer, such as Self pay / cash.
+/// </summary>
+public static class PayerParties
+{
+    private static readonly Dictionary<string, string> Administrators = new(StringComparer.OrdinalIgnoreCase)
+    {
+        ["TCS"] = "TCS", ["GLOBEMED"] = "GLOBEMED", ["GLOBMED"] = "GLOBEMED",
+        ["S.NEXTCARE"] = "S.NEXTCARE", ["S.N.CARE"] = "S.NEXTCARE", ["MEDNET"] = "MEDNET",
+    };
+
+    public static (string? Insurer, string? Administrator) Split(string name)
+    {
+        var whole = string.Join(' ', (name ?? "").Split(' ', StringSplitOptions.RemoveEmptyEntries));
+        var cut = whole.IndexOf('_');
+        if (cut <= 0) return (whole.Length == 0 ? null : whole, null);
+        var parts = whole[..cut].Split('/', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).Select(x => x.ToUpperInvariant()).ToList();
+        if (parts.Count == 0) return (whole, null);
+        var administrator = parts.Select(x => Administrators.GetValueOrDefault(x)).FirstOrDefault(x => x is not null);
+        var insurers = parts.Where(x => !Administrators.ContainsKey(x)).ToList();
+        return (insurers.Count == 0 ? null : string.Join('/', insurers), administrator);
+    }
 }
 
 public class Patient
