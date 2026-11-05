@@ -68,21 +68,12 @@ public sealed partial class ReadQueries
                                 where ec.RunId == s.Run.Id
                                 group es by new { es.CostCenterId, es.ProcedureId } into g
                                 select new { g.Key.CostCenterId, g.Key.ProcedureId, Qty = g.Sum(x => x.Quantity) }).ToListAsync(ct);
-            var procs = (await db.Procedures.AsNoTracking().Where(x => x.HospitalId == s.Hospital.Id)
-                .Select(x => new { x.Id, x.Category, x.ProcType }).ToListAsync(ct))
-                .ToDictionary(x => x.Id);
-            var std = await db.ProcedureCosts.AsNoTracking()
-                .Where(c => c.RunId == s.Run.Id && c.CostType == "STANDARD")
+            var stored = await db.ProcedureCosts.AsNoTracking()
+                .Where(c => c.RunId == s.Run.Id && c.CostType == "ACTUAL")
                 .ToDictionaryAsync(c => c.ProcedureId, c => c.UnitCost, ct);
-            var typeMargins = await TypeMarginMapAsync(s.Hospital.Id, s.Version.Id, CostingStreamDirect, ct);
-            var itemMargins = await ItemMarginMapAsync(s.Hospital.Id, s.Version.Id, CostingStreamDirect, ct);
             revenue = billed.GroupBy(x => x.CostCenterId)
                 .ToDictionary(g => g.Key, g => Money.R4(g.Sum(x => x.Qty * prices.GetValueOrDefault(x.ProcedureId))));
-            cost = billed.GroupBy(x => x.CostCenterId).ToDictionary(g => g.Key, g => Money.R4(g.Sum(x =>
-            {
-                if (!procs.TryGetValue(x.ProcedureId, out var pr)) return 0m;
-                return x.Qty * ProcedureUnitCost(x.ProcedureId, pr.Category, pr.ProcType, prices, std, itemMargins, typeMargins);
-            })));
+            cost = billed.GroupBy(x => x.CostCenterId).ToDictionary(g => g.Key, g => Money.R4(g.Sum(x => x.Qty * stored.GetValueOrDefault(x.ProcedureId))));
         }
         return (await db.CostCenters.AsNoTracking().Where(c => c.HospitalId == s.Hospital.Id).ToListAsync(ct))
             .Where(c => DeptAllowed(p, deptCodes, c.DepartmentId))
@@ -116,32 +107,14 @@ public sealed partial class ReadQueries
         var pkgs = (await db.Packages.AsNoTracking().Where(x => x.HospitalId == s.Hospital.Id).ToListAsync(ct))
             .Where(x => billedCodes.Contains(x.Code)).ToList();
         var pkgByCode = pkgs.ToDictionary(x => x.Code, StringComparer.OrdinalIgnoreCase);
-        var pkgIds = pkgs.Select(x => x.Id).ToList();
-        var comps = await db.PackageComponents.AsNoTracking()
-            .Where(c => pkgIds.Contains(c.PackageId))
-            .Select(c => new { c.PackageId, c.ProcedureId, c.Quantity }).ToListAsync(ct);
-        var extraIds = comps.Select(c => c.ProcedureId).Where(pid => !billedById.ContainsKey(pid)).Distinct().ToList();
-        var extra = await db.Procedures.AsNoTracking()
-            .Where(x => extraIds.Contains(x.Id)).Select(x => new { x.Id, x.Category, x.ProcType }).ToListAsync(ct);
-        var costInfo = billedProcs.Select(x => (x.Id, x.Category, x.ProcType))
-            .Concat(extra.Select(x => (x.Id, x.Category, x.ProcType)))
-            .GroupBy(x => x.Id).ToDictionary(g => g.Key, g => g.First());
         var prices = (await db.ProcedureRates.AsNoTracking().Where(r => r.HospitalId == s.Hospital.Id).ToListAsync(ct))
             .Where(r => r.IsEffective(s.Period.EndDate))
             .GroupBy(r => r.ProcedureId).ToDictionary(g => g.Key, g => g.First().ListPrice);
-        var std = await db.ProcedureCosts.AsNoTracking()
-            .Where(c => c.RunId == s.Run.Id && c.CostType == "STANDARD")
+        // Unit cost is what the run stored: billed lines carry their actual cost.
+        var stored = await db.ProcedureCosts.AsNoTracking()
+            .Where(c => c.RunId == s.Run.Id && c.CostType == "ACTUAL")
             .ToDictionaryAsync(c => c.ProcedureId, c => c.UnitCost, ct);
-        var typeMargins = await TypeMarginMapAsync(s.Hospital.Id, s.Version.Id, CostingStreamDirect, ct);
-        var itemMargins = await ItemMarginMapAsync(s.Hospital.Id, s.Version.Id, CostingStreamDirect, ct);
-        decimal UnitOf(Guid procedureId)
-        {
-            if (!costInfo.TryGetValue(procedureId, out var pr)) return std.GetValueOrDefault(procedureId);
-            return ProcedureUnitCost(procedureId, pr.Category, pr.ProcType, prices, std, itemMargins, typeMargins);
-        }
-        var unitCostByPkg = comps
-            .GroupBy(x => x.PackageId)
-            .ToDictionary(g => g.Key, g => Money.R4(g.Sum(x => x.Quantity * UnitOf(x.ProcedureId))));
+        decimal UnitOf(Guid procedureId) => stored.GetValueOrDefault(procedureId);
         var showRevenue = p.Can("revenue.view");
         var pkgRows = new Dictionary<Guid, CostCentreBilledRow>();
         var procRows = new List<CostCentreBilledRow>();
@@ -150,8 +123,7 @@ public sealed partial class ReadQueries
             if (!billedById.TryGetValue(b.ProcedureId, out var pr)) continue;
             if (pkgByCode.TryGetValue(pr.Code, out var pkg))
             {
-                var unit = unitCostByPkg.GetValueOrDefault(pkg.Id);
-                if (unit == 0) unit = UnitOf(pr.Id);
+                var unit = UnitOf(pr.Id);
                 if (pkgRows.TryGetValue(pkg.Id, out var existing))
                 {
                     var qty = existing.Cases + b.Qty;
@@ -220,7 +192,7 @@ public sealed partial class ReadQueries
     // ═══ Resources ═══════════════════════════════════════════════════════════════════
 
     public sealed record ResourceRow(Guid Id, string Code, string Name, string ResourceType, string Nature, string Uom, bool IsCapacityDriven, string CostCentre,
-        Guid? CostPoolId, string? CostPool, string? Rate, decimal UtilisationPct, decimal CostOfUsed, decimal CostOfUnused, decimal UsedQuantity, int Physicians);
+        Guid? CostPoolId, string? CostPool, string? Rate, decimal UtilisationPct, decimal CostOfUsed, decimal CostOfUnused, decimal UsedQuantity, int Physicians, int Cases = 0, decimal Revenue = 0m);
     public sealed record RateDto(string? UnitCost, string Uom, string Basis, string SourceSystem, DateOnly EffectiveFrom, DateOnly? EffectiveTo, int Version, string Status, bool EffectiveInRun);
     public sealed record CapacityDto2(decimal TheoreticalMinutes, decimal PracticalRatio, decimal PracticalMinutes, string? AnnualCost, DateOnly EffectiveFrom, DateOnly? EffectiveTo);
     public sealed record ResourceDetail(ResourceRow Resource, RateDto[] Rates, CapacityDto2[] Capacity, CapacityRow? UnitCost, ProviderShare[] Providers, RecipeUse[] UsedBy);
@@ -276,6 +248,17 @@ public sealed partial class ReadQueries
                                  where d.HospitalId == hospital.Id && (x.ResourceId == null || !listed.Contains(x.ResourceId.Value))
                                  select x.Id).CountAsync(ct);
         return notAssigned == 0 ? rows : [NotAssignedRow(notAssigned), .. rows];
+    }
+
+    /// <summary>The resource list with the encounters and revenue its doctors had in the scope's run; nothing without a run.</summary>
+    public async Task<ResourceRow[]> ResourceListAsync(ScopedRun s, Principal p, CancellationToken ct)
+    {
+        var rows = await ResourceListAsync(s.Hospital, p, ct);
+        var results = await db.RunDimensionCosts.AsNoTracking().Where(x => x.RunId == s.Run.Id && x.Dimension == "resource").ToListAsync(ct);
+        var byKey = results.ToDictionary(x => x.Key);
+        var showRevenue = p.Can("revenue.view");
+        return rows.Select(r => byKey.TryGetValue(r.Id == Guid.Empty ? "" : r.Id.ToString(), out var x)
+            ? r with { Cases = x.Encounters, Revenue = showRevenue ? x.Revenue : 0m } : r).ToArray();
     }
 
     /// <summary>A role and the doctors mapped to it; invoice lines count everything billed at the hospital.</summary>

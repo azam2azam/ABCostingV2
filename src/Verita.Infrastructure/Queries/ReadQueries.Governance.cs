@@ -161,13 +161,13 @@ public sealed partial class ReadQueries
         db.ProcedureTypeCostings.AddRange(types.Select(x => new ProcedureTypeCosting
         {
             Id = IdGen.Sequential(), HospitalId = x.HospitalId, CostingVersionId = version.Id,
-            ProcType = x.ProcType, Stream = x.Stream, MarginPct = x.MarginPct,
+            ProcType = x.ProcType, Stream = x.Stream, MarginPct = x.MarginPct, FixedAmount = x.FixedAmount,
         }));
         var items = await db.ProcedureMargins.AsNoTracking().Where(x => x.CostingVersionId == from.Id).ToListAsync(ct);
         db.ProcedureMargins.AddRange(items.Select(x => new ProcedureMargin
         {
             Id = IdGen.Sequential(), HospitalId = x.HospitalId, CostingVersionId = version.Id,
-            ProcedureId = x.ProcedureId, Stream = x.Stream, MarginPct = x.MarginPct,
+            ProcedureId = x.ProcedureId, Stream = x.Stream, MarginPct = x.MarginPct, FixedAmount = x.FixedAmount,
         }));
         var overheads = await db.EncounterOverheads.AsNoTracking().Where(x => x.CostingVersionId == from.Id).ToListAsync(ct);
         db.EncounterOverheads.AddRange(overheads.Select(x => new EncounterOverhead

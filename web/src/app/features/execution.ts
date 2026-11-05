@@ -7,6 +7,7 @@ import { firstValueFrom } from 'rxjs';
 import { Api, CostingModelsDto, Envelope, RunDetail as RunDetailDto, RunListItem } from '../core/api';
 import { Auth, toApiError } from '../core/auth';
 import { RunContext, runInFlight, runLiveStatus } from '../core/context';
+import { formatMoney } from '../core/decimal';
 import { apiResource, runResource, catalogueResource } from '../core/resource';
 import { Icon } from '../shared/icon';
 import { Col, UI, matchesNameOrCode } from '../shared/ui';
@@ -234,14 +235,14 @@ export const approvalCols: Col<any>[] = [
 
 interface ProcedureCostingItem {
   id: string; code: string; name: string; marginPct?: string | number | null;
-  listPrice?: string | number | null;
+  listPrice?: string | number | null; packageId?: string | null; compositionCost?: string | number | null;
 }
 interface ProcedureTypeItemsPage { items: ProcedureCostingItem[]; total: number; }
 interface ProcedureTypeRow {
   code: string; name: string; procedures: number | string; marginPct?: string | number | null;
   items?: ProcedureCostingItem[];
 }
-interface ItemDraft { id: string; code: string; name: string; marginPct: string; savedMargin: string; listPrice: string | number; }
+interface ItemDraft { id: string; code: string; name: string; marginPct: string; savedMargin: string; listPrice: string | number; packageId?: string | null; compositionCost?: string | number | null; }
 interface ProcedureTypeDraft {
   code: string; name: string; procedures: number | string; marginPct: string;
   items: ItemDraft[]; stash: ItemDraft[]; expanded: boolean; itemTotal: number; loadingItems: boolean;
@@ -278,7 +279,12 @@ export class VersionPick {
   selector: 'v-type-costing',
   imports: [NgTemplateOutlet, FormsModule, RouterLink, Icon, VersionPick, ...UI],
   template: `
-    @if (embedded()) {
+    @if (linked()) {
+      <section class="linked-list">
+        <h2>{{ title() }}</h2>
+        <ng-container [ngTemplateOutlet]="body" />
+      </section>
+    } @else if (embedded()) {
       <section class="card overhead-block">
         <h2>{{ title() }}</h2>
         <ng-container [ngTemplateOutlet]="body" />
@@ -286,7 +292,10 @@ export class VersionPick {
     } @else {
       <v-page [title]="title()" [purpose]="purpose()">
       <button actions class="btn primary" type="button" (click)="save()" [disabled]="busy() || !dirty() || locked()">{{ busy() ? 'Saving…' : 'Save' }}</button>
-      <v-version-pick />
+      <div class="version-line">
+        <v-version-pick />
+        @if (versionCode() && !locked()) { <span class="muted version-note">Bound to costing version {{ versionCode() }} ({{ versionStatus() }}).</span> }
+      </div>
       <ng-container [ngTemplateOutlet]="body" />
       </v-page>
     }
@@ -297,24 +306,25 @@ export class VersionPick {
             @if (locked()) {
               <p class="notice">{{ versionCode() }} is {{ versionStatus() }}. Direct and Indirect costing on a published version are never edited.
                 <a routerLink="/costing-models" queryParamsHandling="preserve">Create a new version</a>.</p>
-            } @else if (versionCode()) {
-              <p class="muted margin-hint">Bound to costing version {{ versionCode() }} ({{ versionStatus() }}).</p>
             }
           }
           @if (message()) { <p class="notice" [class.bad]="!!error()">{{ message() }}</p> }
           @if (hint()) { <p class="muted margin-hint">{{ hint() }}</p> }
-          <input type="search" class="item-search" placeholder="Search procedures by name or code"
-            [ngModel]="search()" (ngModelChange)="setSearch($event)" aria-label="Search procedures" />
+          @if (!linked()) {
+          <input type="search" class="item-search" [placeholder]="'Search ' + noun() + 's by name or code'"
+            [ngModel]="search()" (ngModelChange)="setSearch($event)" [attr.aria-label]="'Search ' + noun() + 's'" />
+          }
           @if (searching()) { <p class="faint search-status">Searching…</p> }
-          @else if (search().trim() && visibleRows().length === 0) { <p class="faint search-status">No procedures match this search.</p> }
+          @else if (search().trim() && visibleRows().length === 0) { <p class="faint search-status">No {{ noun() }}s match this search.</p> }
+          @if (listTitle()) { <h2 class="list-title">{{ listTitle() }}</h2> }
           <div class="table-wrap">
             <table class="data">
-              <caption class="sr-only">Procedure/Activity types</caption>
+              <caption class="sr-only">{{ typeLabel() }}s</caption>
               <thead>
                 <tr>
                   <th class="exp" scope="col"></th>
-                  <th scope="col">Procedure/Activity type</th>
-                  <th class="num" scope="col">Procedure/Activity</th>
+                  <th scope="col">{{ typeLabel() }}</th>
+                  <th class="num" scope="col">{{ countLabel() }}</th>
                   <th scope="col">{{ pctLabel() }}</th>
                 </tr>
               </thead>
@@ -333,7 +343,7 @@ export class VersionPick {
                     <td>{{ row.name }}</td>
                     <td class="num">{{ search().trim() ? row.itemTotal : row.procedures }}</td>
                     <td>
-                      <input class="margin-input" name="margin-{{ row.code }}" type="text" inputmode="decimal"
+                      <input class="margin-input" name="margin-{{ row.code }}" type="text" inputmode="decimal" [attr.aria-label]="pctLabel() + ' for ' + row.name"
                         [ngModel]="row.marginPct" (ngModelChange)="setMargin(row.code, $event)" [disabled]="locked()" />
                     </td>
                   </tr>
@@ -346,17 +356,21 @@ export class VersionPick {
                               <tr>
                                 <th scope="col">Id</th>
                                 <th scope="col">Name</th>
-                                <th class="num" scope="col">Contracted price</th>
+                                @if (!fixedCost()) { <th class="num" [class.composition]="!compositionColumn()" scope="col">Contracted price</th> }
+                                @if (compositionColumn()) { <th class="num composition" scope="col">Composition Cost</th> }
                                 <th scope="col">{{ pctLabel() }}</th>
-                                <th class="num" scope="col">{{ amountLabel() }}</th>
+                                @if (!fixedCost()) { <th class="num" scope="col">{{ amountLabel() }}</th> }
                               </tr>
                             </thead>
                             <tbody>
                               @for (item of row.items; track item.id) {
                                 <tr>
-                                  <td><a [routerLink]="['/procedures', item.id]" queryParamsHandling="preserve">{{ hisId(item.code) }}</a></td>
+                                  <td><a [routerLink]="item.packageId ? ['/packages', item.packageId] : ['/procedures', item.id]" queryParamsHandling="preserve">{{ hisId(item.code) }}</a></td>
                                   <td>{{ item.name }}</td>
-                                  <td class="num">{{ item.listPrice | money }}</td>
+                                  @if (!fixedCost()) { <td class="num" [class.composition]="!compositionColumn()">{{ item.listPrice | money }}</td> }
+                                  @if (compositionColumn()) {
+                                    <td class="num composition" [class.bad]="+(item.compositionCost ?? 0) > +item.listPrice">{{ item.compositionCost | money }}</td>
+                                  }
                                   <td>
                                     @if (editing()?.id === item.id && editing()?.field === 'margin') {
                                       <input class="cell-input" name="item-margin-{{ item.id }}" type="text" inputmode="decimal"
@@ -368,6 +382,7 @@ export class VersionPick {
                                         (click)="startItemEdit(row.code, item.id, 'margin')">{{ item.marginPct || '—' }}</span>
                                     }
                                   </td>
+                                  @if (!fixedCost()) {
                                   <td class="num">
                                     @if (editing()?.id === item.id && editing()?.field === 'cost') {
                                       <input class="cell-input" name="item-cost-{{ item.id }}" type="text" inputmode="decimal"
@@ -379,9 +394,10 @@ export class VersionPick {
                                         (click)="startItemEdit(row.code, item.id, 'cost')">{{ evaluatedCost(item) | money }}</span>
                                     }
                                   </td>
+                                  }
                                 </tr>
                               } @empty {
-                                <tr><td class="faint" colspan="5">{{ search().trim() ? 'No procedures match this search.' : 'No procedures in this type.' }}</td></tr>
+                                <tr><td class="faint" [attr.colspan]="fixedCost() ? 3 : compositionColumn() ? 6 : 5">{{ search().trim() ? 'No ' + noun() + 's match this search.' : 'No ' + noun() + 's in this type.' }}</td></tr>
                               }
                             </tbody>
                           </table>
@@ -396,14 +412,16 @@ export class VersionPick {
                     </tr>
                   }
                 } @empty {
-                  <tr><td class="faint" colspan="4">{{ search().trim() ? 'No procedures match this search.' : 'No procedures in this hospital.' }}</td></tr>
+                  <tr><td class="faint" colspan="4">{{ search().trim() ? 'No ' + noun() + 's match this search.' : 'No ' + noun() + 's in this hospital.' }}</td></tr>
                 }
               </tbody>
             </table>
           </div>
-          <div class="save-bar">
-            <button class="btn primary" type="button" (click)="save()" [disabled]="busy() || !dirty() || locked()">{{ busy() ? 'Saving…' : 'Save' }}</button>
-          </div>
+          @if (!linked() && !companion()) {
+            <div class="save-bar">
+              <button class="btn primary" type="button" (click)="save()" [disabled]="busy() || !dirty() || locked()">{{ busy() ? 'Saving…' : 'Save' }}</button>
+            </div>
+          }
         }
       </v-state>
     </ng-template>
@@ -421,8 +439,10 @@ export class VersionPick {
     .cell-value:hover { border-color: var(--text); }
     .cell-value.locked, .cell-value.locked:hover { cursor: default; border-color: var(--border); }
     .save-bar { display: flex; justify-content: flex-end; margin-top: 14px; }
+    .version-line { display: flex; flex-wrap: wrap; align-items: flex-end; column-gap: 14px; }
+    .version-note { margin-bottom: 21px; }
     .notice { margin: 0 0 12px; }
-    .margin-hint { margin: 0 0 12px; max-width: 72ch; }
+    .margin-hint { margin: 0 0 12px; }
     td.exp, th.exp { width: 40px; padding-right: 0; }
     button.icon-only { padding: 4px; width: 28px; height: 28px; justify-content: center; border-radius: 8px; }
     button.icon-only v-icon { transition: transform .15s; }
@@ -431,6 +451,7 @@ export class VersionPick {
     tr.expand-row td { background: var(--surface-2); padding: 0; }
     .expand-pane { padding: 8px 12px 14px 40px; }
     table.nested { background: var(--surface-solid); }
+    table.nested th.composition, table.nested td.composition { padding-right: 32px; }
     .more { margin-top: 8px; }
     .item-search {
       width: min(28rem, 100%); margin: 0 0 10px; font: 14px var(--font); padding: 6px 8px;
@@ -440,6 +461,9 @@ export class VersionPick {
     .search-status { margin: 0 0 10px; }
     .overhead-block { margin-top: 14px; position: relative; z-index: 0; }
     .overhead-block h2 { margin: 0 0 12px; }
+    .linked-list { margin-top: 24px; }
+    .linked-list h2 { margin: 0 0 12px; }
+    .list-title { margin: 10px 0 12px; }
   `,
 })
 export class TypeCosting {
@@ -448,8 +472,20 @@ export class TypeCosting {
   apiPath = input.required<string>();
   pctLabel = input('Margin Cost (%)');
   amountLabel = input('Evaluated cost');
-  hint = input('If Margin Cost (%) is 0 or blank, it will follow recipe costing.');
+  hint = input('');
   embedded = input(false);
+  noun = input('procedure');
+  typeLabel = input('Procedure/Activity type');
+  countLabel = input('Procedure/Activity');
+  /** The field holds a fixed cost in SAR: no contracted price or evaluated cost beside it. */
+  fixedCost = input(false);
+  /** A heading right above the grid, for a page with more than one list. */
+  listTitle = input('');
+  /** A second list on the same page: this list's search box and Save buttons also drive it. */
+  companion = input<TypeCosting | null>(null);
+  /** This list is driven by another's search box and Save buttons, so it shows neither. */
+  linked = input(false);
+  compositionColumn = input(false);
   private api = inject(Api);
   private ctx = inject(RunContext);
   private injector = inject(Injector);
@@ -475,6 +511,11 @@ export class TypeCosting {
   });
   hisId = hisProcedureId;
   evaluatedCost = evaluatedCost;
+  private parseValue(raw: string) {
+    if (!this.fixedCost()) return parseMargin(raw, this.pctLabel());
+    const parsed = parseCost(raw, this.pctLabel());
+    return parsed.ok && Number(parsed.value) === 0 ? { ok: true as const, value: null } : parsed;
+  }
   startItemEdit(typeCode: string, id: string, field: 'margin' | 'cost'): void {
     if (this.locked()) return;
     if (this.editing()) {
@@ -498,7 +539,7 @@ export class TypeCosting {
     if (!ed) return;
     const raw = this.editValue();
     if (ed.field === 'margin') {
-      const parsed = parseMargin(raw, this.pctLabel());
+      const parsed = this.parseValue(raw);
       if (!parsed.ok) {
         this.error.set(true);
         this.message.set(parsed.message);
@@ -531,7 +572,8 @@ export class TypeCosting {
     this.message.set(null);
     this.error.set(false);
   }
-  dirty = computed(() => {
+  dirty = computed(() => this.ownDirty() || !!this.companion()?.ownDirty());
+  ownDirty = computed(() => {
     const cur = this.rows();
     const src = this.res.value()?.data ?? [];
     if (cur.length !== src.length) return cur.length > 0;
@@ -564,6 +606,7 @@ export class TypeCosting {
     });
   }
   setSearch(value: string): void {
+    this.companion()?.setSearch(value);
     this.search.set(value);
     if (this.searchTimer) clearTimeout(this.searchTimer);
     this.searchTimer = setTimeout(() => void this.loadSearch(), 250);
@@ -660,41 +703,19 @@ export class TypeCosting {
   }
   async save(): Promise<void> {
     if (this.locked()) return;
-    const items: { code: string; marginPct: string | null }[] = [];
-    const procedures: { id: string; marginPct: string | null }[] = [];
-    for (const row of this.rows()) {
-      const parsed = parseMargin(row.marginPct, this.pctLabel());
-      if (!parsed.ok) {
-        this.error.set(true);
-        this.message.set(parsed.message);
-        return;
-      }
-      items.push({ code: row.code, marginPct: parsed.value });
-      const seen = new Set<string>();
-      for (const item of [...row.stash, ...row.items]) {
-        if (seen.has(item.id)) continue;
-        seen.add(item.id);
-        const ip = parseMargin(item.marginPct, this.pctLabel());
-        if (!ip.ok) {
-          this.error.set(true);
-          this.message.set(`${item.name}: ${ip.message}`);
-          return;
-        }
-        procedures.push({ id: item.id, marginPct: ip.value });
-      }
-    }
+    const companion = this.companion();
+    // Nothing is sent until both lists are valid.
+    const mine = this.ownDirty() ? this.payload() : undefined;
+    const theirs = companion?.ownDirty() ? companion.payload() : undefined;
+    if (mine === null || theirs === null) return;
     this.busy.set(true);
     this.message.set(null);
     this.error.set(false);
+    companion?.message.set(null);
+    companion?.error.set(false);
     try {
-      const q = this.ctx.configQuery();
-      await firstValueFrom(this.api.put<Envelope<ProcedureTypeRow[]>>(`${this.apiPath()}${q}`, { items, procedures }));
-      this.rows.update(rs => rs.map(r => ({
-        ...r,
-        items: r.items.map(i => ({ ...i, savedMargin: i.marginPct })),
-        stash: r.stash.map(i => ({ ...i, savedMargin: i.marginPct })),
-      })));
-      this.res.reload();
+      if (mine) await this.send(mine);
+      if (theirs) await companion!.send(theirs);
       this.message.set('Saved.');
     } catch (err) {
       this.error.set(true);
@@ -703,14 +724,67 @@ export class TypeCosting {
       this.busy.set(false);
     }
   }
+  /** What to send, or null with the reason shown when a value is not valid. */
+  payload(): { items: { code: string; marginPct: string | null }[]; procedures: { id: string; marginPct: string | null }[] } | null {
+    this.error.set(false);
+    this.message.set(null);
+    const items: { code: string; marginPct: string | null }[] = [];
+    const procedures: { id: string; marginPct: string | null }[] = [];
+    for (const row of this.rows()) {
+      const parsed = this.parseValue(row.marginPct);
+      if (!parsed.ok) {
+        this.error.set(true);
+        this.message.set(parsed.message);
+        return null;
+      }
+      items.push({ code: row.code, marginPct: parsed.value });
+      const seen = new Set<string>();
+      for (const item of [...row.stash, ...row.items]) {
+        if (seen.has(item.id)) continue;
+        seen.add(item.id);
+        const ip = this.parseValue(item.marginPct);
+        if (!ip.ok) {
+          this.error.set(true);
+          this.message.set(`${item.name}: ${ip.message}`);
+          return null;
+        }
+        procedures.push({ id: item.id, marginPct: ip.value });
+      }
+    }
+    return { items, procedures };
+  }
+  async send(body: { items: { code: string; marginPct: string | null }[]; procedures: { id: string; marginPct: string | null }[] }): Promise<void> {
+    await firstValueFrom(this.api.put<Envelope<ProcedureTypeRow[]>>(`${this.apiPath()}${this.ctx.configQuery()}`, body));
+    this.rows.update(rs => rs.map(r => ({
+      ...r,
+      items: r.items.map(i => ({ ...i, savedMargin: i.marginPct })),
+      stash: r.stash.map(i => ({ ...i, savedMargin: i.marginPct })),
+    })));
+    this.res.reload();
+  }
 }
 
 @Component({
-  selector: 'v-direct-costing',
+  selector: 'v-procedure-costing',
   imports: [TypeCosting],
-  template: `<v-type-costing title="Direct costing" purpose="Procedure/activity types in this hospital, and how many sit under each." apiPath="procedure-costing" />`,
+  template: `
+    <v-type-costing #main title="Procedure costing" purpose="Procedure/activity types in this hospital, and how many sit under each." apiPath="procedure-costing" listTitle="Billable Procedures" [companion]="zero" />
+    <v-type-costing #zero title="Zero price procedures" purpose="" apiPath="zero-price-costing" pctLabel="Fixed Cost (SAR)" hint="" [fixedCost]="true" [linked]="true" />
+    <div class="save-bar">
+      <button class="btn primary" type="button" (click)="main.save()" [disabled]="main.busy() || !main.dirty() || main.locked()">{{ main.busy() ? 'Saving…' : 'Save' }}</button>
+    </div>
+  `,
+  styles: `.save-bar { display: flex; justify-content: flex-end; margin-top: 14px; }`,
 })
-export class DirectCosting {}
+export class ProcedureCosting {}
+
+@Component({
+  selector: 'v-package-costing',
+  imports: [TypeCosting],
+  template: `<v-type-costing title="Package costing" purpose="Package types in this hospital, and the direct cost of each package as a percentage of its contracted price." apiPath="package-costing"
+    noun="package" typeLabel="Package type" countLabel="Packages" [compositionColumn]="true" hint="If Margin Cost (%) is 0 or blank, the package follows its composition costing (sum of included procedure's cost)" />`,
+})
+export class PackageCosting {}
 
 interface EncounterOverheadRow {
   id: string; costCenterId: string; costCenterCode: string; costCenterName: string;
@@ -1100,6 +1174,23 @@ export class Periods {
 }
 
 /** Mirrors Catalogue.IsRunDeletable: results under a published costing model are kept. */
+/** What a re-run does, for its warning prompt. Results are cleared before it recalculates, so a failure leaves none. */
+function rerunWarning(r: { period: string; costingVersion: string; costingVersionStatus: string; metrics?: unknown }, force: boolean) {
+  const metrics = (r.metrics ?? {}) as { patientCost?: string | number; revenue?: string | number };
+  return {
+    force,
+    effects: [
+      `Delete the stored results for ${r.period} and recalculate them.`,
+      `Use costing model ${r.costingVersion} (${r.costingVersionStatus}) with its current percentages, and the current encounters and prices.`,
+      'May change the numbers on the Dashboard, Cost Centres, Procedures, Packages and Patient Encounters for this period.',
+    ],
+    current: [
+      metrics.patientCost != null ? `Total cost: ${formatMoney(String(metrics.patientCost))}` : '',
+      metrics.revenue != null ? `Revenue: ${formatMoney(String(metrics.revenue))}` : '',
+    ].filter(Boolean),
+  };
+}
+
 function runDeletable(r: { status: string; costingVersionStatus: string }): boolean {
   return r.status === 'DRAFT' || r.status === 'FAILED' || (r.status === 'RECONCILED' && r.costingVersionStatus !== 'PUBLISHED');
 }
@@ -1111,7 +1202,7 @@ function hisProcedureId(code: string): string {
 
 function toItemDraft(i: ProcedureCostingItem, parent: string): ItemDraft {
   const marginPct = marginText(i.marginPct) || parent;
-  return { id: i.id, code: i.code, name: i.name, marginPct, savedMargin: marginPct, listPrice: i.listPrice ?? 0 };
+  return { id: i.id, code: i.code, name: i.name, marginPct, savedMargin: marginPct, listPrice: i.listPrice ?? 0, packageId: i.packageId, compositionCost: i.compositionCost };
 }
 
 function mergeDrafts(row: ProcedureTypeDraft, incoming: ItemDraft[], reset: boolean): { items: ItemDraft[]; stash: ItemDraft[] } {
@@ -1226,7 +1317,11 @@ function parseMargin(raw: string, label = 'Margin Cost (%)'): { ok: true; value:
           <span class="applied">Costing model:
             @if (applied.value(); as a) { <strong>{{ a.code ? a.code + ' - ' + a.status : 'None in effect for this period' }}</strong> }
           </span>
-          <button class="btn primary" type="button" (click)="create()" [disabled]="busy() || !applied.value()?.code">New run</button>
+          <button class="btn primary" type="button" (click)="create()" [disabled]="busy() || !applied.value()?.code || !!applied.value()?.existingRun"
+            [title]="applied.value()?.existingRun ? 'This period already has a run under this costing model.' : ''">New run</button>
+          @if (applied.value()?.existingRun; as existing) {
+            <span class="applied">{{ existing }} already exists for this period and costing model. <a [routerLink]="['/runs', existing]" queryParamsHandling="preserve">Open it to re-run</a>.</span>
+          }
         </div>
       }
       <v-table [rows]="runs()" [columns]="cols()" caption="Runs" />
@@ -1248,7 +1343,7 @@ export class Runs {
   private auth = inject(Auth);
   canRun = computed(() => this.auth.can('run.execute'));
   /** Follows the period chosen here: the costing model a new run would be calculated under. */
-  applied = apiResource<{ code: string | null; name: string | null; status: string | null }>(
+  applied = apiResource<{ code: string | null; name: string | null; status: string | null; existingRun: string | null }>(
     () => this.canRun() && this.period() && this.ctx.hospitalParam() ? 'runs/applied-version' : null, () => ({ hospital: this.ctx.hospitalParam(), period: this.period() }));
   /** The method follows the hospital: its Direct and Indirect costing, or the ledger-based engine. */
   steps = computed(() => this.ctx.hospitals().find(h => h.code === this.ctx.hospitalParam())?.usesCostingModel ? [
@@ -1315,6 +1410,7 @@ export class Runs {
       const run = await firstValueFrom(this.api.post<RunListItem>('runs', { hospital: h, period: p }));
       await firstValueFrom(this.api.post(`runs/${run.code}/execute`, { force: false }));
       this.message.set(`${run.code} is running. Status on this list updates as stages complete.`);
+      this.applied.reload();
       await this.ctx.load(true);
       if (h && p) this.ctx.selectScope(h, p);
     } catch (e) { this.message.set(toApiError(e).message); }
@@ -1330,6 +1426,7 @@ export class Runs {
     try {
       await firstValueFrom(this.api.delete(`runs/${r.code}`));
       this.message.set(`${r.code} deleted.`);
+      this.applied.reload();
       await this.ctx.load(true);
     } catch (e) { this.message.set(toApiError(e).message); }
     finally { this.busy.set(false); }
@@ -1348,8 +1445,8 @@ export class Runs {
               <button class="btn" type="button" (click)="remove()" [disabled]="busy()">Delete</button>
             }
             @if (canRun() && r.data.run.status !== 'PUBLISHED' && !inFlight(r.data.run.status)) {
-              <button class="btn" type="button" (click)="execute(false)" [disabled]="busy()">Re-run</button>
-              <button class="btn" type="button" (click)="execute(true)" [disabled]="busy()" title="Proceed past ERROR issues; the run can then never be published (FR-9.8)">Re-run with force</button>
+              <button class="btn" type="button" (click)="askRerun(false)" [disabled]="busy()">Re-run</button>
+              <button class="btn" type="button" (click)="askRerun(true)" [disabled]="busy()" title="Proceed past ERROR issues; the run can then never be published (FR-9.8)">Re-run with force</button>
             }
             @if (canRequest() && r.data.run.status === 'RECONCILED' && !r.data.publishBlockers.length) { <button class="btn" type="button" (click)="request()" [disabled]="busy()">Request approval</button> }
             @if (canPublish() && r.data.run.status === 'APPROVED') { <button class="btn primary" type="button" (click)="publish()" [disabled]="busy()">Publish</button> }
@@ -1365,8 +1462,38 @@ export class Runs {
           </section>
           <section class="card"><h2>Approvals</h2><v-table [rows]="r.data.approvals" [columns]="appr" empty="No approval requested." /></section>
         </v-page>
+        @if (rerun(); as w) {
+          <div class="rerun-backdrop" (click)="rerun.set(null)" (document:keydown.escape)="rerun.set(null)">
+            <div class="rerun-dialog" role="alertdialog" aria-modal="true" aria-labelledby="rerun-title" (click)="$event.stopPropagation()">
+              <h2 id="rerun-title">Re-run {{ r.data.run.code }}?</h2>
+              <p class="rerun-label">This will:</p>
+              <ul>@for (line of w.effects; track line) { <li>{{ line }}</li> }</ul>
+              @if (w.force) { <p class="notice warn">Force: it continues past ERROR issues, and a run forced past them can never be published.</p> }
+              @if (w.current.length) {
+                <p class="rerun-label">Current results, which will be replaced:</p>
+                <ul>@for (line of w.current; track line) { <li>{{ line }}</li> }</ul>
+              }
+              <p class="bad">The old results cannot be restored. If the run fails, this period has no results until it runs successfully.</p>
+              <div class="rerun-actions">
+                <button class="btn proceed" type="button" (click)="confirmRerun()">Yes, Proceed</button>
+                <button class="btn" type="button" (click)="rerun.set(null)">No, Close</button>
+              </div>
+            </div>
+          </div>
+        }
       }
     </v-state>
+  `,
+  styles: `
+    .rerun-backdrop { position: fixed; inset: 0; z-index: 1000; display: flex; align-items: center; justify-content: center; padding: 16px; background: rgba(15, 23, 42, .5); }
+    .rerun-dialog { width: min(560px, 100%); max-height: calc(100vh - 32px); overflow-y: auto; padding: 22px 24px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--surface-solid); color: var(--text); box-shadow: var(--shadow); }
+    .rerun-dialog h2 { margin: 0 0 14px; }
+    .rerun-dialog ul { margin: 0 0 14px; padding-left: 20px; }
+    .rerun-dialog li { margin-bottom: 4px; }
+    .rerun-label { margin: 0 0 6px; font-weight: 600; }
+    .rerun-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 18px; flex-wrap: wrap; }
+    .btn.proceed, .btn.proceed:hover { background: var(--bad); border-color: var(--bad); color: #fff; }
+    .btn.proceed:hover { filter: brightness(.9); }
   `,
 })
 export class RunDetail {
@@ -1414,7 +1541,16 @@ export class RunDetail {
       await this.ctx.load(true);
     }
   }
-  execute(force: boolean) { return this.act(() => firstValueFrom(this.api.post(`runs/${this.id()}/execute`, { force })), 'Running. Stages and the run list update as each stage completes.'); }
+  rerun = signal<ReturnType<typeof rerunWarning> | null>(null);
+  askRerun(force: boolean): void {
+    const run = this.res.value()?.data.run;
+    if (run) this.rerun.set(rerunWarning(run, force));
+  }
+  confirmRerun() {
+    const force = this.rerun()?.force ?? false;
+    this.rerun.set(null);
+    return this.act(() => firstValueFrom(this.api.post(`runs/${this.id()}/execute`, { force })), 'Running. Stages and the run list update as each stage completes.');
+  }
   async remove(): Promise<void> {
     const run = this.res.value()?.data.run;
     if (!run || !runDeletable(run)) return;
@@ -1439,16 +1575,34 @@ export class RunDetail {
 interface PatientEncounterRow {
   id: string; encounterNo: string; mrn: string; patient: string; segment: string; encType: string; department: string; payer: string;
   physician?: string | null; admitAt: string; dischargeAt?: string | null; lengthOfStay: number; services: number;
-  gross: string | number; discount: string | number; net: string | number;
+  gross: string | number; discount: string | number; net: string | number; cost?: string | number | null;
 }
 type EncounterFilterKey = 'serviceLine' | 'department' | 'resource' | 'physician' | 'payer' | 'drg' | 'encType' | 'segment';
 interface PatientEncounterPage { rows: PatientEncounterRow[]; total: number; page: number; pageSize: number; phiMasked: boolean; }
 interface PatientEncounterLine {
   procedure?: string | null; procedureId?: string | null; quantity?: string | number | null; costCentre?: string | null; physician?: string | null;
-  payer?: string | null; performedAt?: string | null; gross?: string | number | null; discount?: string | number | null; net?: string | number | null; sourceRef: string;
+  payer?: string | null; performedAt?: string | null; gross?: string | number | null; discount?: string | number | null; net?: string | number | null; sourceRef: string; cost?: string | number | null;
 }
+interface HisEncounterSource {
+  fields: { label: string; hisColumn: string; value?: string | null }[];
+  services: unknown[]; refunds: unknown[]; packageItems: unknown[];
+}
+
+/** Values for checking against HIS: no money format, and true/false as HIS bits. A third part ":n" shows 2 decimals, or none when they are 00. */
+function hisCols(spec: string[]): Col<any>[] {
+  return spec.map(s => {
+    const [key, label, kind] = s.split(':');
+    return { key, label, sortable: false, value: (r: any) => {
+      const v = r[key];
+      if (v === null || v === undefined) return '';
+      if (kind === 'n') { const n = Number(v).toFixed(2); return n.endsWith('.00') ? n.slice(0, -3) : n; }
+      return typeof v === 'string' && /^\d{4}-\d{2}-\d{2}T/.test(v) ? v.slice(0, 16).replace('T', ' ') : String(v);
+    } };
+  });
+}
+
 interface PatientEncounterDetailDto { encounter: PatientEncounterRow; lines: PatientEncounterLine[]; }
-interface InvoiceGroup { key: string; procedure: string; procedureId: string | null; quantity: number; gross: number; discount: number; refunds: number; net: number; }
+interface InvoiceGroup { key: string; procedure: string; procedureId: string | null; quantity: number; gross: number; discount: number; refunds: number; net: number; cost: number; }
 
 @Component({
   selector: 'v-patient-encounters',
@@ -1570,6 +1724,7 @@ export class PatientEncounters {
       { key: 'gross', label: 'Gross', type: 'money', blankZero: true }, { key: 'discount', label: 'Discount', type: 'money', blankZero: true },
       { key: 'net', label: 'Net Invoice', type: 'money', blankZero: true },
     );
+    cols.push({ key: 'cost', label: 'Cost', type: 'money', blankZero: true });
     return cols;
   });
 }
@@ -1591,9 +1746,25 @@ export class PatientEncounters {
               <v-tile label="Refund" [value]="t.refunds" />
               <v-tile label="Net invoiced" [value]="t.net" />
             }
+            <v-tile label="Cost" [value]="r.data.encounter.cost ?? 0" />
           </div>
           <section class="card" style="margin-top:14px"><h2>Invoiced procedures ({{ groups(r.data.lines).length }})</h2>
             <v-table [rows]="groups(r.data.lines)" [columns]="groupCols()" caption="Invoiced procedures" empty="Nothing was invoiced on this encounter." />
+          </section>
+          <section class="card his-source" style="margin-top:14px">
+            <h2>HIS source</h2>
+            <p class="muted">The values loaded from HIS for this encounter, under the HIS table and column each came from, for checking against HIS.</p>
+            <v-state [loading]="his.isLoading()" [error]="his.error()">
+              @if (his.value(); as h) {
+                <v-table [rows]="h.data.fields" [columns]="hisFieldCols" caption="Encounter fields" />
+                @for (t of hisTables(h.data); track t.title) {
+                  <details style="margin-top:12px">
+                    <summary><strong>{{ t.title }} ({{ t.rows.length }})</strong> <span class="muted">{{ t.source }}</span></summary>
+                    <div style="margin-top:8px"><v-table [rows]="t.rows" [columns]="t.cols" [caption]="t.title" empty="None loaded." /></div>
+                  </details>
+                }
+              }
+            </v-state>
           </section>
         </v-page>
       }
@@ -1606,6 +1777,21 @@ export class EncounterDetail {
   canRevenue = computed(() => this.auth.can('revenue.view'));
   canPhi = computed(() => this.auth.can('phi.view'));
   res = catalogueResource<PatientEncounterDetailDto>(() => `patient-encounters/${this.id()}`);
+  his = catalogueResource<HisEncounterSource>(() => `patient-encounters/${this.id()}/his-source`);
+  hisFieldCols: Col<HisEncounterSource['fields'][number]>[] = [
+    { key: 'label', label: 'Field', sortable: false }, { key: 'hisColumn', label: 'HIS table and column', sortable: false }, { key: 'value', label: 'Value', sortable: false, value: r => r.value ?? '' },
+  ];
+  hisTables(h: HisEncounterSource): { title: string; source: string; rows: any[]; cols: Col<any>[] }[] {
+    const tables = [
+      { title: 'Service lines', source: 'HIS_InvoiceDetail. Child invoice lines are for reference: the parent line carries the money and cost.', rows: h.services, cols: hisCols(['transactionType:TransactionType', 'invoiceNo:InvoiceNo', 'lineItemNo:LineItemNo', 'procedureId:ProcedureID', 'costCenterId:CostCenterID', 'primaryDoctorId:PrimaryDoctorID', 'quantity:Quantity:n', 'performDate:PerformDate', ...(this.canRevenue() ? ['price:Price:n', 'discountAmount:DiscountAmount:n', 'patientShare:PatientShare:n', 'companyShare:CompanyShare:n'] : [])]) },
+    ];
+    if (!this.canRevenue()) return tables;
+    return [
+      ...tables,
+      { title: 'Refunds', source: 'HIS_RefundMain + HIS_RefundDetail, cancelled ones included', rows: h.refunds, cols: hisCols(['refundNo:RefundNo', 'invoiceLineItemNo:InvoiceLineItemNo', 'refundType:RefundType', 'refundDate:RefundDate', 'originalTransactionType:OriginalTransactionType', 'originalTransactionRef:OriginalTransactionRef', 'originalTransactionDate:OriginalTransactionDate', 'invoiceCancelledOn:Invoice CancelledOn', 'procedureId:ProcedureID', 'refundAmount:RefundAmount', 'patientShare:PatientShare', 'companyShare:CompanyShare', 'patientPaid:PatientPaid', 'taxAmount:TaxAmount', 'headerRefundAmount:Main RefundAmount', 'headerAmountPaid:Main AmountPaid', 'status:Status', 'approvalStatus:ApprovalStatus', 'approvedDate:ApprovedDate', 'cancelledOn:CancelledOn', 'reasonId:ReasonID']) },
+      { title: 'Package items', source: 'HIS_InvoicePackageItem', rows: h.packageItems, cols: hisCols(['transactionType:TransactionType', 'invoiceNo:InvoiceNo', 'lineItemNo:LineItemNo', 'procedureId:ProcedureID', 'procedurePackageId:ProcedurePackageID', 'packageLineItemNo:ProcedurePackageLineItemNo', 'packageSequence:ProcedurePackageSequence', 'invoiceDate:InvoiceDate', 'price:Price', 'discountedCharge:DiscountedCharge', 'patientShare:PatientShare', 'patientPaid:PatientPaid', 'companyShare:CompanyShare', 'companyPaid:CompanyPaid', 'childInvoiceNo:ChildInvoiceNo', 'childInvoiceLineItemNo:ChildInvoiceLineItemNo', 'isCompleted:IsCompleted', 'isRefunded:IsRefunded']) },
+    ];
+  }
   private moneyCols = (): Col<any>[] => this.canRevenue() ? [
     { key: 'gross', label: 'Contracted price', type: 'money' }, { key: 'discount', label: 'Discount', type: 'money' },
     { key: 'refunds', label: 'Refund', type: 'money', blankZero: true }, { key: 'net', label: 'Net Invoiced', type: 'money', blankZero: true },
@@ -1614,6 +1800,7 @@ export class EncounterDetail {
     { key: 'procedure', label: 'Procedure', link: r => r.procedureId ? `/procedures/${r.procedureId}` : null },
     { key: 'quantity', label: 'Qty', type: 'num', dp: 0 },
     ...this.moneyCols(),
+    { key: 'cost', label: 'Cost', type: 'money', blankZero: true },
   ]);
   /** The tiles add up the same rows as the table, so the two always agree. */
   totals(lines: PatientEncounterLine[]): { gross: number; discount: number; refunds: number; net: number } {
@@ -1626,18 +1813,19 @@ export class EncounterDetail {
     const map = new Map<string, InvoiceGroup>();
     for (const l of lines) {
       const key = l.procedureId ?? l.procedure ?? l.sourceRef;
-      const g = map.get(key) ?? { key, procedure: l.procedure ?? 'Not linked to a procedure', procedureId: l.procedureId ?? null, quantity: 0, gross: 0, discount: 0, refunds: 0, net: 0 };
+      const g = map.get(key) ?? { key, procedure: l.procedure ?? 'Not linked to a procedure', procedureId: l.procedureId ?? null, quantity: 0, gross: 0, discount: 0, refunds: 0, net: 0, cost: 0 };
       g.quantity += Number(l.quantity ?? 0);
       // Refunds are negative rows of their own, shown apart from what was charged.
       if (l.sourceRef.toUpperCase().startsWith('REF-')) g.refunds += Number(l.gross ?? 0);
       else g.gross += Number(l.gross ?? 0);
       g.discount += Number(l.discount ?? 0);
       g.net += Number(l.net ?? 0);
+      g.cost += Number(l.cost ?? 0);
       map.set(key, g);
     }
     // Sums of 4dp amounts as numbers: without this, a charge and its refund can leave a residue instead of zero.
     const dp4 = (n: number) => Math.round(n * 10000) / 10000;
-    for (const g of map.values()) { g.gross = dp4(g.gross); g.discount = dp4(g.discount); g.refunds = dp4(g.refunds); g.net = dp4(g.net); }
+    for (const g of map.values()) { g.gross = dp4(g.gross); g.discount = dp4(g.discount); g.refunds = dp4(g.refunds); g.net = dp4(g.net); g.cost = dp4(g.cost); }
     return [...map.values()].sort((a, b) => b.net - a.net);
   }
 }

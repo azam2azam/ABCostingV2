@@ -27,6 +27,12 @@ public sealed class RunService(IDbContextFactory<VeritaDbContext> factory, Verit
         return effective.FirstOrDefault(v => v.Status == "PUBLISHED") ?? effective.FirstOrDefault();
     }
 
+    /// <summary>The run a period already has under a costing version; there is only ever one. Simulations do not count.</summary>
+    public static Task<string?> ExistingRunCodeAsync(VeritaDbContext db, Guid hospitalId, Guid periodId, Guid versionId, CancellationToken ct) =>
+        db.CalculationRuns.AsNoTracking()
+            .Where(r => r.HospitalId == hospitalId && r.PeriodId == periodId && r.CostingVersionId == versionId && r.RunType != "SIMULATION")
+            .Select(r => r.Code).FirstOrDefaultAsync(ct);
+
     /// <summary>Create a run under the costing version that applies at the period end.</summary>
     public async Task<CalculationRun> CreateAsync(Guid hospitalId, Guid periodId, string triggeredBy, string? name = null,
         string runType = "ACTUAL", Guid? id = null, string? code = null, CancellationToken ct = default)
@@ -38,6 +44,8 @@ public sealed class RunService(IDbContextFactory<VeritaDbContext> factory, Verit
             throw AppError.Invalid($"Period {period.Code} belongs to another hospital.");
         var version = await AppliedVersionAsync(db, hospitalId, period, ct)
             ?? throw AppError.Conflict("NO_COSTING_VERSION", $"No published or draft costing version is effective for {period.Code}.");
+        if (runType != "SIMULATION" && await ExistingRunCodeAsync(db, hospitalId, periodId, version.Id, ct) is { } taken)
+            throw AppError.Conflict("RUN_EXISTS", $"{taken} already exists for {period.Code} under costing model {version.Code}. Re-run it, or delete it first.");
 
         if (code is null)
         {

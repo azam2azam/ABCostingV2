@@ -94,8 +94,11 @@ public static class Security
         new("Configuration", [
             new("periods", "Periods", "costing.view", "The costing periods of the selected hospital, with the run and costing model linked to each."),
             new("costing-models", "Costing Models", "costing.view", "Versioned costing definitions with their effective dates, diffs and approval history."),
-            new("direct-costing", "Direct Costing", "costing.view", "Procedure/activity types in this hospital, and how many sit under each."),
             new("indirect-costing", "Indirect Costing", "costing.view", "Indirect overhead cost on each procedure/activity type, as a percentage of contracted price, and the amount in SAR."),
+        ]),
+        new("Direct Costing", [
+            new("procedure-costing", "Procedure Costing", "costing.view", "Procedure/activity types in this hospital, and how many sit under each."),
+            new("package-costing", "Package Costing", "costing.view", "Package types in this hospital, and the direct cost of each package as a percentage of its contracted price."),
         ]),
         new("Execution", [
             new("runs", "Calculation Runs", "costing.view", "Controlled costing runs, their eleven stages, money in and out, and lifecycle state."),

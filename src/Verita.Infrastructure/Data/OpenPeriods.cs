@@ -22,6 +22,19 @@ public static class OpenPeriods
     /// driver volumes onto the copy, then removes the shared ones. Encounters only count for a
     /// hospital with no periods of its own, which would otherwise lose those months.
     /// </summary>
+    public const string MarkChildInvoiceLinesSql = """
+        UPDATE t SET IsChildInvoice = 1 FROM [EncounterService] t
+        JOIN [Encounter] e ON e.Id = t.EncounterId
+        JOIN [InvoicePackageItem] i ON i.HospitalId = e.HospitalId
+         AND t.SourceRef = CONCAT('INV-', i.TransactionType, '-', i.ChildInvoiceNo, '-', i.ChildInvoiceLineItemNo)
+        WHERE t.IsChildInvoice = 0 AND i.ChildInvoiceNo IS NOT NULL AND i.ChildInvoiceNo NOT IN ('', '0');
+        UPDATE t SET IsChildInvoice = 1 FROM [RevenueTransaction] t
+        JOIN [Encounter] e ON e.Id = t.EncounterId
+        JOIN [InvoicePackageItem] i ON i.HospitalId = e.HospitalId
+         AND t.SourceRef = CONCAT('REV-', i.TransactionType, '-', i.ChildInvoiceNo, '-', i.ChildInvoiceLineItemNo)
+        WHERE t.IsChildInvoice = 0 AND i.ChildInvoiceNo IS NOT NULL AND i.ChildInvoiceNo NOT IN ('', '0');
+        """;
+
     public const string AssignSharedSql = """
         SELECT p.Id AS SharedId, h.Id AS HospitalId, NEWID() AS OwnId INTO #Owned
         FROM [Period] p CROSS JOIN [Hospital] h

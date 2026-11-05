@@ -239,6 +239,19 @@ public class Provider
     public string Name { get; set; } = "";
     public string Specialty { get; set; } = "";
     public string Grade { get; set; } = "";
+    /// <summary>A HIS placeholder (HIS_Doctor.IsDoctorDummy) billing for a clinic or several, not a person.</summary>
+    public bool IsDummy { get; set; }
+}
+
+/// <summary>A clinic a doctor works in, as HIS holds it (HIS_DoctorClinic): a doctor has many clinics and a clinic many doctors.</summary>
+public class ProviderClinic
+{
+    public Guid Id { get; set; }
+    public Guid ProviderId { get; set; }
+    public Guid DepartmentId { get; set; }
+    public string HisClinicId { get; set; } = "";
+    public bool IsDefault { get; set; }
+    public bool IsActive { get; set; } = true;
 }
 
 // ═══ E. Service catalogue ══════════════════════════════════════════════════════════
@@ -291,6 +304,13 @@ public class Procedure
     public string CatalogCode { get; set; } = "";
     public string Name { get; set; } = "";
     public string Category { get; set; } = "";
+    /// <summary>HIS classifies a procedure at three levels (HIS_Procedure): SubGroup, Group and Category. Category's name is <see cref="Category"/>.</summary>
+    public string? HisCategoryId { get; set; }
+    public string? HisGroupId { get; set; }
+    public string? GroupName { get; set; }
+    public string? HisSubGroupId { get; set; }
+    public string? SubGroupName { get; set; }
+    public bool IsPackage { get; set; }
     public Guid DepartmentId { get; set; }
     public Guid? ServiceLineId { get; set; }
     public string ProcType { get; set; } = "";
@@ -317,6 +337,8 @@ public class ProcedureTypeCosting
     public string ProcType { get; set; } = "";
     public string Stream { get; set; } = "DIRECT";
     [Share] public decimal MarginPct { get; set; }
+    /// <summary>The ZERO_FIXED stream only: a fixed cost in SAR, since no % of a zero price can be one.</summary>
+    public decimal? FixedAmount { get; set; }
 }
 
 /// <summary>Configured margin on one procedure/activity; overrides the type margin when set.</summary>
@@ -328,6 +350,8 @@ public class ProcedureMargin
     public Guid ProcedureId { get; set; }
     public string Stream { get; set; } = "DIRECT";
     [Share] public decimal MarginPct { get; set; }
+    /// <summary>The ZERO_FIXED stream only: a fixed cost in SAR.</summary>
+    public decimal? FixedAmount { get; set; }
 }
 
 /// <summary>Indirect overhead applied to every encounter billed at a cost centre.</summary>

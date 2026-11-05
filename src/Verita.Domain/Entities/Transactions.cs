@@ -10,17 +10,25 @@ public class Payer
     public string PayerType { get; set; } = "";
     /// <summary>Contracted reimbursement as a fraction of list price.</summary>
     [Share] public decimal ContractRate { get; set; } = 1m;
-    /// <summary>Set on import from Name (see PayerParties). Empty when the name holds only an administrator.</summary>
+    /// <summary>HIS_Company.GroupID and its HIS_CompanyGroup: the insurer this company account belongs to.</summary>
+    public int? HisGroupId { get; set; }
+    public string? HisGroupName { get; set; }
+    public bool? HisGroupIsTpa { get; set; }
+    public bool? HisGroupManagedByTpa { get; set; }
+    /// <summary>Set on import: from the HIS group, or from Name (see PayerParties) for a company with no group.</summary>
     public Guid? InsurerId { get; set; }
     public Guid? AdministratorId { get; set; }
 }
 
-/// <summary>The company that carries the risk, such as BUPA. Several employer accounts (Payer) sit under one.</summary>
+/// <summary>The company that carries the risk, such as BUPA: a HIS_CompanyGroup. Several employer accounts (Payer) sit under one.</summary>
 public class Insurer
 {
     public Guid Id { get; set; }
     public string Code { get; set; } = "";
     public string Name { get; set; } = "";
+    public int? HisGroupId { get; set; }
+    public bool? IsTpa { get; set; }
+    public bool? IsManagedByTpa { get; set; }
 }
 
 /// <summary>The claims administrator (TPA) handling an account for an insurer, such as TCS.</summary>
@@ -107,6 +115,8 @@ public class EncounterService
     public DateTime PerformedAt { get; set; }
     public string SourceSystem { get; set; } = "VIDA-HIS";
     public string SourceRef { get; set; } = "";
+    /// <summary>A package component on a child invoice. Kept as HIS holds it, but the parent invoice line is what counts.</summary>
+    public bool IsChildInvoice { get; set; }
 }
 
 /// <summary>Measured resource consumption — the actual-cost source of truth.</summary>
@@ -168,6 +178,11 @@ public class RevenueTransaction
     public bool? IsPackageInvoice { get; set; }
     public int? BillType { get; set; }
     public bool? IsAcceptedWithDrg { get; set; }
+    /// <summary>HIS_InvoiceMain.InvoiceType (2 = child) and MainInvoiceNo (its parent).</summary>
+    public int? HisInvoiceType { get; set; }
+    public string? HisMainInvoiceNo { get; set; }
+    /// <summary>A package component on a child invoice. Kept as HIS holds it, but the parent invoice line is what counts.</summary>
+    public bool IsChildInvoice { get; set; }
 }
 
 /// <summary>

@@ -33,6 +33,7 @@ public sealed class VeritaDbContext(DbContextOptions<VeritaDbContext> options) :
     public DbSet<ResourceRate> ResourceRates => Set<ResourceRate>();
     public DbSet<ResourceCapacity> ResourceCapacities => Set<ResourceCapacity>();
     public DbSet<Provider> Providers => Set<Provider>();
+    public DbSet<ProviderClinic> ProviderClinics => Set<ProviderClinic>();
     // Catalogue
     public DbSet<Activity> Activities => Set<Activity>();
     public DbSet<ActivityResource> ActivityResources => Set<ActivityResource>();
@@ -222,6 +223,8 @@ public sealed class VeritaDbContext(DbContextOptions<VeritaDbContext> options) :
         Fk<ResourceCapacity, Resource>(x => x.ResourceId);
         Fk<Provider, Resource>(x => x.ResourceId);
         Fk<Provider, Department>(x => x.DepartmentId);
+        Fk<ProviderClinic, Provider>(x => x.ProviderId);
+        Fk<ProviderClinic, Department>(x => x.DepartmentId);
         Fk<Activity, Hospital>(x => x.HospitalId);
         Fk<Activity, Department>(x => x.DepartmentId);
         Fk<Activity, CostCenter>(x => x.CostCenterId);
@@ -317,6 +320,7 @@ public sealed class VeritaDbContext(DbContextOptions<VeritaDbContext> options) :
         Unique<Insurer>(x => x.Code); Unique<PayerAdministrator>(x => x.Code);
         Unique<CostCenter>(x => new { x.HospitalId, x.Code }); Unique<GLAccount>(x => x.Code); mb.Entity<Period>().HasIndex(x => new { x.HospitalId, x.Code }).IsUnique(); Unique<CostPool>(x => x.Code);
         Unique<CostDriver>(x => x.Code); Unique<Resource>(x => x.Code); Unique<Provider>(x => x.Code); Unique<Activity>(x => x.Code);
+        Unique<ProviderClinic>(x => new { x.ProviderId, x.HisClinicId });
         Unique<Procedure>(x => x.Code); Unique<Package>(x => x.Code); Unique<Drg>(x => x.Code); Unique<Payer>(x => x.Code);
         Unique<Patient>(x => new { x.HospitalId, x.Mrn }); Unique<Encounter>(x => new { x.HospitalId, x.EncounterNo }); Unique<AllocationRule>(x => x.Code);
         Unique<CostingVersion>(x => new { x.HospitalId, x.Code }); Unique<CalculationRun>(x => x.Code); Unique<Scenario>(x => x.Code); Unique<User>(x => x.Email);
@@ -355,6 +359,9 @@ public sealed class VeritaDbContext(DbContextOptions<VeritaDbContext> options) :
         mb.Entity<Encounter>().HasIndex(x => new { x.HospitalId, x.AdmitAt });
         mb.Entity<EncounterService>().HasIndex(x => x.EncounterId);
         mb.Entity<RevenueTransaction>().HasIndex(x => x.EncounterId);
+        // A package is billed and costed on its parent invoice. Child invoice lines stay stored for checking against HIS, and only IgnoreQueryFilters sees them.
+        mb.Entity<EncounterService>().HasQueryFilter(x => !x.IsChildInvoice);
+        mb.Entity<RevenueTransaction>().HasQueryFilter(x => !x.IsChildInvoice);
         mb.Entity<RefundTransaction>().Property(x => x.SourceRef).HasMaxLength(100);
         mb.Entity<RefundTransaction>().HasIndex(x => new { x.HospitalId, x.SourceRef }).IsUnique();
         mb.Entity<RefundTransaction>().HasIndex(x => x.EncounterId);

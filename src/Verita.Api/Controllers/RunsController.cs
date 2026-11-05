@@ -46,7 +46,7 @@ public sealed class RunsController(RunService runs, RunQueue queue, VeritaDbCont
         return Created($"/api/v1/runs/{run.Id}", (await Q.RunsAsync(p, ct)).First(r => r.Id == run.Id));
     }
 
-    public sealed record AppliedVersion(string? Code, string? Name, string? Status);
+    public sealed record AppliedVersion(string? Code, string? Name, string? Status, string? ExistingRun);
 
     /// <summary>The costing model a new run for this period would be calculated under.</summary>
     [HttpGet("runs/applied-version")]
@@ -57,7 +57,8 @@ public sealed class RunsController(RunService runs, RunQueue queue, VeritaDbCont
         var owner = await db.Hospitals.AsNoTracking().FirstOrDefaultAsync(x => x.Code == hospital, ct) ?? throw AppError.NotFound($"Hospital {hospital}");
         var row = await db.Periods.AsNoTracking().FirstOrDefaultAsync(x => x.HospitalId == owner.Id && x.Code == period, ct) ?? throw AppError.NotFound($"Period {period}");
         var version = await RunService.AppliedVersionAsync(db, owner.Id, row, ct);
-        return new AppliedVersion(version?.Code, version?.Name, version?.Status);
+        var existing = version is null ? null : await RunService.ExistingRunCodeAsync(db, owner.Id, row.Id, version.Id, ct);
+        return new AppliedVersion(version?.Code, version?.Name, version?.Status, existing);
     }
 
     public sealed record ExecuteRequest(bool Force = false);

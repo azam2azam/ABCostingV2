@@ -25,6 +25,44 @@ public class HisImportPackTests
     }
 
     [Fact]
+    public void Doctor_clinic_file_loads_after_its_doctor_and_keeps_a_clinic_missing_from_the_catalogue()
+    {
+        Assert.Equal("ProviderClinic", HisImportPack.SpecFromFileName("15_ProviderClinic.csv"));
+        Assert.True(Array.IndexOf(EntitySpecs.All, EntitySpecs.Find("Provider")) < Array.IndexOf(EntitySpecs.All, EntitySpecs.Find("ProviderClinic")));
+        Assert.Equal("UNMAPPED", HisImportPack.UnmappedFallback("ProviderClinic", "departmentCode"));
+    }
+
+    [Fact]
+    public void Encounters_with_nothing_billed_are_not_loaded()
+    {
+        static Dictionary<string, string> Enc(string no, string status, string arrived) => new(StringComparer.OrdinalIgnoreCase)
+            { ["encounterNo"] = no, ["hisStatus"] = status, ["hisArrivedAt"] = arrived };
+        static Dictionary<string, string> Line(string no) => new(StringComparer.OrdinalIgnoreCase) { ["encounterNo"] = no };
+        var encounters = new HisImportPack.ParsedFile("33_Encounter.csv", EntitySpecs.Find("Encounter"),
+        [
+            Enc("cancelled", "4", ""), Enc("arrived-unbilled", "2", "2026-11-01"), Enc("service", "2", "2026-11-01"), Enc("revenue", "6", ""),
+            Enc("activity-only", "2", "2026-11-01"), Enc("refund-only", "6", ""), Enc("not-from-his", "", ""),
+        ]);
+        var services = new HisImportPack.ParsedFile("34_EncounterService.csv", EntitySpecs.Find("EncounterService"), [Line("service")]);
+        var revenue = new HisImportPack.ParsedFile("36_RevenueTransaction.csv", EntitySpecs.Find("RevenueTransaction"), [Line("revenue")]);
+        var activity = new HisImportPack.ParsedFile("35_ActivityTransaction.csv", EntitySpecs.Find("ActivityTransaction"), [Line("activity-only")]);
+        var refunds = new HisImportPack.ParsedFile("37_RefundTransaction.csv", EntitySpecs.Find("RefundTransaction"), [Line("refund-only")]);
+
+        var (files, skipped) = HisImportPack.SkipUnbilledEncounters([encounters, services, activity, revenue, refunds]);
+        Assert.Equal(4, skipped);
+        Assert.Equal(["service", "revenue", "not-from-his"], files.Single(f => f.Spec!.Name == "Encounter").Rows.Select(r => r["encounterNo"]));
+
+        // Encounters sent alone: the billing is not there to judge by, so nothing is left out.
+        var (alone, none) = HisImportPack.SkipUnbilledEncounters([encounters]);
+        Assert.Equal(0, none);
+        Assert.Equal(7, alone.Single().Rows.Count);
+
+        // Every row skipped: the empty file does not reach the importer.
+        var bookings = new HisImportPack.ParsedFile("33_Encounter.csv", EntitySpecs.Find("Encounter"), [Enc("cancelled", "4", "")]);
+        Assert.DoesNotContain(HisImportPack.SkipUnbilledEncounters([bookings, services]).Files, f => f.Spec!.Name == "Encounter");
+    }
+
+    [Fact]
     public void BindHospital_rewrites_hospital_row_and_codes()
     {
         var hospital = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)

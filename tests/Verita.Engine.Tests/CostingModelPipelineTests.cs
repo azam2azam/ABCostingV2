@@ -34,6 +34,11 @@ public class CostingModelPipelineTests
         },
         DirectTypes = new() { ["LAB"] = 80m, ["IMAGING"] = 50m },
         DirectItems = new() { [Xray] = 60m },
+        ZeroFixedTypes = [],
+        ZeroFixedItems = [],
+        PackageProcedures = [],
+        PackageDirectTypes = [],
+        PackageDirectItems = [],
         IndirectTypes = new() { ["ALL"] = 2m },
         IndirectItems = [],
         EncounterOverheads = [new(1m, 5m), new(0m, 7m)],
@@ -86,5 +91,84 @@ public class CostingModelPipelineTests
 
         Assert.Contains(sink.Rows("VALIDATE").Issues, i => i.CheckCode == "DQ-MODEL-NO-MARGIN");
         Assert.Equal("RECONCILED", sink.Statuses[^1]);
+    }
+
+    [Fact]
+    public async Task Package_costing_supersedes_direct_costing_only_on_packages_that_have_it()
+    {
+        Guid set = Guid.NewGuid(), byType = Guid.NewGuid(), unset = Guid.NewGuid();
+        var ctx = Context();
+        ctx.Lines.AddRange([new(Enc3, set, Cc, null, 1m, "INV-4"), new(Enc3, byType, Cc, null, 1m, "INV-5"), new(Enc3, unset, Cc, null, 1m, "INV-6")]);
+        ctx.Procedures[set] = new(set, "Own %", false, "LAB", 1000m);
+        ctx.Procedures[byType] = new(byType, "Type %", false, "SURGERY", 1000m);
+        ctx.Procedures[unset] = new(unset, "No package %", false, "LAB", 1000m);
+        ctx.PackageProcedures.UnionWith([set, byType, unset]);
+        ctx.PackageDirectItems[set] = 30m;
+        ctx.PackageDirectTypes["SURGERY"] = 40m;
+        // Xray is not a package, so the package % on its type must not reach it.
+        ctx.PackageDirectTypes["IMAGING"] = 10m;
+
+        var sink = new MemorySink();
+        await new CostingModelPipeline(sink).ExecuteAsync(ctx, default);
+        var rows = sink.Rows("AGGREGATE");
+        var std = rows.ProcedureCosts.Where(c => c.CostType == "STANDARD").ToDictionary(c => c.ProcedureId);
+
+        Assert.Equal(300m, std[set].UnitCost);
+        Assert.Equal(400m, std[byType].UnitCost);
+        // No package %: unchanged from Direct costing, LAB 80%.
+        Assert.Equal(800m, std[unset].UnitCost);
+        // Not a package: Direct costing, even with a package % on its type.
+        Assert.Equal(600m, std[Xray].UnitCost);
+        Assert.Equal(1500m, rows.EncounterCosts.Single(c => c.EncounterId == Enc3).DirectCost);
+    }
+
+    [Fact]
+    public async Task A_procedure_with_no_price_costs_its_fixed_value()
+    {
+        Guid own = Guid.NewGuid(), byType = Guid.NewGuid(), byAll = Guid.NewGuid(), freePackage = Guid.NewGuid();
+        var ctx = Context();
+        ctx.Lines.AddRange([new(Enc3, own, Cc, null, 1m, "INV-4"), new(Enc3, byType, Cc, null, 1m, "INV-5"), new(Enc3, byAll, Cc, null, 2m, "INV-6")]);
+        ctx.Procedures[own] = new(own, "Own value", false, "LAB", 0m);
+        ctx.Procedures[byType] = new(byType, "Type value", false, "LAB", 0m);
+        ctx.Procedures[byAll] = new(byAll, "All value", false, "SURGERY", 0m);
+        ctx.Procedures[freePackage] = new(freePackage, "Free package", false, "LAB", 0m);
+        ctx.PackageProcedures.Add(freePackage);
+        ctx.ZeroFixedItems[own] = 40m;
+        ctx.ZeroFixedTypes["LAB"] = 30m;
+        ctx.ZeroFixedTypes["ALL"] = 20m;
+
+        var sink = new MemorySink();
+        await new CostingModelPipeline(sink).ExecuteAsync(ctx, default);
+        var rows = sink.Rows("AGGREGATE");
+        var std = rows.ProcedureCosts.Where(c => c.CostType == "STANDARD").ToDictionary(c => c.ProcedureId);
+
+        Assert.Equal(40m, std[own].UnitCost);
+        Assert.Equal(30m, std[byType].UnitCost);
+        Assert.Equal(20m, std[byAll].UnitCost);
+        Assert.Equal(110m, rows.EncounterCosts.Single(c => c.EncounterId == Enc3).DirectCost);
+        // A priced procedure keeps its %, and a package is not on the zero-price list.
+        Assert.Equal(80m, std[Lab].UnitCost);
+        Assert.Equal(0m, std[freePackage].UnitCost);
+    }
+
+    [Fact]
+    public async Task A_package_carries_no_indirect_cost_but_its_other_lines_do()
+    {
+        var package = Guid.NewGuid();
+        var ctx = Context();
+        ctx.Lines.Add(new(Enc3, package, Cc, null, 1m, "INV-4"));
+        ctx.Procedures[package] = new(package, "Package", false, "LAB", 1000m);
+        ctx.PackageProcedures.Add(package);
+
+        var sink = new MemorySink();
+        await new CostingModelPipeline(sink).ExecuteAsync(ctx, default);
+        var rows = sink.Rows("AGGREGATE");
+        var std = rows.ProcedureCosts.Where(c => c.CostType == "STANDARD").ToDictionary(c => c.ProcedureId);
+
+        Assert.Equal(0m, std[package].IndirectCost);
+        Assert.Equal(800m, std[package].DirectCost);
+        // Enc3 holds only the package: no indirect, though All is 2%. Lab on Enc1 keeps its 2%.
+        Assert.Equal(0m, rows.EncounterCosts.Single(c => c.EncounterId == Enc3).IndirectCost);
+        Assert.Equal(5m, rows.EncounterCosts.Single(c => c.EncounterId == Enc1).IndirectCost);
     }
 }

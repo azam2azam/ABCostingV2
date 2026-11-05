@@ -1,5 +1,5 @@
 import { HttpClient } from '@angular/common/http';
-import { Component, computed, effect, inject, signal } from '@angular/core';
+import { Component, DestroyRef, computed, effect, inject, signal } from '@angular/core';
 import { FormsModule } from '@angular/forms';
 import { firstValueFrom } from 'rxjs';
 import type { components } from '../core/api-types';
@@ -393,6 +393,9 @@ interface ImportPreview {
  * transaction and rolls it back, so a zip of templates is checked in load order exactly as it
  * would load. Bad rows come back one by one with the reason; the good rows load.
  */
+/** Rough load speed behind the estimated import progress; only the bar depends on it. */
+const IMPORT_ROWS_PER_SECOND = 2000;
+
 @Component({
   selector: 'v-data-import',
   imports: [FormsModule, ...UI],
@@ -402,14 +405,34 @@ interface ImportPreview {
         <h2>Upload</h2>
         <div class="row">
           <input type="file" accept=".csv,.zip" (change)="pick($event)" aria-label="File to upload" />
-          <select [(ngModel)]="entity" name="entity" aria-label="Table for a CSV">
-            <option value="">Detect from file name / zip</option>
-            @for (e of visibleEntities(); track e.name) { <option [value]="e.name">{{ e.name }}</option> }
-          </select>
-          @if (busy()) { <span class="muted">Working…</span> }
         </div>
+        @if (busy() && !uploading()) {
+          <div class="import-loading" role="status"><span class="spinner" aria-hidden="true"></span><strong>Reading file…</strong></div>
+        }
         @if (error()) { <div class="notice bad" role="alert" style="margin-top:10px">{{ error() }}</div> }
-        @if (hisPreview(); as hp) {
+        @if (uploading(); as mode) {
+          <div class="import-progress" role="status" aria-live="polite" (window:beforeunload)="warnLeaving($event)">
+            <div class="import-loading">
+              <span class="spinner" aria-hidden="true"></span>
+              <div>
+                <strong>{{ mode === 'validate' ? 'Validating' : 'Importing' }} {{ file()?.name }}…</strong>
+                <p class="muted">Keep this page open until it finishes. Progress is an estimate.</p>
+              </div>
+              <span class="import-pct">{{ overallPct() }}%</span>
+            </div>
+            <div class="bar big" role="progressbar" [attr.aria-valuenow]="overallPct()" aria-valuemin="0" aria-valuemax="100" aria-label="Estimated progress"><span [style.width.%]="overallPct()"></span></div>
+            <ul class="import-tables">
+              @for (t of tableProgress(); track t.entity + t.fileName) {
+                <li [class.done]="t.state === 'done'" [class.active]="t.state === 'active'">
+                  <span class="import-table-name">{{ t.entity }}</span>
+                  <span class="import-table-rows">{{ fmt(t.rows) }} rows</span>
+                  <div class="bar"><span [style.width.%]="t.pct"></span></div>
+                  <span class="import-table-state">{{ t.state === 'done' ? 'Done (est.)' : t.state === 'active' ? 'In progress (est.)' : 'Waiting' }}</span>
+                </li>
+              }
+            </ul>
+          </div>
+        } @else if (hisPreview(); as hp) {
           @if (!imported()) {
             <div class="his-preview">
               @if (hp.hisPack) {
@@ -450,31 +473,8 @@ interface ImportPreview {
             {{ fmt(totalCreated()) }} new, {{ fmt(totalUpdated()) }} updated.
             @if (dryRunShown() && totalRejected() === 0) { Ready to import. }
           </p>
-          @if (totalRejected() > 0) {
-            <div class="notice warn" role="status">
-              <p>{{ rejectNote() }}</p>
-              @for (s of mappingRejects(); track s.entity) {
-                <p><strong>{{ s.entity }}</strong> — {{ fmt(s.rejected) }} {{ s.rejected === 1 ? 'row' : 'rows' }} not in VERITA yet. {{ s.reasons.join(' ') }} Add them in Data entry, then import this file again.</p>
-              }
-              @for (s of catalogueRejects(); track s.entity) {
-                <p><strong>{{ s.entity }}</strong> — {{ fmt(s.rejected) }} {{ s.rejected === 1 ? 'row' : 'rows' }}. {{ s.reasons.join(' ') }} The HIS facts file has these codes; the catalogue extract did not. Re-extract catalogue, import it, then import this facts file again. Mapping will not create these.</p>
-              }
-              <button type="button" class="text-link" (click)="showRejects.set(!showRejects())">{{ showRejects() ? 'Hide list' : 'Show list' }}</button>
-            </div>
-          }
           <h3 style="margin-top:14px">{{ imported() ? 'Imported rows preview' : 'Validation results' }}</h3>
           <v-table [rows]="results()" [columns]="resultCols" [caption]="imported() ? 'Imported rows preview' : 'Validation results'" />
-          @if (showRejects()) {
-            @for (r of results(); track r.entity) {
-              @if (shownRejects(r).length) {
-                <h3 style="margin-top:14px">{{ r.entity }} — rows not imported</h3>
-                @if (r.rejected > rejectPreviewLimit) {
-                  <p class="muted">Showing {{ rejectPreviewLimit }} of {{ fmt(r.rejected) }}.</p>
-                }
-                <v-table [rows]="shownRejects(r)" [columns]="rejectCols" />
-              }
-            }
-          }
         }
       </section>
 
@@ -506,26 +506,37 @@ interface ImportPreview {
     details > summary h2 { margin: 0; }
     details[open] > summary { margin-bottom: 12px; }
     input[type="checkbox"]:disabled { opacity: .55; cursor: not-allowed; }
-    .notice.warn p { margin: 0 0 6px; }
-    button.text-link {
-      all: unset; color: var(--accent); cursor: pointer; font-weight: 600;
-      text-decoration: underline; text-underline-offset: 2px;
+    .import-loading { display: flex; align-items: center; gap: 14px; margin-top: 14px; font-size: 16px; }
+    .import-loading p { margin: 2px 0 0; font-size: 13px; }
+    .spinner { flex: none; width: 36px; height: 36px; border: 4px solid var(--border); border-top-color: var(--accent); border-radius: 50%; animation: import-spin .9s linear infinite; }
+    @keyframes import-spin { to { transform: rotate(360deg); } }
+    @media (prefers-reduced-motion: reduce) { .spinner { animation-duration: 3s; } }
+    .import-progress { margin-top: 14px; padding: 18px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--surface-2); }
+    .import-progress .import-loading { margin-top: 0; }
+    .import-pct { margin-left: auto; font-size: 26px; font-weight: 700; color: var(--accent-strong); font-variant-numeric: tabular-nums; }
+    .bar { height: 6px; border-radius: 999px; background: var(--border); overflow: hidden; }
+    .bar span { display: block; height: 100%; border-radius: inherit; background: var(--accent); transition: width .4s linear; }
+    .bar.big { height: 12px; margin-top: 14px; }
+    .import-tables { list-style: none; margin: 16px 0 0; padding: 0; display: grid; gap: 10px; }
+    .import-tables li { display: grid; grid-template-columns: minmax(150px, 1.2fr) auto minmax(80px, 2fr) 130px; align-items: center; gap: 12px; font-size: 14px; color: var(--text-3); }
+    .import-tables li.active { color: var(--text); font-weight: 600; }
+    .import-tables li.done { color: var(--text-2); }
+    .import-tables li.done .bar span { background: var(--good); }
+    .import-table-rows { font-variant-numeric: tabular-nums; }
+    .import-table-state { text-align: right; font-weight: 400; }
+    @media (max-width: 640px) {
+      .import-tables li { grid-template-columns: 1fr auto; }
+      .import-tables li .bar { grid-column: 1 / -1; grid-row: 2; }
+      .import-table-state { grid-column: 1 / -1; text-align: left; }
     }
-    button.text-link:focus-visible { outline: 2px solid var(--focus); }
   `,
 })
 export class DataImport {
   private http = inject(HttpClient);
   private auth = inject(Auth);
   private ctx = inject(RunContext);
-  entities = apiResource<EntityDescription[]>(() => 'data/entities');
-  visibleEntities = computed(() => {
-    const list = this.entities.value() ?? [];
-    return this.ctx.hasDrgs() ? list : list.filter(e => e.name !== 'Drg');
-  });
   historyOpen = signal(false);
   history = apiResource<ImportBatchDto[]>(() => this.historyOpen() ? 'data/imports' : null);
-  entity = '';
   file = signal<File | null>(null);
   busy = signal(false);
   error = signal<string | null>(null);
@@ -533,7 +544,33 @@ export class DataImport {
   hisPreview = signal<ImportPreview | null>(null);
   hisHospital = signal('');
   dryRunShown = signal(false);
-  showRejects = signal(false);
+  uploading = signal<'validate' | 'import' | null>(null);
+  private elapsed = signal(0);
+  private ticker: ReturnType<typeof setInterval> | null = null;
+  /**
+   * The upload is one request, so progress is estimated from the row counts in the preview: it eases
+   * towards the end and never claims to finish until the API answers.
+   */
+  private progress = computed(() => {
+    const rows = (this.hisPreview()?.tables ?? []).reduce((sum, t) => sum + t.rows, 0);
+    const expected = Math.max(8000, rows / IMPORT_ROWS_PER_SECOND * 1000);
+    return 1 - Math.exp(-2 * this.elapsed() / expected);
+  });
+  overallPct = computed(() => Math.floor(this.progress() * 99));
+  tableProgress = computed(() => {
+    const tables = this.hisPreview()?.tables ?? [];
+    const total = tables.reduce((sum, t) => sum + t.rows, 0) || 1;
+    const at = this.progress();
+    let start = 0;
+    return tables.map((t, i) => {
+      const end = start + t.rows / total;
+      const share = Math.min(1, Math.max(0, (at - start) / Math.max(end - start, 0.0001)));
+      start = end;
+      const last = i === tables.length - 1;
+      const state = share >= 1 && !last ? 'done' : share > 0 ? 'active' : 'waiting';
+      return { ...t, state, pct: Math.floor(share * (last ? 99 : 100)) };
+    });
+  });
   canProceed = computed(() => {
     const f = this.file();
     const p = this.hisPreview();
@@ -544,41 +581,12 @@ export class DataImport {
   totalCreated = computed(() => this.results().reduce((s, r) => s + r.created, 0));
   totalUpdated = computed(() => this.results().reduce((s, r) => s + r.updated, 0));
   totalRejected = computed(() => this.results().reduce((s, r) => s + r.rejected, 0));
-  rejectSummaries = computed(() => this.results().filter(r => r.rejected > 0).map(r => {
-    const reasons: string[] = [];
-    for (const row of r.rejects) {
-      for (const err of row.errors) {
-        const reason = err.replace(/ '[^']*'/g, '').replace(/\s+/g, ' ').trim();
-        if (reason && !reasons.includes(reason)) reasons.push(reason);
-      }
-    }
-    const mapping = reasons.length > 0 && reasons.every(x => /^(activityCode|resourceCode) does not exist/i.test(x));
-    return { entity: r.entity, rejected: r.rejected, reasons, mapping };
-  }));
-  mappingRejects = computed(() => this.rejectSummaries().filter(s => s.mapping));
-  catalogueRejects = computed(() => this.rejectSummaries().filter(s => !s.mapping));
-  mappingRejected = computed(() => this.mappingRejects().reduce((s, r) => s + r.rejected, 0));
-  catalogueRejected = computed(() => this.catalogueRejects().reduce((s, r) => s + r.rejected, 0));
-  rejectNote = computed(() => {
-    const mapping = this.mappingRejected();
-    const other = this.catalogueRejected();
-    const saved = 'Rows already saved stay unchanged.';
-    if (this.dryRunShown()) {
-      if (mapping && !other) return `${this.rows(mapping)} would not be saved yet. HIS does not send activities and most resources — add them in Data entry, then import this file again.`;
-      if (mapping) return `${this.rows(mapping)} would wait on activities and resources being added in Data entry. ${this.rows(other)} are on the HIS facts file but were left out of the catalogue extract.`;
-      return `${this.rows(other)} would not be imported because the catalogue extract did not include their department, cost centre or patient. Re-extract catalogue and import it first.`;
-    }
-    if (mapping && !other) return `${this.rows(mapping)} ${mapping === 1 ? 'is' : 'are'} not in VERITA yet. HIS does not send activities and most resources. Add them in Data entry, then import this file again and those rows will be saved. ${saved}`;
-    if (mapping) return `${this.rows(mapping)} ${mapping === 1 ? 'is' : 'are'} not in VERITA yet — add them in Data entry, then import this file again and they will be saved. ${this.rows(other)} ${other === 1 ? 'is' : 'are'} on the HIS facts file but ${other === 1 ? 'was' : 'were'} left out of the catalogue extract; re-extract catalogue, import it, then import this facts file again. Mapping will not create those. ${saved}`;
-    return `${this.rows(other)} ${other === 1 ? 'was' : 'were'} not imported because the catalogue extract did not include their department, cost centre or patient. Re-run the HIS Extract Utility for catalogue, import that zip, then import this facts file again. ${saved}`;
-  });
-  readonly rejectPreviewLimit = 100;
-  shownRejects(r: ImportResult): ImportResult['rejects'] {
-    return r.rejects.slice(0, this.rejectPreviewLimit);
-  }
   rejectBatches = computed(() => (this.history.value() ?? []).filter(b => b.hasRejects).slice(0, 12));
   hospitals = computed(() => this.ctx.context()?.hospitals ?? []);
-  constructor() { void this.ctx.load(); }
+  constructor() {
+    void this.ctx.load();
+    inject(DestroyRef).onDestroy(() => this.stopProgress());
+  }
 
   previewTableCols: Col<ImportPreviewTable>[] = [
     { key: 'entity', label: 'Table' }, { key: 'fileName', label: 'File' }, { key: 'rows', label: 'Rows', type: 'num', dp: 0 },
@@ -587,10 +595,6 @@ export class DataImport {
     { key: 'entity', label: 'Table' }, { key: 'rows', label: 'Rows', type: 'num', dp: 0 }, { key: 'created', label: 'New', type: 'num', dp: 0 },
     { key: 'updated', label: 'Updated', type: 'num', dp: 0 }, { key: 'unchanged', label: 'Unchanged', type: 'num', dp: 0 },
     { key: 'rejected', label: 'Rejected', type: 'num', dp: 0 },
-  ];
-  rejectCols: Col<ImportResult['rejects'][number]>[] = [
-    { key: 'row', label: 'File row', type: 'num', dp: 0 }, { key: 'errors', label: 'Why', value: r => r.errors.join(' ') },
-    { key: 'values', label: 'Values', value: r => Object.entries(r.values).filter(([, v]) => v).map(([k, v]) => `${k}=${v}`).join(', ') },
   ];
   historyCols: Col<ImportBatchDto>[] = [
     { key: 'loadedAt', label: 'When', value: r => r.loadedAt.slice(0, 16).replace('T', ' ') }, { key: 'entity', label: 'Table' },
@@ -601,7 +605,6 @@ export class DataImport {
   pick(ev: Event): void {
     this.file.set((ev.target as HTMLInputElement).files?.[0] ?? null);
     this.results.set([]);
-    this.showRejects.set(false);
     this.error.set(null);
     this.hisPreview.set(null);
     this.hisHospital.set('');
@@ -613,7 +616,6 @@ export class DataImport {
     if (!f) return;
     const body = new FormData();
     body.append('file', f);
-    if (this.entity) body.append('entity', this.entity);
     this.busy.set(true);
     this.error.set(null);
     try {
@@ -634,11 +636,10 @@ export class DataImport {
     const body = new FormData();
     body.append('file', f);
     body.append('dryRun', String(dryRun));
-    if (this.entity) body.append('entity', this.entity);
     if (this.hisHospital()) body.append('hospital', this.hisHospital());
     this.busy.set(true);
     this.error.set(null);
-    this.showRejects.set(false);
+    this.startProgress(dryRun ? 'validate' : 'import');
     try {
       this.results.set(await firstValueFrom(this.http.post<ImportResult[]>(`${apiV1}/data/import`, body)));
       this.dryRunShown.set(dryRun);
@@ -650,16 +651,32 @@ export class DataImport {
       this.error.set(toApiError(e).message);
       this.results.set([]);
     } finally {
+      this.stopProgress();
       this.busy.set(false);
     }
   }
+
+  private startProgress(mode: 'validate' | 'import'): void {
+    this.elapsed.set(0);
+    this.uploading.set(mode);
+    const started = Date.now();
+    this.ticker = setInterval(() => this.elapsed.set(Date.now() - started), 400);
+  }
+
+  private stopProgress(): void {
+    if (this.ticker) clearInterval(this.ticker);
+    this.ticker = null;
+    this.uploading.set(null);
+  }
+
+  /** Leaving the page cancels the request, so the browser asks first. */
+  warnLeaving(event: Event): void { event.preventDefault(); }
 
   historyToggle(el: HTMLDetailsElement): void {
     if (el.open) this.historyOpen.set(true);
   }
 
   fmt(n: number): string { return formatDec(String(n), 0); }
-  rows(n: number): string { return `${this.fmt(n)} ${n === 1 ? 'row' : 'rows'}`; }
 
   rejects(b: ImportBatchDto) { return download(this.http, `${apiV1}/data/imports/${b.id}/rejects`, `${b.entity}-rejects.csv`); }
 

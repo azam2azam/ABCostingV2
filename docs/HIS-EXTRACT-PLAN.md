@@ -261,8 +261,9 @@ Identity and charge master. No period filter except “active”.
 | `03_ServiceLine.csv` | Distinct `HIS_ClinicGroup` for this project | `SL-{GroupID}`, name = `GroupDescription`, `category` from name heuristics |
 | `04_Department.csv` | `HIS_Clinic` ∪ `INP_NursingStation` ∪ `INP_OTMain` ∪ `LAB_Division` | See codes below |
 | `05_CostCenter.csv` | `HIS_CostCenterSetup` + rule map | Oracle CC code; `ccType` default `PRODUCTION`; `stepDownSeq=100` |
-| `14_Provider.csv` | `HIS_Doctor` (this project, active) | Needs a **role resource** later — see gap in §8 |
-| `18_Procedure.csv` | `HIS_Procedure` where not medicine | `procType` from category/flags |
+| `14_Provider.csv` | `HIS_Doctor` (this project, active, plus every dummy) | `isDummy` flags `IsDoctorDummy`; a dummy has no role resource. Others need a **role resource** later — see gap in §8 |
+| `15_ProviderClinic.csv` | `HIS_DoctorClinic` | Every doctor-clinic link, many to many, with `isDefault` and `isActive` |
+| `18_Procedure.csv` | `HIS_Procedure` where not medicine | `procType` from category/flags Also `hisCategoryId`, `hisGroupId`/`groupName`, `hisSubGroupId`/`subGroupName` and `isPackage`: three separate HIS lists, with no parent link between them. |
 | `19_ProcedureRate.csv` | `HIS_Procedure.PublishedPrice` (fallback `Price`) + `HIS_ProcedurePrice` cash/default | `effectiveFrom` = 2000-01-01 or price `EffectiveDate` |
 | `24_Package.csv` | `HIS_Procedure` where `IsPackage=1` | |
 | `25_PackageComponent.csv` | `HIS_ProcedurePackageDetail` | One row per package and procedure. `quantity` is the number of active HIS lines. |
@@ -305,7 +306,7 @@ Only rows whose **clinical/invoice date** falls in `[From, To)`.
 | File | Build rule |
 |---|---|
 | `32_Patient.csv` | Distinct patients on the period’s OP + IP + ER encounters. `mrn = RYN-UAT-{PatientType}-{PatientID}` (PatientType is in the HIS PK). `birthYear` only, national ID masked. |
-| `33_Encounter.csv` | Union: closed OP appointments, IP admissions **admitted** in the month (VERITA rule: month of admit), ER assessments. |
+| `33_Encounter.csv` | Union: OP appointments with an invoice (an appointment with nothing billed is left out), IP admissions **admitted** in the month (VERITA rule: month of admit), ER assessments. |
 | `34_EncounterService.csv` | Invoice detail lines in the month whose header has AppointmentNo or AdmissionNo; skip medicine procedures; explode package components if header is a package. `sourceRef = INV-{TransactionType}-{InvoiceNo}-{LineItemNo}` |
 | `37_RefundTransaction.csv` | `HIS_RefundMain` + `HIS_RefundDetail`, all refunds dated in the period with status, approval, cancellation and original invoice. Not revenue. |
 | `38_InvoicePackageItem.csv` | `HIS_InvoicePackageItem` on the period's invoices, as HIS holds it. For reference: not services, not revenue, and `Encounter.packageCode` stays blank, because filling it would change package costing. |

@@ -56,7 +56,7 @@ public sealed class CostingController : VeritaController
     [HttpGet("resources")]
     [Authorize(Policy = "masterdata.view")]
     public async Task<Envelope<ResourceRow[]>> Resources(CancellationToken ct)
-    { var p = await Me(); return Wrap(await Q.ResourceListAsync(await Q.HospitalInScopeAsync(p, Request.Query["hospital"], ct), p, ct)); }
+    { var (p, s) = await CatalogueScoped(); return Wrap(await Q.ResourceListAsync(s, p, ct)); }
 
     [HttpGet("resources/{id:guid}")]
     [Authorize(Policy = "masterdata.view")]
@@ -81,7 +81,7 @@ public sealed class CostingController : VeritaController
 
     [HttpGet("procedures")]
     [Authorize(Policy = "costing.view")]
-    public async Task<Envelope<ProcedureRow[]>> Procedures(CancellationToken ct) { var (p, s) = await CatalogueScoped(); return Wrap(s, await Q.ProceduresAsync(s, p, ct)); }
+    public async Task<Envelope<ProcedureRow[]>> Procedures(CancellationToken ct) { var (p, s) = await CatalogueScoped(); return Wrap(s, await Q.ProcedureListAsync(s, p, ct)); }
 
     /// <summary>The cost explainer — the primary acceptance test rendered (BRD 23.1).</summary>
     [HttpGet("procedures/{id:guid}")]
@@ -187,6 +187,38 @@ public sealed class CostingController : VeritaController
     public Task<Envelope<ProcedureTypeRow[]>> SaveProcedureCosting([FromBody] ProcedureTypeMarginBody body, CancellationToken ct) =>
         SaveTypeCosting(ReadQueries.CostingStreamDirect, body, ct);
 
+    [HttpGet("zero-price-costing")]
+    [Authorize(Policy = "costing.view")]
+    public Task<Envelope<ProcedureTypeRow[]>> ZeroPriceCosting([FromQuery] string? search = null, CancellationToken ct = default) =>
+        LoadTypeCosting(ReadQueries.CostingStreamZeroFixed, search, ct);
+
+    [HttpGet("zero-price-costing/{typeCode}")]
+    [Authorize(Policy = "costing.view")]
+    public Task<Envelope<ProcedureTypeItemsPage>> ZeroPriceCostingItems(string typeCode, [FromQuery] int skip = 0, [FromQuery] int take = 100,
+        [FromQuery] string? search = null, CancellationToken ct = default) =>
+        LoadTypeCostingItems(ReadQueries.CostingStreamZeroFixed, typeCode, skip, take, search, ct);
+
+    [HttpPut("zero-price-costing")]
+    [Authorize(Policy = "costing.view")]
+    public Task<Envelope<ProcedureTypeRow[]>> SaveZeroPriceCosting([FromBody] ProcedureTypeMarginBody body, CancellationToken ct) =>
+        SaveTypeCosting(ReadQueries.CostingStreamZeroFixed, body, ct);
+
+    [HttpGet("package-costing")]
+    [Authorize(Policy = "costing.view")]
+    public Task<Envelope<ProcedureTypeRow[]>> PackageCosting([FromQuery] string? search = null, CancellationToken ct = default) =>
+        LoadTypeCosting(ReadQueries.CostingStreamPackageDirect, search, ct);
+
+    [HttpGet("package-costing/{typeCode}")]
+    [Authorize(Policy = "costing.view")]
+    public Task<Envelope<ProcedureTypeItemsPage>> PackageCostingItems(string typeCode, [FromQuery] int skip = 0, [FromQuery] int take = 100,
+        [FromQuery] string? search = null, CancellationToken ct = default) =>
+        LoadTypeCostingItems(ReadQueries.CostingStreamPackageDirect, typeCode, skip, take, search, ct);
+
+    [HttpPut("package-costing")]
+    [Authorize(Policy = "costing.view")]
+    public Task<Envelope<ProcedureTypeRow[]>> SavePackageCosting([FromBody] ProcedureTypeMarginBody body, CancellationToken ct) =>
+        SaveTypeCosting(ReadQueries.CostingStreamPackageDirect, body, ct);
+
     [HttpGet("indirect-costing")]
     [Authorize(Policy = "costing.view")]
     public Task<Envelope<ProcedureTypeRow[]>> IndirectCosting([FromQuery] string? search = null, CancellationToken ct = default) =>
@@ -290,6 +322,11 @@ public sealed class CostingController : VeritaController
     [Authorize(Policy = "patient.view")]
     public async Task<Envelope<PatientEncounterDetail>> PatientEncounter(Guid id, CancellationToken ct)
     { var (p, s) = await CatalogueScoped(); return Wrap(s, await Q.PatientEncounterAsync(s, p, id, ct)); }
+
+    [HttpGet("patient-encounters/{id:guid}/his-source")]
+    [Authorize(Policy = "patient.view")]
+    public async Task<Envelope<HisEncounterSource>> PatientEncounterHisSource(Guid id, CancellationToken ct)
+    { var (p, s) = await CatalogueScoped(); return Wrap(s, await Q.PatientEncounterHisSourceAsync(s, p, id, ct)); }
 
     [HttpGet("encounters")]
     [Authorize(Policy = "patient.view")]

@@ -88,7 +88,7 @@ public sealed class HisImportService(IDbContextFactory<VeritaDbContext> factory,
         if (files.Count == 0)
         {
             if (!fileName.EndsWith(".zip", StringComparison.OrdinalIgnoreCase))
-                throw AppError.Invalid("Pick the table this file is for, or name the file after it (for example Resource.csv).");
+                throw AppError.Invalid("Name the file after its table (for example Resource.csv), or upload a HIS pack zip.");
             throw AppError.Invalid("The file has a header but no data rows.");
         }
 
@@ -126,6 +126,8 @@ public sealed class HisImportService(IDbContextFactory<VeritaDbContext> factory,
             }
             files = files.Where(f => f.Spec!.Name != "Hospital").ToList();
             hospital = h.Code;
+            (files, var unbilled) = HisImportPack.SkipUnbilledEncounters(files);
+            if (unbilled > 0) log.LogInformation("Import {File}: skipped {Count} encounters with nothing billed", fileName, unbilled);
             var known = (await db.Providers.AsNoTracking().Select(x => x.Code).ToListAsync(ct))
                 .Concat(files.Where(f => f.Spec!.Name == "Provider").SelectMany(f => f.Rows).Select(r => r.GetValueOrDefault("code") ?? ""))
                 .ToHashSet(StringComparer.OrdinalIgnoreCase);

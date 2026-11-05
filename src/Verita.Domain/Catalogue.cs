@@ -230,7 +230,7 @@ public static class Catalogue
     public static readonly string[] LeverTargetTypes = ["RESOURCE", "RESOURCE_TYPE", "ACTIVITY", "PROCEDURE", "PAYER", "DEPARTMENT", "ALL"];
     public static readonly string[] ChangeTypes = ["PCT", "ABS", "SET"];
     public static readonly string[] ScenarioStatuses = ["DRAFT", "RUNNING", "COMPLETED", "FAILED", "ARCHIVED"];
-    public static readonly string[] CostingStreams = ["DIRECT", "INDIRECT"];
+    public static readonly string[] CostingStreams = ["DIRECT", "INDIRECT", "PACKAGE_DIRECT", "ZERO_FIXED"];
 
     /// <summary>Column -> legal values, read by the database check-constraint generator.</summary>
     public static readonly IReadOnlyDictionary<string, string[]> ColumnDomains = new Dictionary<string, string[]>

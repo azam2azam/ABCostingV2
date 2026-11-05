@@ -10,11 +10,13 @@ public sealed class CostingModelLoader(VeritaDbContext db)
 {
     public const string Direct = "DIRECT";
     public const string Indirect = "INDIRECT";
+    public const string PackageDirect = "PACKAGE_DIRECT";
+    public const string ZeroFixed = "ZERO_FIXED";
 
-    /// <summary>A hospital is costed by its costing model once that version holds Direct or Indirect costing for it.</summary>
+    /// <summary>A hospital is costed by its costing model once that version holds Direct or Indirect costing for it; package costing alone does not count.</summary>
     public static async Task<bool> HasSetupAsync(VeritaDbContext db, Guid hospitalId, Guid versionId, CancellationToken ct) =>
-        await db.ProcedureTypeCostings.AnyAsync(x => x.HospitalId == hospitalId && x.CostingVersionId == versionId, ct)
-        || await db.ProcedureMargins.AnyAsync(x => x.HospitalId == hospitalId && x.CostingVersionId == versionId, ct)
+        await db.ProcedureTypeCostings.AnyAsync(x => x.HospitalId == hospitalId && x.CostingVersionId == versionId && x.Stream != PackageDirect && x.Stream != ZeroFixed, ct)
+        || await db.ProcedureMargins.AnyAsync(x => x.HospitalId == hospitalId && x.CostingVersionId == versionId && x.Stream != PackageDirect && x.Stream != ZeroFixed, ct)
         || await db.EncounterOverheads.AnyAsync(x => x.HospitalId == hospitalId && x.CostingVersionId == versionId, ct);
 
     public async Task<CostingModelContext> LoadAsync(CalculationRun run, CancellationToken ct)
@@ -61,7 +63,15 @@ public sealed class CostingModelLoader(VeritaDbContext db)
         {
             RunId = run.Id, HospitalId = hid, HospitalName = hospital.Name, PeriodCode = period.Code, CostingVersionCode = version.Code, CalculatedAt = DateTime.UtcNow,
             Encounters = encounters, Lines = lines, Revenue = revenue, Procedures = procedures,
-            DirectTypes = TypesOf(Direct), DirectItems = ItemsOf(Direct), IndirectTypes = TypesOf(Indirect), IndirectItems = ItemsOf(Indirect),
+            DirectTypes = TypesOf(Direct), DirectItems = ItemsOf(Direct),
+            ZeroFixedTypes = types.Where(x => x.Stream == ZeroFixed).ToDictionary(x => x.ProcType, x => x.FixedAmount ?? 0m, StringComparer.OrdinalIgnoreCase),
+            ZeroFixedItems = items.Where(x => x.Stream == ZeroFixed).ToDictionary(x => x.ProcedureId, x => x.FixedAmount ?? 0m),
+            PackageProcedures = (await (from pr in db.Procedures.AsNoTracking()
+                                        join pkg in db.Packages.AsNoTracking() on new { pr.HospitalId, pr.Code } equals new { pkg.HospitalId, pkg.Code }
+                                        where pr.HospitalId == hid
+                                        select pr.Id).ToListAsync(ct)).ToHashSet(),
+            PackageDirectTypes = TypesOf(PackageDirect), PackageDirectItems = ItemsOf(PackageDirect),
+            IndirectTypes = TypesOf(Indirect), IndirectItems = ItemsOf(Indirect),
             EncounterOverheads = await db.EncounterOverheads.AsNoTracking().Where(x => x.HospitalId == hid && x.CostingVersionId == vid)
                 .Select(x => new ModelEncounterOverhead(x.OverheadPct, x.OverheadAmount)).ToListAsync(ct),
             DoctorResource = await db.Providers.AsNoTracking().ToDictionaryAsync(x => x.Id, x => x.ResourceId, ct),

@@ -5,7 +5,7 @@ import {
   Api, ComponentDto, PackageDetail as PackageDetailDto, PackageRow,
   ProcedureDetail as ProcedureDetailDto, ProcedureRow, RecipeLineDto,
 } from '../core/api';
-import { toApiError } from '../core/auth';
+import { Auth, toApiError } from '../core/auth';
 import { RunContext } from '../core/context';
 import { catalogueResource } from '../core/resource';
 import { Col, UI, matchesNameOrCode } from '../shared/ui';
@@ -72,8 +72,15 @@ export class Procedures {
   type = signal<string | null>(null);
   search = signal('');
   res = catalogueResource<ProcedureRow[]>(() => 'procedures');
+  private auth = inject(Auth);
+  /** Only a run holds actual revenue, and a role without revenue.view reads it as 0. */
+  private inLoss(r: { revenue: string; totalCost: string }): boolean {
+    return !!this.res.value()?.meta.run && this.auth.can('revenue.view') && Number(r.totalCost) > Number(r.revenue);
+  }
   filtered = computed(() => {
     const all = this.res.value()?.data ?? [];
+    // A search looks through everything, whichever type tile is selected.
+    if (this.search().trim()) return all.filter(x => matchesNameOrCode(this.search(), x.name, x.code));
     const t = this.type();
     let rows: ProcedureRow[];
     if (t === 'ZERO_PRICE') rows = all.filter(x => Number(x.listPrice) === 0);
@@ -87,18 +94,19 @@ export class Procedures {
         rows = priced.filter(x => x.procType === t && (x.category ?? '').toUpperCase() !== 'MEDICINE');
       }
     }
-    return rows.filter(x => matchesNameOrCode(this.search(), x.name, x.code));
+    return rows;
   });
   cols: Col<ProcedureRow>[] = [
     { key: 'code', label: 'Id', value: r => hisProcedureId(r.code), link: r => `/procedures/${r.id}` },
     { key: 'name', label: 'Name' },
     { key: 'category', label: 'Category' },
     { key: 'procType', label: 'Type' },
-    { key: 'listPrice', label: 'Contracted price', type: 'money' },
-    { key: 'volume', label: 'Cases', type: 'num', dp: 0 },
-    { key: 'billedRevenue', label: 'Revenue', type: 'money', value: r => Number(r.listPrice) * Number(r.volume) },
-    { key: 'unitCost', label: 'Unit Cost', type: 'money' },
-    { key: 'totalCost', label: 'Total Cost', type: 'money' },
+    { key: 'listPrice', label: 'Contracted price', type: 'money', blankZero: true },
+    { key: 'volume', label: 'Cases', type: 'num', dp: 0, blankZero: true },
+    { key: 'billedRevenue', label: 'Exp. Revenue', type: 'money', blankZero: true, value: r => Number(r.listPrice) * Number(r.volume) },
+    { key: 'revenue', label: 'Act. Revenue', type: 'money', blankZero: true, bad: r => Number(r.revenue) < Number(r.totalCost) },
+    { key: 'unitCost', label: 'Unit Cost', type: 'money', blankZero: true },
+    { key: 'totalCost', label: 'Total Cost', type: 'money', blankZero: true, bad: r => this.inLoss(r) },
   ];
 }
 
@@ -207,6 +215,9 @@ export class ProcedureDetail {
     <v-page title="Packages" purpose="HIS package id, name, contracted price, and cases in this run.">
       <v-state [loading]="res.isLoading()" [error]="res.error()">
         @if (res.value(); as r) {
+          @if (!r.meta.run && r.meta.costingVersion) {
+            <p class="notice">No calculation run for {{ r.meta.period }}. Costs are estimated from costing model {{ r.meta.costingVersion }} ({{ r.meta.costingVersionStatus }}): Package Costing where set, otherwise the package's composition.</p>
+          }
           <v-list-search [(query)]="search" placeholder="Search by name or code" />
           <v-type-tiles [rows]="r.data" [(selected)]="type" />
           @for (_ of [type()]; track _) {
@@ -222,22 +233,29 @@ export class Packages {
   type = signal<string | null>(null);
   search = signal('');
   res = catalogueResource<PackageRow[]>(() => 'packages');
+  private auth = inject(Auth);
+  /** Only a run holds actual revenue, and a role without revenue.view reads it as 0. */
+  private inLoss(r: { revenue: string; totalCost: string }): boolean {
+    return !!this.res.value()?.meta.run && this.auth.can('revenue.view') && Number(r.totalCost) > Number(r.revenue);
+  }
   filtered = computed(() => {
     const all = this.res.value()?.data ?? [];
+    // A search looks through everything, whichever type tile is selected.
+    if (this.search().trim()) return all.filter(x => matchesNameOrCode(this.search(), x.name, x.code));
     const t = this.type();
-    const rows = t ? all.filter(x => x.procType === t) : all;
-    return rows.filter(x => matchesNameOrCode(this.search(), x.name, x.code));
+    return t ? all.filter(x => x.procType === t) : all;
   });
   cols: Col<PackageRow>[] = [
     { key: 'code', label: 'Id', value: r => hisProcedureId(r.code), link: r => `/packages/${r.id}` },
     { key: 'name', label: 'Name' },
     { key: 'procType', label: 'Type' },
-    { key: 'compositionPrice', label: 'Composition Price', type: 'money' },
-    { key: 'price', label: 'Contracted price', type: 'money' },
-    { key: 'cases', label: 'Cases', type: 'num', dp: 0 },
-    { key: 'billedRevenue', label: 'Revenue', type: 'money', value: r => Number(r.price) * Number(r.cases) },
-    { key: 'unitCost', label: 'Unit Cost', type: 'money', bad: r => Number(r.unitCost) > Number(r.price) },
-    { key: 'totalCost', label: 'Total Cost', type: 'money' },
+    { key: 'compositionPrice', label: 'Composition Price', type: 'money', blankZero: true },
+    { key: 'price', label: 'Contracted price', type: 'money', blankZero: true },
+    { key: 'cases', label: 'Cases', type: 'num', dp: 0, blankZero: true },
+    { key: 'billedRevenue', label: 'Exp. Revenue', type: 'money', blankZero: true, value: r => Number(r.price) * Number(r.cases) },
+    { key: 'revenue', label: 'Act. Revenue', type: 'money', blankZero: true, bad: r => Number(r.revenue) < Number(r.totalCost) },
+    { key: 'unitCost', label: 'Unit Cost', type: 'money', blankZero: true, bad: r => Number(r.unitCost) > Number(r.price) },
+    { key: 'totalCost', label: 'Total Cost', type: 'money', blankZero: true, bad: r => this.inLoss(r) },
   ];
 }
 

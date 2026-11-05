@@ -4,6 +4,7 @@ import {
   ActivityDetail as ActivityDetailDto, ActivityRow, AllocationDto, CostCentreDetail as CostCentreDetailDto, CostCentreRow,
   Envelope, ResourceDetail as ResourceDetailDto, ResourceRow,
 } from '../core/api';
+import { Auth } from '../core/auth';
 import { RunContext } from '../core/context';
 import { apiResource, catalogueResource } from '../core/resource';
 import { Col, UI, matchesNameOrCode } from '../shared/ui';
@@ -117,24 +118,24 @@ const isNotAssigned = (r: { id: string }) => /^0{8}-/.test(r.id);
   template: `
     <v-page title="Resources" purpose="Everything that costs money and is consumed, with effective-dated rates and capacity models. Labour rates are masked without salary.view (FR-0.9).">
       <v-state [loading]="res.isLoading()" [error]="res.error()">
-        @if (res.value(); as r) { <v-table [rows]="r.data" [columns]="cols" caption="Resources" /> }
+        @if (res.value(); as r) { <v-table [rows]="r.data" [columns]="cols()" caption="Resources" /> }
       </v-state>
     </v-page>
   `,
 })
 export class Resources {
-  private ctx = inject(RunContext);
-  res = apiResource<Envelope<ResourceRow[]>>(() => this.ctx.hospitalParam() ? 'resources' : null, () => ({ hospital: this.ctx.hospitalParam() }));
-  cols: Col<ResourceRow>[] = [
-    { key: 'code', label: 'Code', value: r => localCode(r.code) },
-    { key: 'name', label: 'Name', link: r => `/resources/${r.id}` },
-    { key: 'physicians', label: 'Physicians', type: 'num', dp: 0 },
-    { key: 'resourceType', label: 'Type' },
-    { key: 'nature', label: 'Nature', type: 'nature' },
-    { key: 'rate', label: 'Rate', type: 'num', dp: 6, value: r => isNotAssigned(r) ? '—' : r.rate == null ? '••••' : Number(r.rate) === 0 ? '—' : r.rate },
-    { key: 'uom', label: 'Unit' },
-    { key: 'costPool', label: 'Funding pool' },
-  ];
+  private auth = inject(Auth);
+  res = catalogueResource<ResourceRow[]>(() => 'resources');
+  cols = computed<Col<ResourceRow>[]>(() => {
+    const cols: Col<ResourceRow>[] = [
+      { key: 'code', label: 'Code', value: r => localCode(r.code) },
+      { key: 'name', label: 'Name', link: r => `/resources/${r.id}` },
+      { key: 'physicians', label: 'Physicians', type: 'num', dp: 0 },
+      { key: 'cases', label: 'Cases', type: 'num', dp: 0 },
+    ];
+    if (this.auth.can('revenue.view')) cols.push({ key: 'revenue', label: 'Revenue', type: 'money' });
+    return cols;
+  });
 }
 
 @Component({

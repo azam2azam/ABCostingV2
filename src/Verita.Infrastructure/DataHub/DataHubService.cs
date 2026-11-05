@@ -131,11 +131,11 @@ public sealed class DataHubService(IDbContextFactory<VeritaDbContext> factory, I
         var hospitalProp = typeof(T).GetProperty("HospitalId");
         // A shared row has no HospitalId.
         var rows = hospitalProp?.PropertyType == typeof(Guid?)
-            ? (await db.Set<T>().AsNoTracking().Select(e => new { Id = EF.Property<Guid>(e, "Id"), K = EF.Property<string>(e, key), H = EF.Property<Guid?>(e, "HospitalId") }).ToListAsync(ct))
+            ? (await db.Set<T>().IgnoreQueryFilters().AsNoTracking().Select(e => new { Id = EF.Property<Guid>(e, "Id"), K = EF.Property<string>(e, key), H = EF.Property<Guid?>(e, "HospitalId") }).ToListAsync(ct))
                 .Select(x => new { x.Id, x.K, H = x.H ?? Guid.Empty }).ToList()
             : hospitalProp is not null
-            ? await db.Set<T>().AsNoTracking().Select(e => new { Id = EF.Property<Guid>(e, "Id"), K = EF.Property<string>(e, key), H = EF.Property<Guid>(e, "HospitalId") }).ToListAsync(ct)
-            : (await db.Set<T>().AsNoTracking().Select(e => new { Id = EF.Property<Guid>(e, "Id"), K = EF.Property<string>(e, key) }).ToListAsync(ct))
+            ? await db.Set<T>().IgnoreQueryFilters().AsNoTracking().Select(e => new { Id = EF.Property<Guid>(e, "Id"), K = EF.Property<string>(e, key), H = EF.Property<Guid>(e, "HospitalId") }).ToListAsync(ct)
+            : (await db.Set<T>().IgnoreQueryFilters().AsNoTracking().Select(e => new { Id = EF.Property<Guid>(e, "Id"), K = EF.Property<string>(e, key) }).ToListAsync(ct))
                 .Select(x => new { x.Id, x.K, H = Guid.Empty }).ToList();
         var dict = new Dictionary<string, RefTarget>(StringComparer.OrdinalIgnoreCase);
         foreach (var r in rows)
@@ -198,7 +198,17 @@ public sealed class DataHubService(IDbContextFactory<VeritaDbContext> factory, I
     private async Task MapPayerPartiesAsync(CancellationToken ct)
     {
         await using var db = await Db(ct);
-        var payers = await db.Payers.AsNoTracking().Select(x => new { x.Id, x.Name, x.InsurerId, x.AdministratorId }).ToListAsync(ct);
+        var payers = await db.Payers.AsNoTracking().Select(x => new { x.Id, x.Name, x.InsurerId, x.AdministratorId, x.HisGroupId, x.HisGroupName, x.HisGroupIsTpa, x.HisGroupManagedByTpa }).ToListAsync(ct);
+        var groups = await db.Insurers.Where(x => x.HisGroupId != null).ToDictionaryAsync(x => x.HisGroupId!.Value, ct);
+        Guid GroupOf(int groupId, string name, bool? isTpa, bool? managedByTpa)
+        {
+            if (!groups.TryGetValue(groupId, out var insurer))
+                db.Insurers.Add(groups[groupId] = insurer = new Insurer { Id = IdGen.Sequential(), Code = $"GRP-{groupId}", HisGroupId = groupId });
+            insurer.Name = name;
+            insurer.IsTpa = isTpa;
+            insurer.IsManagedByTpa = managedByTpa;
+            return insurer.Id;
+        }
         var insurers = await db.Insurers.AsNoTracking().ToDictionaryAsync(x => x.Code, x => x.Id, StringComparer.OrdinalIgnoreCase, ct);
         var administrators = await db.PayerAdministrators.AsNoTracking().ToDictionaryAsync(x => x.Code, x => x.Id, StringComparer.OrdinalIgnoreCase, ct);
         Guid? InsurerOf(string? name)
@@ -219,7 +229,8 @@ public sealed class DataHubService(IDbContextFactory<VeritaDbContext> factory, I
         var changes = payers.Select(x =>
         {
             var (insurer, administrator) = PayerParties.Split(x.Name);
-            return new { x.Id, x.InsurerId, x.AdministratorId, To = InsurerOf(insurer), ToAdministrator = AdministratorOf(administrator) };
+            var to = x.HisGroupId is { } g && !string.IsNullOrWhiteSpace(x.HisGroupName) ? GroupOf(g, x.HisGroupName.Trim(), x.HisGroupIsTpa, x.HisGroupManagedByTpa) : InsurerOf(insurer);
+            return new { x.Id, x.InsurerId, x.AdministratorId, To = to, ToAdministrator = AdministratorOf(administrator) };
         }).Where(x => x.InsurerId != x.To || x.AdministratorId != x.ToAdministrator)
             .Select(x => new { x.Id, I = x.To, A = x.ToAdministrator }).ToList();
         await db.SaveChangesAsync(ct);
@@ -227,6 +238,18 @@ public sealed class DataHubService(IDbContextFactory<VeritaDbContext> factory, I
         await db.Database.ExecuteSqlRawAsync(
             "UPDATE p SET InsurerId = m.I, AdministratorId = m.A FROM [Payer] p JOIN OPENJSON({0}) WITH (Id uniqueidentifier, I uniqueidentifier, A uniqueidentifier) m ON p.Id = m.Id",
             [JsonSerializer.Serialize(changes)], ct);
+        // Insurers read from names are replaced by HIS groups as companies come in with one.
+        await db.Database.ExecuteSqlRawAsync("DELETE i FROM [Insurer] i WHERE NOT EXISTS (SELECT 1 FROM [Payer] p WHERE p.InsurerId = i.Id)", ct);
+    }
+
+    /// <summary>
+    /// A package item names the child invoice line that delivered it. Marks those lines whichever file arrives first,
+    /// so packs without the InvoiceType column are handled too.
+    /// </summary>
+    private async Task MarkChildInvoiceLinesAsync(CancellationToken ct)
+    {
+        await using var db = await Db(ct);
+        await db.Database.ExecuteSqlRawAsync(OpenPeriods.MarkChildInvoiceLinesSql, ct);
     }
 
     /// <summary>Older packs loaded refunds as negative revenue. Each one saved as a refund line stops counting as revenue.</summary>
@@ -248,7 +271,7 @@ public sealed class DataHubService(IDbContextFactory<VeritaDbContext> factory, I
     {
         var column = char.ToLowerInvariant(keyProperty[0]) + keyProperty[1..];
         var wanted = rows.Select(r => r.GetValueOrDefault(column)?.Trim()).Where(v => !string.IsNullOrEmpty(v)).Distinct().ToList();
-        return db.Set<T>().Where(e => wanted.Contains(EF.Property<string>(e, keyProperty)));
+        return db.Set<T>().IgnoreQueryFilters().Where(e => wanted.Contains(EF.Property<string>(e, keyProperty)));
     }
 
     private static bool TryResolve(Dictionary<string, RefTarget> lookup, string code, string? hospitalCode, out RefTarget target)
@@ -305,7 +328,7 @@ public sealed class DataHubService(IDbContextFactory<VeritaDbContext> factory, I
             defs = await db.CostingDefinitions.AsNoTracking().ToDictionaryAsync(x => x.Id, x => (procs[x.ProcedureId], vers[x.CostingVersionId]), ct);
         }
 
-        var all = await db.Set<T>().AsNoTracking().ToListAsync(ct);
+        var all = await db.Set<T>().IgnoreQueryFilters().AsNoTracking().ToListAsync(ct);
         var scalars = Scalars(spec);
         var rows = new List<Dictionary<string, string>>();
         foreach (var e in all)
@@ -487,7 +510,7 @@ public sealed class DataHubService(IDbContextFactory<VeritaDbContext> factory, I
             }
         // Monthly tables run to millions of rows: load only the rows this file can match.
         var matchOn = spec.IsTransaction ? keyProps.LastOrDefault(k => k.PropertyType == typeof(string)) : null;
-        var candidates = matchOn is null ? db.Set<T>() : CandidatesOf<T>(db, matchOn.Name, rows);
+        var candidates = matchOn is null ? db.Set<T>().IgnoreQueryFilters() : CandidatesOf<T>(db, matchOn.Name, rows);
         var existing = (await candidates.ToListAsync(ct)).GroupBy(e => KeyOf(e)).ToDictionary(g => g.Key, g => (object)g.First());
 
         var groupProps = spec.VersionGroup?.Select(g => spec.Type.GetProperty(g)!).ToArray();
@@ -501,6 +524,7 @@ public sealed class DataHubService(IDbContextFactory<VeritaDbContext> factory, I
         var fellBack = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var merges = new List<(Guid HospitalId, string AssessmentNo, string Key)>();
         var refunds = new List<(Guid HospitalId, string SourceRef, string Key)>();
+        var marksChildLines = spec.Type == typeof(InvoicePackageItem) || spec.Type == typeof(EncounterService) || spec.Type == typeof(RevenueTransaction);
         var replaced = spec.Type == typeof(Encounter) ? await ReplacedErEncountersAsync(db, rows, ct) : [];
         var seen = new HashSet<string>();
         var unchanged = 0;
@@ -696,7 +720,7 @@ public sealed class DataHubService(IDbContextFactory<VeritaDbContext> factory, I
         var created = pending.Count(x => x.IsNew);
         var updated = pending.Count(x => !x.IsNew);
         Guid? batchId = null;
-        if (!dryRun && (pending.Count > 0 || rejects.Count > 0 || merges.Count > 0 || refunds.Count > 0 || spec.Type == typeof(Payer)))
+        if (!dryRun && (pending.Count > 0 || rejects.Count > 0 || merges.Count > 0 || refunds.Count > 0 || spec.Type == typeof(Payer) || marksChildLines))
         {
             foreach (var def in newDefinitions) db.CostingDefinitions.Add(def);
             foreach (var x in pending.Where(x => x.IsNew)) db.Add(x.Entity);
@@ -720,6 +744,7 @@ public sealed class DataHubService(IDbContextFactory<VeritaDbContext> factory, I
             await MergeReplacedErEncountersAsync(merges.Where(m => !refused.Contains(m.Key)).ToList(), replaced, existing, ct);
             await RemoveRefundsFromRevenueAsync(refunds.Where(r => !refused.Contains(r.Key)).ToList(), ct);
             if (spec.Type == typeof(Payer)) await MapPayerPartiesAsync(ct);
+            if (marksChildLines) await MarkChildInvoiceLinesAsync(ct);
 
             await using var log = await Db(ct);
             var batch = new ImportBatch

@@ -3107,6 +3107,10 @@ export interface components {
         ReadQueriesResourceRow: {
             /** Format: uuid */
             id: string;
+            /** Format: int32 */
+            cases: number;
+            /** Format: decimal */
+            revenue: string;
             code: string;
             name: string;
             resourceType: string;

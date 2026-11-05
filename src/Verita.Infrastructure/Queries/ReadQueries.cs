@@ -38,8 +38,8 @@ public sealed partial class ReadQueries(VeritaDbContext db, IAuditWriter audit)
     public async Task<ContextDto> ContextAsync(Principal p, CancellationToken ct)
     {
         var withDrg = (await db.Encounters.AsNoTracking().Where(e => e.DrgId != null).Select(e => e.HospitalId).Distinct().ToListAsync(ct)).ToHashSet();
-        var withModel = (await db.ProcedureTypeCostings.AsNoTracking().Select(x => x.HospitalId).Distinct().ToListAsync(ct))
-            .Concat(await db.ProcedureMargins.AsNoTracking().Select(x => x.HospitalId).Distinct().ToListAsync(ct))
+        var withModel = (await db.ProcedureTypeCostings.AsNoTracking().Where(x => x.Stream != CostingStreamPackageDirect && x.Stream != CostingStreamZeroFixed).Select(x => x.HospitalId).Distinct().ToListAsync(ct))
+            .Concat(await db.ProcedureMargins.AsNoTracking().Where(x => x.Stream != CostingStreamPackageDirect && x.Stream != CostingStreamZeroFixed).Select(x => x.HospitalId).Distinct().ToListAsync(ct))
             .Concat(await db.EncounterOverheads.AsNoTracking().Select(x => x.HospitalId).Distinct().ToListAsync(ct))
             .ToHashSet();
         var hospitals = (await db.Hospitals.AsNoTracking().OrderBy(h => h.Code).ToListAsync(ct)).Where(h => p.HasHospital(h.Code))
@@ -132,7 +132,7 @@ public sealed partial class ReadQueries(VeritaDbContext db, IAuditWriter audit)
         var cost = Money.R4(direct + indirect + overhead);
         var tiles = new List<Tile>
         {
-            new("direct", "Direct cost", direct, "SAR", "lower-better", "direct-costing", "Contracted price × Margin Cost %"),
+            new("direct", "Direct cost", direct, "SAR", "lower-better", "procedure-costing", "Contracted price × Margin Cost %"),
             new("indirect", "Indirect cost", indirect, "SAR", "lower-better", "indirect-costing", "Contracted price × Overhead %"),
             new("overheads", "Overheads", overhead, "SAR", "lower-better", "indirect-costing", "Encounter level overheads"),
         };
@@ -142,7 +142,7 @@ public sealed partial class ReadQueries(VeritaDbContext db, IAuditWriter audit)
             tiles.Add(new("margin", "Margin", Money.R4(revenue - cost), "SAR", "higher-better", null, $"{Share(revenue - cost, revenue):N1}% of revenue"));
         }
         return new DashboardDto(tiles.ToArray(),
-            [new("DIRECT", "Direct cost", direct, Share(direct, cost), "direct-costing", null), new("INDIRECT", "Indirect cost", indirect, Share(indirect, cost), "indirect-costing", null), new("OVERHEAD", "Overheads", overhead, Share(overhead, cost), "indirect-costing", null)]);
+            [new("DIRECT", "Direct cost", direct, Share(direct, cost), "procedure-costing", null), new("INDIRECT", "Indirect cost", indirect, Share(indirect, cost), "indirect-costing", null), new("OVERHEAD", "Overheads", overhead, Share(overhead, cost), "indirect-costing", null)]);
     }
 
     // Encounter facts used by dashboards, profitability and reports.

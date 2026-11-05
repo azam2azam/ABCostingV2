@@ -58,6 +58,8 @@ public static class EntitySpecs
             [R("resourceCode", "ResourceId", typeof(Resource))], VersionGroup: ["ResourceId"]),
         new("Provider", typeof(Provider), "Resources", "A named physician pointing at the role resource that carries the rate. Without one the physician is Not assigned.", ["Code"],
             [R("resourceCode", "ResourceId", typeof(Resource), opt: true), R("departmentCode", "DepartmentId", typeof(Department))]),
+        new("ProviderClinic", typeof(ProviderClinic), "Resources", "A clinic a doctor works in. A doctor can have many clinics, and a clinic many doctors.", ["ProviderId", "HisClinicId"],
+            [R("providerCode", "ProviderId", typeof(Provider)), R("departmentCode", "DepartmentId", typeof(Department))]),
 
         // ── Service catalogue ────────────────────────────────────────────────────
         new("Activity", typeof(Activity), "Catalogue", "Unit of work, with standard, minimum and maximum duration in minutes.", ["Code"],

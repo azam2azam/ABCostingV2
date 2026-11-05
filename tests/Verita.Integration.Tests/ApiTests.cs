@@ -345,9 +345,23 @@ public sealed class ApiTests : IClassFixture<WebApplicationFactory<Program>>
     public async Task Draft_run_can_be_deleted_only_with_run_execute()
     {
         var manager = await As("costing.manager@verita.health");
-        var created = await manager.PostAsJsonAsync("/api/v1/runs", new { hospital = "NSH-RYD", period = "2026-08" });
-        created.EnsureSuccessStatusCode();
-        var code = (await Json(created)).GetProperty("code").GetString()!;
+        // A period holds one run per costing model, so the draft to delete is written directly.
+        var refused = await manager.PostAsJsonAsync("/api/v1/runs", new { hospital = "NSH-RYD", period = "2026-08" });
+        Assert.Equal(HttpStatusCode.Conflict, refused.StatusCode);
+        Assert.Equal("RUN_EXISTS", Code(await Json(refused)));
+
+        var code = $"RUN-TEST-DRAFT-{Guid.NewGuid():N}";
+        using (var scope = _factory.Services.CreateScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<VeritaDbContext>();
+            var source = await db.CalculationRuns.AsNoTracking().FirstAsync(x => x.Code == Run);
+            db.CalculationRuns.Add(new CalculationRun
+            {
+                Id = IdGen.Sequential(), Code = code, Name = "Draft to delete", HospitalId = source.HospitalId, PeriodId = source.PeriodId,
+                CostingVersionId = source.CostingVersionId, Status = "DRAFT", RunType = "ACTUAL", TriggeredBy = "test", CreatedAt = DateTime.UtcNow,
+            });
+            await db.SaveChangesAsync();
+        }
         var deleted = false;
         try
         {

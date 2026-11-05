@@ -37,9 +37,32 @@ public static class HisImportPack
     public static string? UnmappedFallback(string entity, string column) => (entity, column) switch
     {
         ("EncounterService", "costCentreCode") => "CC-UNMAPPED",
-        ("Encounter", "departmentCode") or ("Provider", "departmentCode") => "UNMAPPED",
+        ("Encounter", "departmentCode") or ("Provider", "departmentCode") or ("ProviderClinic", "departmentCode") => "UNMAPPED",
         _ => null,
     };
+
+    /// <summary>
+    /// A HIS visit with nothing billed is not an encounter: a row with a HIS status and no service or revenue line
+    /// in the pack is left out. A pack with no billing in it cannot tell, so it loads as sent.
+    /// </summary>
+    public static (List<ParsedFile> Files, int Skipped) SkipUnbilledEncounters(IReadOnlyList<ParsedFile> files)
+    {
+        if (!files.Any(f => f.Spec?.Name is "EncounterService" or "RevenueTransaction")) return (files.ToList(), 0);
+        var billed = files.Where(f => f.Spec?.Name is "EncounterService" or "RevenueTransaction").SelectMany(f => f.Rows)
+            .Select(r => r.GetValueOrDefault("encounterNo")?.Trim()).Where(x => !string.IsNullOrEmpty(x)).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        bool Unbilled(Dictionary<string, string> r) =>
+            !string.IsNullOrWhiteSpace(r.GetValueOrDefault("hisStatus")) && !billed.Contains(r.GetValueOrDefault("encounterNo")?.Trim() ?? "");
+        var skipped = 0;
+        var kept = new List<ParsedFile>();
+        foreach (var file in files)
+        {
+            if (file.Spec?.Name != "Encounter") { kept.Add(file); continue; }
+            var rows = file.Rows.Where(r => !Unbilled(r)).ToList();
+            skipped += file.Rows.Count - rows.Count;
+            if (rows.Count > 0) kept.Add(file with { Rows = rows });
+        }
+        return (kept, skipped);
+    }
 
     /// <summary>Doctors on a pack's rows that are in neither the database nor the pack: Not assigned to any resource.</summary>
     public static List<Dictionary<string, string>> UnknownDoctors(IEnumerable<ParsedFile> files, IReadOnlySet<string> known)

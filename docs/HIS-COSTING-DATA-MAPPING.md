@@ -583,9 +583,13 @@ Include `HIS_InvoicePackageItem` exploded components if the header is a package 
 
 Every period belongs to one hospital, and its code is unique within that hospital. Add one on the Periods screen, or let a facts import create the calendar months it needs (named like `2026 Oct`).
 
+### Package parent and child invoices
+
+A package is billed on a parent invoice, with one line for the package. A child invoice (`InvoiceType` 2, `MainInvoiceNo` = parent) holds a line per component as it is completed, linked by `HIS_InvoicePackageItem.ChildInvoiceNo`. The parent line is the entry for both money and cost. Child lines are flagged `IsChildInvoice` on import, from `InvoiceType` or the package item link, and stay stored for checking against HIS. They are left out of revenue, cost, case counts and calculation runs.
+
 ### Payer, `Insurer` and `PayerAdministrator`
 
-`Payer` stays one row per `HIS_Company`, with the full account name; `Encounter.PayerId` points at it. Each import of `Payer` also splits every name into `Payer.InsurerId` and `Payer.AdministratorId`, with no calculation run involved: the text before the first `_`, split on `/`, minus the known administrators (`TCS`, `GLOBEMED`, `S.NEXTCARE`, `MEDNET` and their spellings) is the insurer. A name without `_` is its own insurer. A name holding only an administrator has no insurer.
+`Payer` stays one row per `HIS_Company`, with the full account name; `Encounter.PayerId` points at it. `HIS_Company.GroupID` points to `HIS_CompanyGroup`, which is the insurer, and the company itself is an employer account under it (for example `BUPA_Awj Holding_51360300` under BUPA). Each import of `Payer` sets `Payer.InsurerId` from that group, with no calculation run involved. A company with no group falls back to its name: the text before the first `_`, split on `/`, minus the known administrators (`TCS`, `GLOBEMED`, `S.NEXTCARE`, `MEDNET` and their spellings). A name without `_` is its own insurer. `Payer.AdministratorId` still comes from the name.
 
 ### 9.4 `RevenueTransaction` — Direct from invoice lines
 

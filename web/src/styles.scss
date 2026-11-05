@@ -253,3 +253,7 @@ details summary { cursor: pointer; }
   .tile { padding: 6px 8px !important; box-shadow: none !important; backdrop-filter: none !important; }
   .tile:hover { transform: none !important; }
 }
+
+// HIS column names are read as written, to match them against HIS.
+.his-source th, .his-source th button { text-transform: none !important; letter-spacing: 0; white-space: nowrap; }
+.his-source td { white-space: nowrap; }

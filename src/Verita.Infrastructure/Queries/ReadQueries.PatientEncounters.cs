@@ -34,10 +34,10 @@ public sealed partial class ReadQueries
         FilterOption[] Payers, FilterOption[] Drgs, FilterOption[] EncounterTypes, FilterOption[] Segments);
 
     public sealed record PatientEncounterRow(Guid Id, string EncounterNo, string Mrn, string Patient, string Segment, string EncType, string Department,
-        string Payer, string? Physician, DateTime AdmitAt, DateTime? DischargeAt, int LengthOfStay, int Services, decimal Gross, decimal Discount, decimal Net);
+        string Payer, string? Physician, DateTime AdmitAt, DateTime? DischargeAt, int LengthOfStay, int Services, decimal Gross, decimal Discount, decimal Net, decimal? Cost = null);
     public sealed record PatientEncounterPage(PatientEncounterRow[] Rows, int Total, int Page, int PageSize, bool PhiMasked);
     public sealed record PatientEncounterLine(string? Procedure, Guid? ProcedureId, decimal? Quantity, string? CostCentre, string? Physician, string? Payer,
-        DateTime? PerformedAt, decimal? Gross, decimal? Discount, decimal? Net, string SourceRef);
+        DateTime? PerformedAt, decimal? Gross, decimal? Discount, decimal? Net, string SourceRef, decimal? Cost = null);
     public sealed record PatientEncounterDetail(PatientEncounterRow Encounter, PatientEncounterLine[] Lines);
 
     // Properties, not a constructor: EF has to filter and sort on these after the projection.
@@ -97,9 +97,12 @@ public sealed partial class ReadQueries
         return query;
     }
 
-    private async Task<PatientEncounterRow[]> EncounterRowsAsync(IReadOnlyList<EncounterBase> rows, Principal p, CancellationToken ct)
+    private async Task<PatientEncounterRow[]> EncounterRowsAsync(IReadOnlyList<EncounterBase> rows, Guid runId, Principal p, CancellationToken ct)
     {
         var ids = rows.Select(x => x.Id).ToList();
+        // Cost is what the run stored; a period with no run has none.
+        var costs = await db.EncounterCosts.AsNoTracking().Where(x => x.RunId == runId && ids.Contains(x.EncounterId))
+            .ToDictionaryAsync(x => x.EncounterId, x => x.TotalCost, ct);
         var services = await db.EncounterServices.AsNoTracking().Where(x => ids.Contains(x.EncounterId))
             .GroupBy(x => x.EncounterId).Select(g => new { g.Key, N = g.Count() }).ToDictionaryAsync(x => x.Key, x => x.N, ct);
         var billed = p.Can("revenue.view")
@@ -112,7 +115,8 @@ public sealed partial class ReadQueries
         {
             var b = billed.GetValueOrDefault(x.Id);
             return new PatientEncounterRow(x.Id, x.EncounterNo, x.Mrn, phi ? x.FullName : Security.MaskName(x.FullName),
-                x.Segment, x.EncType, x.Department, x.Payer, x.Physician, x.AdmitAt, x.DischargeAt, x.LengthOfStay, services.GetValueOrDefault(x.Id), b.Gross, b.Discount, b.Net);
+                x.Segment, x.EncType, x.Department, x.Payer, x.Physician, x.AdmitAt, x.DischargeAt, x.LengthOfStay, services.GetValueOrDefault(x.Id), b.Gross, b.Discount, b.Net,
+                costs.TryGetValue(x.Id, out var cost) ? cost : null);
         }).ToArray();
     }
 
@@ -166,13 +170,14 @@ public sealed partial class ReadQueries
             "gross" => By(x => db.RevenueTransactions.Where(t => t.EncounterId == x.Id).Sum(t => (decimal?)t.GrossAmount) ?? 0m),
             "discount" => By(x => db.RevenueTransactions.Where(t => t.EncounterId == x.Id).Sum(t => (decimal?)t.Discount) ?? 0m),
             "net" => By(x => db.RevenueTransactions.Where(t => t.EncounterId == x.Id).Sum(t => (decimal?)t.NetAmount) ?? 0m),
+            "cost" => By(x => db.EncounterCosts.Where(t => t.EncounterId == x.Id && t.RunId == s.Run.Id).Sum(t => (decimal?)t.TotalCost) ?? 0m),
             _ => By(x => x.AdmitAt),
         };
         var total = await query.CountAsync(ct);
         var size = Math.Clamp(q.PageSize, 1, 2000);
         var page = Math.Max(q.Page, 1);
         var rows = await query.Skip((page - 1) * size).Take(size).ToListAsync(ct);
-        var result = await EncounterRowsAsync(rows, p, ct);
+        var result = await EncounterRowsAsync(rows, s.Run.Id, p, ct);
         var phi = p.Can("phi.view");
         // FR-0.8: unmasked access to identifiable records is audited. Every role sees the MRN here.
         if (result.Length > 0)
@@ -226,7 +231,7 @@ public sealed partial class ReadQueries
     {
         var deptCodes = await db.Departments.AsNoTracking().ToDictionaryAsync(d => d.Id, d => d.CatalogCode, ct);
         var row = await EncounterBases(s, p, deptCodes).FirstOrDefaultAsync(x => x.Id == id, ct) ?? throw AppError.NotFound("Encounter");
-        var encounter = (await EncounterRowsAsync([row], p, ct))[0];
+        var encounter = (await EncounterRowsAsync([row], s.Run.Id, p, ct))[0];
 
         var services = await (from sv in db.EncounterServices.AsNoTracking()
                               join pr in db.Procedures on sv.ProcedureId equals pr.Id
@@ -245,11 +250,16 @@ public sealed partial class ReadQueries
                      select new { Procedure = pr != null ? pr.Name : null, r.ProcedureId, Payer = py.Name, r.GrossAmount, r.Discount, r.NetAmount, r.PostedAt, r.SourceRef }).ToListAsync(ct)
             : [];
         var byLine = invoiced.GroupBy(x => InvoiceLineKey(x.SourceRef)).ToDictionary(g => g.Key, g => g.First());
+        var procedureIds = services.Select(x => x.ProcedureId).Distinct().ToList();
+        var unitCosts = await db.ProcedureCosts.AsNoTracking()
+            .Where(c => c.RunId == s.Run.Id && c.CostType == "ACTUAL" && procedureIds.Contains(c.ProcedureId))
+            .ToDictionaryAsync(c => c.ProcedureId, c => c.UnitCost, ct);
         var lines = services.Select(x =>
         {
             var key = InvoiceLineKey(x.SourceRef);
             byLine.Remove(key, out var rev);
-            return new PatientEncounterLine(x.Name, x.ProcedureId, x.Quantity, x.CostCentre, x.Doctor, rev?.Payer, x.PerformedAt, rev?.GrossAmount, rev?.Discount, rev?.NetAmount, x.SourceRef);
+            return new PatientEncounterLine(x.Name, x.ProcedureId, x.Quantity, x.CostCentre, x.Doctor, rev?.Payer, x.PerformedAt, rev?.GrossAmount, rev?.Discount, rev?.NetAmount, x.SourceRef,
+                unitCosts.TryGetValue(x.ProcedureId, out var unit) ? Money.R4(x.Quantity * unit) : null);
         }).ToList();
         lines.AddRange(byLine.Values.Select(x => new PatientEncounterLine(x.Procedure, x.ProcedureId, null, null, null, x.Payer, x.PostedAt, x.GrossAmount, x.Discount, x.NetAmount, x.SourceRef)));
         if (p.Can("revenue.view"))
@@ -266,5 +276,104 @@ public sealed partial class ReadQueries
         }
         await audit.WriteAsync(p, "VIEW_PHI", "Encounter", id.ToString(), encounter.EncounterNo, metadata: new { hospital = s.Hospital.Code }, ct: ct);
         return new PatientEncounterDetail(encounter, lines.ToArray());
+    }
+
+    // ═══ HIS source: what an encounter holds, under the HIS table and column it came from ═══
+
+    public sealed record HisField(string Label, string HisColumn, string? Value);
+    public sealed record HisServiceLine(int? TransactionType, string? InvoiceNo, int? LineItemNo, string? ProcedureId, string? CostCenterId, string? PrimaryDoctorId,
+        decimal Quantity, DateTime PerformDate, decimal? Price, decimal? DiscountAmount, decimal? PatientShare, decimal? CompanyShare, string SourceRef, bool IsChildInvoice = false);
+    public sealed record HisRefundLine(string RefundNo, int InvoiceLineItemNo, int RefundType, DateTime RefundDate, int OriginalTransactionType, string OriginalTransactionRef,
+        DateTime? OriginalTransactionDate, DateTime? InvoiceCancelledOn, string? ProcedureId, decimal RefundAmount, decimal PatientShare, decimal CompanyShare, decimal PatientPaid,
+        decimal TaxAmount, decimal HeaderRefundAmount, decimal HeaderAmountPaid, int Status, int? ApprovalStatus, DateTime? ApprovedDate, DateTime? CancelledOn, int? ReasonId, string SourceRef);
+    public sealed record HisPackageLine(int TransactionType, string InvoiceNo, int LineItemNo, string? ProcedureId, string? ProcedurePackageId, int? PackageLineItemNo, int? PackageSequence,
+        DateTime InvoiceDate, decimal Price, decimal DiscountedCharge, decimal PatientShare, decimal PatientPaid, decimal CompanyShare, decimal CompanyPaid,
+        string? ChildInvoiceNo, int? ChildInvoiceLineItemNo, bool? IsCompleted, bool? IsRefunded, string SourceRef);
+    public sealed record HisEncounterSource(HisField[] Fields, HisServiceLine[] Services, HisRefundLine[] Refunds, HisPackageLine[] PackageItems);
+
+    /// <summary>Codes are written as {hospital}.{prefix}-{HIS id}; a reader validating against HIS needs the id.</summary>
+    private static string? HisId(string? code)
+    {
+        if (string.IsNullOrEmpty(code)) return null;
+        var local = code[(code.IndexOf('.') + 1)..];
+        if (local.Equals("PAY-SELF", StringComparison.OrdinalIgnoreCase)) return "None";
+        foreach (var prefix in new[] { "CLN-", "DOC-", "PAY-", "ORA-" })
+            if (local.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)) return local[prefix.Length..];
+        return local;
+    }
+
+    /// <summary>Splits INV-{type}-{invoice}-{line}.</summary>
+    private static (int? Type, string? Invoice, int? Line) InvoiceRef(string sourceRef)
+    {
+        var parts = sourceRef.Split('-');
+        return parts.Length == 4 && int.TryParse(parts[1], out var type) && int.TryParse(parts[3], out var line) ? (type, parts[2], line) : (null, null, null);
+    }
+
+    public async Task<HisEncounterSource> PatientEncounterHisSourceAsync(ScopedRun s, Principal p, Guid id, CancellationToken ct)
+    {
+        var deptCodes = await db.Departments.AsNoTracking().ToDictionaryAsync(d => d.Id, d => d.CatalogCode, ct);
+        if (!await EncounterBases(s, p, deptCodes).AnyAsync(x => x.Id == id, ct)) throw AppError.NotFound("Encounter");
+        var e = await (from x in db.Encounters.AsNoTracking()
+                       join pa in db.Patients on x.PatientId equals pa.Id
+                       join d in db.Departments on x.DepartmentId equals d.Id
+                       join py in db.Payers on x.PayerId equals py.Id
+                       join doc in db.Providers on x.ProviderId equals doc.Id into dj
+                       from doc in dj.DefaultIfEmpty()
+                       join dr in db.Drgs on x.DrgId equals dr.Id into gj
+                       from dr in gj.DefaultIfEmpty()
+                       where x.Id == id
+                       select new { x, pa.Mrn, Clinic = d.Code, ClinicName = d.Name, Payer = py.Code, PayerName = py.Name, Doctor = doc != null ? doc.Code : null, DoctorName = doc != null ? doc.Name : null, Drg = dr != null ? dr.Code : null }).FirstAsync(ct);
+        static string? When(DateTime? d) => d?.ToString("yyyy-MM-dd HH:mm");
+        var enc = e.x;
+        var merged = enc.EncType == "ER" && !string.IsNullOrEmpty(enc.SourceAssessmentNo) && enc.SourceAssessmentNo != enc.EncounterNo;
+        var table = enc.EncType switch { "IP" => "INP_Admission", "ER" => "INP_ERAssessment", _ => "HIS_Appointment" };
+        var fields = new List<HisField>();
+        fields.AddRange(enc.EncType switch
+        {
+            "IP" => [new("Admission", "INP_Admission.AdmissionNo", enc.EncounterNo)],
+            "ER" when merged => [new("Assessment", "INP_ERAssessment.AssessmentNo", enc.SourceAssessmentNo), new("Linked appointment", "INP_ERAssessment.AppointmentID, or HIS_InvoiceMain.AppointmentNo through InvoiceNo", enc.EncounterNo)],
+            "ER" => [new("Assessment", "INP_ERAssessment.AssessmentNo", enc.EncounterNo)],
+            _ => (HisField[])[new("Appointment", "HIS_Appointment.AppointmentNo", enc.EncounterNo)],
+        });
+        fields.Add(new("Patient", $"{table}.PatientID", e.Mrn));
+        fields.Add(new("Clinic", enc.EncType == "IP" ? "INP_Admission.AdmittingClinicID, else ClinicID" : $"{table}.ClinicID", $"{HisId(e.Clinic)} · {e.ClinicName}"));
+        fields.Add(new("Doctor", enc.EncType == "IP" ? "INP_Admission.AdmittingDoctorID, else DoctorID" : $"{table}.DoctorID", e.Doctor is null ? null : $"{HisId(e.Doctor)} · {e.DoctorName}"));
+        fields.Add(new("Company", merged ? "HIS_Appointment.CompanyID, else HIS_InvoiceMain.CompanyID" : enc.EncType == "IP" ? "INP_Admission.CompanyId" : $"{table}.CompanyID", $"{HisId(e.Payer)} · {e.PayerName}"));
+        fields.Add(new("Start", enc.EncType switch { "IP" => "INP_Admission.AdmissionDate", "ER" => "INP_ERAssessment.SignInTime, else AssessmentDate + ArrivalTime", _ => "HIS_Appointment.ActualVisitStartTime, else StartTime, on AppointmentDate" }, When(enc.AdmitAt)));
+        fields.Add(new("End", enc.EncType switch { "IP" => "INP_Admission.DischargeDate", "ER" => "INP_ERAssessment.SignOutTime, else DischargeTime", _ => "HIS_Appointment.ActualVisitEndTime, else EndTime" }, When(enc.DischargeAt)));
+        if (enc.EncType == "IP") fields.Add(new("Days stayed", "DaysStayed, else DischargeDate - AdmissionDate", enc.LengthOfStay.ToString()));
+        fields.Add(new("Status", $"{table}.Status", enc.HisStatus?.ToString()));
+        if (enc.EncType == "ER") fields.Add(new("ER status", "INP_ERAssessment.ERStatus", enc.HisErStatus?.ToString()));
+        if (enc.EncType == "OP" || merged)
+        {
+            fields.Add(new("Visit closed", "HIS_Appointment.IsVisitClosed", enc.HisVisitClosed?.ToString()));
+            fields.Add(new("Arrived", "HIS_Appointment.ArrivedOn", When(enc.HisArrivedAt)));
+        }
+        if (e.Drg is not null) fields.Add(new("DRG", "HIS DRG code", e.Drg));
+
+        // The same HIS invoice line is stored twice: INV-… for the service, REV-… for its money.
+        var amounts = p.Can("revenue.view")
+            ? await db.RevenueTransactions.IgnoreQueryFilters().AsNoTracking().Where(r => r.EncounterId == id)
+                .Select(r => new { r.SourceRef, r.HisUnitPrice, r.HisDiscountAmount, r.PatientShare, r.CompanyShare }).ToDictionaryAsync(r => r.SourceRef, ct)
+            : [];
+        var services = (await (from sv in db.EncounterServices.IgnoreQueryFilters().AsNoTracking()
+                               join pr in db.Procedures on sv.ProcedureId equals pr.Id
+                               join c in db.CostCenters on sv.CostCenterId equals c.Id
+                               join doc in db.Providers on sv.ProviderId equals doc.Id into dj
+                               from doc in dj.DefaultIfEmpty()
+                               where sv.EncounterId == id
+                               orderby sv.SourceRef
+                               select new { sv.SourceRef, Procedure = pr.Code, Centre = c.Code, Doctor = doc != null ? doc.Code : null, sv.Quantity, sv.PerformedAt, sv.IsChildInvoice }).ToListAsync(ct))
+            .Select(x => { var r = InvoiceRef(x.SourceRef); var m = amounts.GetValueOrDefault("REV-" + x.SourceRef[(x.SourceRef.IndexOf('-') + 1)..]); return new HisServiceLine(r.Type, r.Invoice, r.Line, HisId(x.Procedure), HisId(x.Centre), HisId(x.Doctor), x.Quantity, x.PerformedAt, m?.HisUnitPrice, m?.HisDiscountAmount, m?.PatientShare, m?.CompanyShare, x.SourceRef, x.IsChildInvoice); }).ToArray();
+        if (!p.Can("revenue.view")) return new HisEncounterSource(fields.ToArray(), services, [], []);
+
+        var refunds = await db.RefundTransactions.AsNoTracking().Where(r => r.EncounterId == id).OrderBy(r => r.SourceRef)
+            .Select(r => new HisRefundLine(r.RefundNo, r.InvoiceLineNo, r.RefundType, r.RefundDate, r.OriginalTransactionType, r.OriginalInvoiceNo, r.OriginalInvoiceDate, r.InvoiceCancelledAt,
+                r.HisProcedureId, r.RefundAmount, r.PatientShare, r.CompanyShare, r.PatientPaid, r.TaxAmount, r.HeaderRefundAmount, r.HeaderAmountPaid, r.Status, r.ApprovalStatus, r.ApprovedAt,
+                r.CancelledAt, r.ReasonId, r.SourceRef)).ToArrayAsync(ct);
+        var packages = await db.InvoicePackageItems.AsNoTracking().Where(r => r.EncounterId == id).OrderBy(r => r.SourceRef)
+            .Select(r => new HisPackageLine(r.TransactionType, r.InvoiceNo, r.LineItemNo, r.HisProcedureId, r.PackageProcedureId, r.PackageLineItemNo, r.PackageSequence, r.InvoiceDate, r.Price,
+                r.DiscountedCharge, r.PatientShare, r.PatientPaid, r.CompanyShare, r.CompanyPaid, r.ChildInvoiceNo, r.ChildInvoiceLineItemNo, r.IsCompleted, r.IsRefunded, r.SourceRef)).ToArrayAsync(ct);
+        return new HisEncounterSource(fields.ToArray(), services, refunds, packages);
     }
 }

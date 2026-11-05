@@ -25,6 +25,13 @@ public sealed class CostingModelContext
     public required Dictionary<Guid, ModelProcedure> Procedures { get; init; }
     public required Dictionary<string, decimal> DirectTypes { get; init; }
     public required Dictionary<Guid, decimal> DirectItems { get; init; }
+    /// <summary>Fixed direct cost in SAR for a procedure with no contracted price; a % of nothing cannot give it one.</summary>
+    public required Dictionary<string, decimal> ZeroFixedTypes { get; init; }
+    public required Dictionary<Guid, decimal> ZeroFixedItems { get; init; }
+    /// <summary>The procedures billed as a package; Package Costing supersedes Direct costing on these, and they carry no indirect cost.</summary>
+    public required HashSet<Guid> PackageProcedures { get; init; }
+    public required Dictionary<string, decimal> PackageDirectTypes { get; init; }
+    public required Dictionary<Guid, decimal> PackageDirectItems { get; init; }
     public required Dictionary<string, decimal> IndirectTypes { get; init; }
     public required Dictionary<Guid, decimal> IndirectItems { get; init; }
     public required List<ModelEncounterOverhead> EncounterOverheads { get; init; }
@@ -83,6 +90,13 @@ public sealed class CostingModelPipeline(IStageSink sink)
         return pct is 0m ? null : pct;
     }
 
+    /// <summary>A package's own Package Costing %, when set; everything else follows Direct costing.</summary>
+    private static decimal? DirectPct(CostingModelContext ctx, ModelProcedure p) =>
+        (ctx.PackageProcedures.Contains(p.Id) ? Pct(p, ctx.PackageDirectItems, ctx.PackageDirectTypes) : null) ?? Pct(p, ctx.DirectItems, ctx.DirectTypes);
+
+    private static decimal? FixedCost(CostingModelContext ctx, ModelProcedure p) =>
+        p.Price == 0m && !ctx.PackageProcedures.Contains(p.Id) ? Pct(p, ctx.ZeroFixedItems, ctx.ZeroFixedTypes) : null;
+
     private static decimal UnitOf(ModelProcedure? p, Dictionary<Guid, decimal> items, Dictionary<string, decimal> types) =>
         p is not null && Pct(p, items, types) is { } pct ? Money.R4(p.Price * pct / 100m) : 0m;
 
@@ -109,14 +123,14 @@ public sealed class CostingModelPipeline(IStageSink sink)
         var linesByEncounter = ctx.Lines.GroupBy(l => l.EncounterId).ToDictionary(g => g.Key, g => g.ToList());
         var direct = await RunStage("DIRECT_COST", _ =>
         {
-            var units = ctx.Procedures.Values.ToDictionary(p => p.Id, p => UnitOf(p, ctx.DirectItems, ctx.DirectTypes));
+            var units = ctx.Procedures.Values.ToDictionary(p => p.Id, p => FixedCost(ctx, p) ?? (DirectPct(ctx, p) is { } pct ? Money.R4(p.Price * pct / 100m) : 0m));
             var total = ctx.Lines.Sum(l => l.Quantity * units.GetValueOrDefault(l.ProcedureId));
             return (units, new StepResult(0, 0m, 0m, "SUCCESS", $"Direct costing under {ctx.CostingVersionCode} comes to {Fmt.Sar(total)}.",
                 new Dictionary<string, object?> { ["direct"] = Money.R4(total) }));
         }, ct);
         var indirect = await RunStage("INDIRECT_COST", _ =>
         {
-            var units = ctx.Procedures.Values.ToDictionary(p => p.Id, p => UnitOf(p, ctx.IndirectItems, ctx.IndirectTypes));
+            var units = ctx.Procedures.Values.ToDictionary(p => p.Id, p => ctx.PackageProcedures.Contains(p.Id) ? 0m : UnitOf(p, ctx.IndirectItems, ctx.IndirectTypes)); // A package carries no indirect cost.
             var total = ctx.Lines.Sum(l => l.Quantity * units.GetValueOrDefault(l.ProcedureId));
             return (units, new StepResult(0, 0m, 0m, "SUCCESS", $"Procedure/activity overheads under {ctx.CostingVersionCode} come to {Fmt.Sar(total)}.",
                 new Dictionary<string, object?> { ["indirect"] = Money.R4(total) }));
@@ -159,10 +173,10 @@ public sealed class CostingModelPipeline(IStageSink sink)
         var empty = ctx.Encounters.Count(e => !withLines.Contains(e.Id));
         if (empty > 0) Add("DQ-ENC-NO-SERVICE", "Encounter", $"{ctx.PeriodCode} encounters", $"{empty} encounter(s) recorded no services at all.", empty.ToString());
         var procedures = billedProcedures.Select(ctx.Procedures.GetValueOrDefault).OfType<ModelProcedure>().ToList();
-        var noPct = procedures.Count(p => Pct(p, ctx.DirectItems, ctx.DirectTypes) is null);
+        var noPct = procedures.Count(p => DirectPct(ctx, p) is null);
         if (noPct > 0) Add("DQ-MODEL-NO-MARGIN", "Procedure", $"{ctx.PeriodCode} procedures",
             $"{noPct} billed procedure(s) have no Margin Cost % under {ctx.CostingVersionCode}, so their direct cost is SAR 0.", noPct.ToString());
-        var noPrice = procedures.Count(p => p.Price == 0m);
+        var noPrice = procedures.Count(p => p.Price == 0m && FixedCost(ctx, p) is null);
         if (noPrice > 0) Add("DQ-MODEL-NO-PRICE", "Procedure", $"{ctx.PeriodCode} procedures",
             $"{noPrice} billed procedure(s) have no contracted price effective in {ctx.PeriodCode}, so they cost SAR 0.", noPrice.ToString());
         return (output.Issues.Count, new StepResult(output.Issues.Count, 0m, 0m, output.Issues.Count > 0 ? "WARNING" : "SUCCESS",
