@@ -52,6 +52,8 @@ public static class ActivityTxnExtract
               ON g.SetupID=a.SetupID AND g.ProjectID=a.ProjectID AND g.ClinicID=a.ClinicID
             WHERE a.SetupID=@SetupId AND a.ProjectID=@ProjectId AND a.PatientID > 0
               AND a.AppointmentDate >= @From AND a.AppointmentDate < @To
+              AND EXISTS (SELECT 1 FROM dbo.HIS_InvoiceMain m WITH (NOLOCK)
+                          WHERE m.SetupID=a.SetupID AND m.ProjectID=a.ProjectID AND m.AppointmentNo=a.AppointmentNo AND m.CancelledOn IS NULL)
             UNION
             SELECT a.AppointmentNo, a.ClinicID, a.AppointmentDate,
                    a.ActualVisitStartTime, a.ActualVisitEndTime, g.GroupID

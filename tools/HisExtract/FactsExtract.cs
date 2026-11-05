@@ -26,9 +26,11 @@ public static class FactsExtract
                    p.Gender, p.DateofBirth, p.PatientIdentificationNo, p.IsPregnant
             FROM dbo.HIS_Patient p WITH (NOLOCK)
             INNER JOIN (
-                SELECT PatientType, PatientID FROM dbo.HIS_Appointment WITH (NOLOCK)
-                WHERE SetupID=@SetupId AND ProjectID=@ProjectId AND PatientID > 0
-                  AND AppointmentDate >= @From AND AppointmentDate < @To
+                SELECT a.PatientType, a.PatientID FROM dbo.HIS_Appointment a WITH (NOLOCK)
+                WHERE a.SetupID=@SetupId AND a.ProjectID=@ProjectId AND a.PatientID > 0
+                  AND a.AppointmentDate >= @From AND a.AppointmentDate < @To
+                  AND EXISTS (SELECT 1 FROM dbo.HIS_InvoiceMain m WITH (NOLOCK)
+                              WHERE m.SetupID=a.SetupID AND m.ProjectID=a.ProjectID AND m.AppointmentNo=a.AppointmentNo AND m.CancelledOn IS NULL)
                 UNION
                 SELECT PatientType, PatientID FROM dbo.INP_Admission WITH (NOLOCK)
                 WHERE SetupID=@SetupId AND ProjectID=@ProjectId AND PatientID > 0
@@ -58,9 +60,11 @@ public static class FactsExtract
 
         var stubs = 0;
         await db.QueryAsync("""
-            SELECT PatientID FROM dbo.HIS_Appointment WITH (NOLOCK)
-            WHERE SetupID=@SetupId AND ProjectID=@ProjectId AND PatientID > 0
-              AND AppointmentDate >= @From AND AppointmentDate < @To
+            SELECT a.PatientID FROM dbo.HIS_Appointment a WITH (NOLOCK)
+            WHERE a.SetupID=@SetupId AND a.ProjectID=@ProjectId AND a.PatientID > 0
+              AND a.AppointmentDate >= @From AND a.AppointmentDate < @To
+              AND EXISTS (SELECT 1 FROM dbo.HIS_InvoiceMain m WITH (NOLOCK)
+                          WHERE m.SetupID=a.SetupID AND m.ProjectID=a.ProjectID AND m.AppointmentNo=a.AppointmentNo AND m.CancelledOn IS NULL)
             UNION
             SELECT PatientID FROM dbo.INP_Admission WITH (NOLOCK)
             WHERE SetupID=@SetupId AND ProjectID=@ProjectId AND PatientID > 0
@@ -291,6 +295,9 @@ public static class FactsExtract
             FROM dbo.HIS_Appointment a WITH (NOLOCK)
             WHERE a.SetupID=@SetupId AND a.ProjectID=@ProjectId AND a.PatientID > 0
               AND a.AppointmentDate >= @From AND a.AppointmentDate < @To
+              -- An appointment with no invoice is not an encounter.
+              AND EXISTS (SELECT 1 FROM dbo.HIS_InvoiceMain m WITH (NOLOCK)
+                          WHERE m.SetupID=a.SetupID AND m.ProjectID=a.ProjectID AND m.AppointmentNo=a.AppointmentNo AND m.CancelledOn IS NULL)
             UNION ALL
             SELECT a.AppointmentNo, a.PatientType, a.PatientID, a.ClinicID, a.DoctorID, a.CompanyID,
                    a.AppointmentDate, a.StartTime, a.EndTime, a.ActualVisitStartTime, a.ActualVisitEndTime,
@@ -324,13 +331,14 @@ public static class FactsExtract
     private static async Task BillingAsync(HisConnection db, Settings s, Codes c, CsvZipWriter pack)
     {
         using var svc = pack.Create("34_EncounterService.csv",
-            "encounterNo", "procedureCode", "costCentreCode", "providerCode", "quantity", "performedAt", "sourceSystem", "sourceRef");
+            "encounterNo", "procedureCode", "costCentreCode", "providerCode", "quantity", "performedAt", "sourceSystem", "sourceRef", "isChildInvoice");
         using var rev = pack.Create("36_RevenueTransaction.csv",
             "encounterNo", "procedureCode", "payerCode", "grossAmount", "discount", "netAmount", "postedAt", "sourceSystem", "sourceRef",
             "hisLineStatus", "isPerformed", "performType", "isReturned", "isRefunded", "refundedAmount",
             "hisUnitPrice", "hisQuantity", "discountType", "hisDiscountAmount", "waivedAmount", "waiverId", "patientShare", "companyShare",
             "taxAmount", "patientTaxAmount", "companyTaxAmount", "outlierPayment", "claimedAmount", "settledAmount", "rejectedAmount",
-            "isZeroPrice", "isPackageSelected", "packageProcedureId", "packageSequenceNo", "isPackageInvoice", "billType", "isAcceptedWithDrg");
+            "isZeroPrice", "isPackageSelected", "packageProcedureId", "packageSequenceNo", "isPackageInvoice", "billType", "isAcceptedWithDrg",
+            "hisInvoiceType", "hisMainInvoiceNo", "isChildInvoice");
         var noEncounter = 0;
 
         await db.QueryAsync("""
@@ -341,7 +349,7 @@ public static class FactsExtract
                    d.PerformDate, d.Status, d.IsPerformed, d.PerformType, d.IsReturned, d.IsRefunded, d.RefundedAmount,
                    d.DiscountType, d.WaiverID, d.TaxAmount, d.PatientTaxAmount, d.CompanyTaxAmount, d.OutlierPayment,
                    d.ClaimedAmount, d.SettledAmount, d.RejectedAmount, d.IsZeroPrice, d.IsPackageSelected,
-                   d.PackageProcedureID, d.PackageSequenceNo, m.IsPackageInvoice, m.BillType, m.IsAcceptedWithDRG,
+                   d.PackageProcedureID, d.PackageSequenceNo, m.IsPackageInvoice, m.BillType, m.IsAcceptedWithDRG, m.InvoiceType, m.MainInvoiceNo,
                    hp.IsMedicine, er.AssessmentNo
             FROM dbo.HIS_InvoiceMain m WITH (NOLOCK)
             INNER JOIN dbo.HIS_InvoiceDetail d WITH (NOLOCK)
@@ -379,12 +387,14 @@ public static class FactsExtract
             var inv = HisConnection.I(r, "InvoiceNo");
             var line = HisConnection.I(r, "LineItemNo");
             var payer = c.PayerOrSelf(HisConnection.Ni(r, "CompanyID"));
+            // InvoiceType 2 is a child invoice: the parent line carries the package's money and cost.
+            var child = Maps.Bool(HisConnection.I(r, "InvoiceType") == 2);
 
             if (procCode.Length > 0)
             {
                 svc.Write(enc, procCode, c.CcFromInvoice(HisConnection.S(r, "CostCenterID"), clinic),
                     c.ProviderOrEmpty(HisConnection.Ni(r, "PrimaryDoctorID")),
-                    Maps.Dec(qty), Maps.DateTime(performed), "VIDA-HIS", $"INV-{tt}-{inv}-{line}");
+                    Maps.Dec(qty), Maps.DateTime(performed), "VIDA-HIS", $"INV-{tt}-{inv}-{line}", child);
             }
 
             rev.Write(enc, procCode, payer, Maps.Money(gross), Maps.Money(discount), Maps.Money(net),
@@ -397,7 +407,8 @@ public static class FactsExtract
                 Stored(r, "PatientShare"), Stored(r, "CompanyShare"), Stored(r, "TaxAmount"), Stored(r, "PatientTaxAmount"), Stored(r, "CompanyTaxAmount"),
                 Stored(r, "OutlierPayment"), Stored(r, "ClaimedAmount"), Stored(r, "SettledAmount"), Stored(r, "RejectedAmount"),
                 Flag(r, "IsZeroPrice"), Flag(r, "IsPackageSelected"), HisConnection.S(r, "PackageProcedureID"), HisConnection.S(r, "PackageSequenceNo"),
-                Flag(r, "IsPackageInvoice"), HisConnection.S(r, "BillType"), Flag(r, "IsAcceptedWithDRG"));
+                Flag(r, "IsPackageInvoice"), HisConnection.S(r, "BillType"), Flag(r, "IsAcceptedWithDRG"),
+                HisConnection.S(r, "InvoiceType"), HisConnection.S(r, "MainInvoiceNo"), child);
         });
         pack.Note($"Invoice lines with no appointment, admission or ER assessment, not loaded: {noEncounter}.");
         await RefundsAsync(db, s, c, pack);

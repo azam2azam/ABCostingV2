@@ -225,9 +225,9 @@ public static class CatalogueExtract
 
     private static async Task ProviderAsync(HisConnection db, Settings s, Codes c, CsvZipWriter pack)
     {
-        using var csv = pack.Create("14_Provider.csv", "resourceCode", "departmentCode", "code", "name", "specialty", "grade");
+        using var csv = pack.Create("14_Provider.csv", "resourceCode", "departmentCode", "code", "name", "specialty", "grade", "isDummy");
         await db.QueryAsync("""
-            SELECT d.DoctorID, d.DoctorName, d.Alias, d.EmploymentType,
+            SELECT d.DoctorID, d.DoctorName, d.Alias, d.EmploymentType, d.IsDoctorDummy,
                    (SELECT TOP 1 dc.ClinicID FROM dbo.HIS_DoctorClinic dc WITH (NOLOCK)
                     WHERE dc.SetupID=d.SetupID AND dc.ProjectID=d.ProjectID AND dc.DoctorID=d.DoctorID
                       AND ISNULL(dc.IsActive,1)=1
@@ -237,8 +237,8 @@ public static class CatalogueExtract
                       AND ISNULL(ds.IsActive,1)=1
                     ORDER BY ds.SpecialityID) AS SpecialityID
             FROM dbo.HIS_Doctor d WITH (NOLOCK)
-            WHERE d.SetupID=@SetupId AND d.ProjectID=@ProjectId AND ISNULL(d.IsActive,1)=1
-              AND ISNULL(d.IsDoctorDummy,0)=0
+            WHERE d.SetupID=@SetupId AND d.ProjectID=@ProjectId
+              AND (ISNULL(d.IsActive,1)=1 OR ISNULL(d.IsDoctorDummy,0)=1)
             """, s.BindTenant, r =>
         {
             var id = HisConnection.I(r, "DoctorID");
@@ -247,21 +247,39 @@ public static class CatalogueExtract
             if (name.Length == 0) name = c.Provider(id);
             var spec = HisConnection.Ni(r, "SpecialityID");
             var clinicId = HisConnection.Ni(r, "ClinicID");
-            csv.Write(PhysicianRoles.ResourceCode(c, PhysicianRoles.TokenFromClinic(clinicId)),
+            // A dummy is a placeholder across clinics, not a person in one role: it stays Not assigned.
+            var dummy = HisConnection.B(r, "IsDoctorDummy");
+            csv.Write(dummy ? "" : PhysicianRoles.ResourceCode(c, PhysicianRoles.TokenFromClinic(clinicId)),
                 c.DeptFromClinic(clinicId),
                 c.Provider(id), name, spec is null ? "" : $"SPEC-{spec}",
-                "ET-" + HisConnection.I(r, "EmploymentType"));
+                "ET-" + HisConnection.I(r, "EmploymentType"), Maps.Bool(dummy));
+        });
+
+        using var clinics = pack.Create("15_ProviderClinic.csv", "providerCode", "departmentCode", "hisClinicId", "isDefault", "isActive");
+        await db.QueryAsync("""
+            SELECT dc.DoctorID, dc.ClinicID, dc.IsDefaultClinic, ISNULL(dc.IsActive,1) AS IsActive
+            FROM dbo.HIS_DoctorClinic dc WITH (NOLOCK)
+            INNER JOIN dbo.HIS_Doctor d WITH (NOLOCK)
+              ON d.SetupID=dc.SetupID AND d.ProjectID=dc.ProjectID AND d.DoctorID=dc.DoctorID
+            WHERE dc.SetupID=@SetupId AND dc.ProjectID=@ProjectId
+              AND (ISNULL(d.IsActive,1)=1 OR ISNULL(d.IsDoctorDummy,0)=1)
+            """, s.BindTenant, r =>
+        {
+            var clinicId = HisConnection.I(r, "ClinicID");
+            clinics.Write(c.Provider(HisConnection.I(r, "DoctorID")), c.ClinicDept(clinicId), $"{clinicId}",
+                Maps.Bool(HisConnection.B(r, "IsDefaultClinic")), Maps.Bool(HisConnection.B(r, "IsActive")));
         });
     }
 
     private static async Task ProcedureAsync(HisConnection db, Settings s, Codes c, CsvZipWriter pack)
     {
         using var csv = pack.Create("18_Procedure.csv",
-            "hospitalCode", "departmentCode", "serviceLineCode", "code", "catalogCode", "name", "category", "procType", "complexity", "isActive");
+            "hospitalCode", "departmentCode", "serviceLineCode", "code", "catalogCode", "name", "category", "procType", "complexity", "isActive",
+            "hisCategoryId", "hisGroupId", "groupName", "hisSubGroupId", "subGroupName", "isPackage");
         await db.QueryAsync("""
             SELECT p.ProcedureID, p.ProcedureName, p.Alias, p.OracleItemCode, p.IsSurgeryProcedure, p.IsPackage,
-                   p.SurgerySeverity, p.IsActive, p.CategoryID,
-                   cat.CategoryDescription,
+                   p.SurgerySeverity, p.IsActive, p.CategoryID, p.GroupID, p.SubGroupID,
+                   cat.CategoryDescription, grp.GroupDescription, sub.SubGroupDescription,
                    (SELECT TOP 1 m.ClinicID FROM dbo.HIS_ProcedureClinicMapping m WITH (NOLOCK)
                     WHERE m.SetupID=p.SetupID AND m.ProjectID=p.ProjectID AND m.ProcedureID=p.ProcedureID
                       AND ISNULL(m.IsActive,1)=1
@@ -275,6 +293,10 @@ public static class CatalogueExtract
             FROM dbo.HIS_Procedure p WITH (NOLOCK)
             LEFT JOIN dbo.HIS_ProcedureCategory cat WITH (NOLOCK)
               ON cat.SetupID=p.SetupID AND cat.ProjectID=p.ProjectID AND cat.CategoryID=p.CategoryID
+            LEFT JOIN dbo.HIS_ProcedureGroup grp WITH (NOLOCK)
+              ON grp.SetupID=p.SetupID AND grp.ProjectID=p.ProjectID AND grp.GroupID=p.GroupID
+            LEFT JOIN dbo.HIS_ProcedureSubGroup sub WITH (NOLOCK)
+              ON sub.SetupID=p.SetupID AND sub.ProjectID=p.ProjectID AND sub.SubGroupID=p.SubGroupID
             WHERE p.SetupID=@SetupId AND p.ProjectID=@ProjectId AND ISNULL(p.IsMedicine,0)=0
             """, s.BindTenant, r =>
         {
@@ -299,7 +321,9 @@ public static class CatalogueExtract
             csv.Write(c.Hospital, dept, sl, c.Procedure(pid), catalog, name,
                 cat.Length == 0 ? "General" : cat,
                 Maps.ProcType(HisConnection.B(r, "IsSurgeryProcedure"), lab, cat, name),
-                Maps.Int(complexity), Maps.Bool(HisConnection.B(r, "IsActive")));
+                Maps.Int(complexity), Maps.Bool(HisConnection.B(r, "IsActive")),
+                HisConnection.S(r, "CategoryID"), HisConnection.S(r, "GroupID"), HisConnection.S(r, "GroupDescription"),
+                HisConnection.S(r, "SubGroupID"), HisConnection.S(r, "SubGroupDescription"), Maps.Bool(HisConnection.B(r, "IsPackage")));
         });
     }
 
@@ -367,13 +391,20 @@ public static class CatalogueExtract
 
     private static async Task PayerAsync(HisConnection db, Settings s, Codes c, CsvZipWriter pack)
     {
-        using var csv = pack.Create("27_Payer.csv", "code", "name", "payerType", "contractRate");
-        csv.Write(c.SelfPayer, "Self pay / cash", "SELF_PAY", "1");
+        using var csv = pack.Create("27_Payer.csv", "code", "name", "payerType", "contractRate",
+            "hisGroupId", "hisGroupName", "hisGroupIsTpa", "hisGroupManagedByTpa");
+        csv.Write(c.SelfPayer, "Self pay / cash", "SELF_PAY", "1", "", "", "", "");
+        static string Flag(Microsoft.Data.SqlClient.SqlDataReader r, string col) =>
+            HisConnection.S(r, col).Length == 0 ? "" : Maps.Bool(HisConnection.B(r, col));
+        int grouped = 0, ungrouped = 0;
         var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { c.SelfPayer };
         await db.QueryAsync("""
-            SELECT CompanyID, CompanyName, Alias, CompanyType, Status
-            FROM dbo.HIS_Company WITH (NOLOCK)
-            WHERE SetupID=@SetupId AND ProjectID=@ProjectId
+            SELECT c.CompanyID, c.CompanyName, c.Alias, c.CompanyType, c.Status, c.GroupID,
+                   g.GroupName, g.Alias AS GroupAlias, g.IsTPA, g.IsManagedByTPA
+            FROM dbo.HIS_Company c WITH (NOLOCK)
+            LEFT JOIN dbo.HIS_CompanyGroup g WITH (NOLOCK)
+              ON g.SetupID=c.SetupID AND g.ProjectID=c.ProjectID AND g.GroupID=c.GroupID
+            WHERE c.SetupID=@SetupId AND c.ProjectID=@ProjectId
             """, s.BindTenant, r =>
         {
             var id = HisConnection.I(r, "CompanyID");
@@ -382,7 +413,12 @@ public static class CatalogueExtract
             var name = HisConnection.S(r, "CompanyName");
             if (name.Length == 0) name = HisConnection.S(r, "Alias");
             if (name.Length == 0) name = code;
-            csv.Write(code, name, Maps.PayerType(HisConnection.I(r, "CompanyType"), name), "1");
+            var groupName = HisConnection.S(r, "GroupName");
+            if (groupName.Length == 0) groupName = HisConnection.S(r, "GroupAlias");
+            if (groupName.Length > 0) grouped++; else ungrouped++;
+            csv.Write(code, name, Maps.PayerType(HisConnection.I(r, "CompanyType"), name), "1",
+                groupName.Length > 0 ? HisConnection.S(r, "GroupID") : "", groupName, Flag(r, "IsTPA"), Flag(r, "IsManagedByTPA"));
         });
+        pack.Note($"Payer: {grouped} companies under a HIS_CompanyGroup, {ungrouped} with none.");
     }
 }
