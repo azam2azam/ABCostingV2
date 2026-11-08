@@ -8,7 +8,7 @@ import {
 import { Auth, toApiError } from '../core/auth';
 import { RunContext } from '../core/context';
 import { catalogueResource } from '../core/resource';
-import { Col, UI, matchesNameOrCode } from '../shared/ui';
+import { Col, UI, matchesNameOrCode, hisProcedureId } from '../shared/ui';
 
 export const componentCols: Col<ComponentDto>[] = [
   { key: 'label', label: 'Component', sub: r => r.calcExpression, link: r => r.resourceId ? `/resources/${r.resourceId}` : null },
@@ -259,11 +259,6 @@ export class Packages {
   ];
 }
 
-/** VERITA code is `{hospital}.{HIS ProcedureID}`; the list shows the HIS id only. */
-function hisProcedureId(code: string): string {
-  const i = code.indexOf('.');
-  return i >= 0 ? code.slice(i + 1) : code;
-}
 
 @Component({
   selector: 'v-package',

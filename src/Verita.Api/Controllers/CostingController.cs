@@ -298,18 +298,23 @@ public sealed class CostingController : VeritaController
     [Authorize(Policy = "costing.view")]
     public async Task<Envelope<ReconDto>> Reconciliation(CancellationToken ct) { var (_, s) = await Scoped(); return Wrap(s, await Q.ReconciliationAsync(s, ct)); }
 
+    [HttpGet("his-invoicing")]
+    [Authorize(Policy = "revenue.view")]
+    public async Task<Envelope<HisInvoicingDto>> HisInvoicing(CancellationToken ct)
+    { var (_, s) = await CatalogueScoped(); return Wrap(s, await Q.HisInvoicingAsync(s, ct)); }
+
     [HttpGet("patient-encounters")]
     [Authorize(Policy = "patient.view")]
     public async Task<Envelope<PatientEncounterPage>> PatientEncounters([FromQuery] int page = 1, [FromQuery] int pageSize = 50, [FromQuery] string sort = "admitAt",
         [FromQuery] bool desc = true, [FromQuery] string? search = null, [FromQuery] string? encType = null, [FromQuery] Guid? billedPackageId = null,
         [FromQuery] string? serviceLine = null, [FromQuery] string? department = null, [FromQuery] string? resource = null, [FromQuery] string? physician = null,
-        [FromQuery] string? payer = null, [FromQuery] string? drg = null, [FromQuery] string? segment = null, CancellationToken ct = default)
+        [FromQuery] string? payer = null, [FromQuery] string? insurer = null, [FromQuery] string? noBillableType = null, [FromQuery] string? drg = null, [FromQuery] string? segment = null, CancellationToken ct = default)
     {
         var (p, s) = await CatalogueScoped();
         return Wrap(s, await Q.PatientEncountersAsync(s, p, new PatientEncounterQuery
         {
             Page = page, PageSize = pageSize, Sort = sort, Desc = desc, Search = search, EncType = encType, BilledPackageId = billedPackageId,
-            ServiceLine = serviceLine, Department = department, Resource = resource, Physician = physician, Payer = payer, Drg = drg, Segment = segment,
+            ServiceLine = serviceLine, Department = department, Resource = resource, Physician = physician, Payer = payer, Insurer = insurer, NoBillableType = noBillableType, Drg = drg, Segment = segment,
         }, ct));
     }
 

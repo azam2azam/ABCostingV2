@@ -59,7 +59,7 @@ public sealed partial class ReadQueries
         if (q.PackageId is { } pkg) query = query.Where(x => x.e.PackageId == pkg);
         if (q.BilledPackageId is { } billedPkg)
         {
-            var billedEncounters = from es in db.EncounterServices.AsNoTracking()
+            var billedEncounters = from es in CountedServices(s)
                                    join pr in db.Procedures.AsNoTracking() on es.ProcedureId equals pr.Id
                                    join pk in db.Packages.AsNoTracking() on new { pr.HospitalId, pr.Code } equals new { pk.HospitalId, pk.Code }
                                    where pk.Id == billedPkg

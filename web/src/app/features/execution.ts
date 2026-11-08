@@ -2,7 +2,7 @@ import { NgTemplateOutlet } from '@angular/common';
 import { Component, Injector, afterNextRender, computed, effect, inject, input, signal, untracked } from '@angular/core';
 import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
 import { FormsModule } from '@angular/forms';
-import { ActivatedRoute, Router, RouterLink } from '@angular/router';
+import { ActivatedRoute, ParamMap, Params, Router, RouterLink } from '@angular/router';
 import { firstValueFrom } from 'rxjs';
 import { Api, CostingModelsDto, Envelope, RunDetail as RunDetailDto, RunListItem } from '../core/api';
 import { Auth, toApiError } from '../core/auth';
@@ -10,7 +10,7 @@ import { RunContext, runInFlight, runLiveStatus } from '../core/context';
 import { formatMoney } from '../core/decimal';
 import { apiResource, runResource, catalogueResource } from '../core/resource';
 import { Icon } from '../shared/icon';
-import { Col, UI, matchesNameOrCode } from '../shared/ui';
+import { Col, UI, matchesNameOrCode, hisProcedureId } from '../shared/ui';
 
 // ── Configuration ───────────────────────────────────────────────────────────────
 
@@ -1195,10 +1195,6 @@ function runDeletable(r: { status: string; costingVersionStatus: string }): bool
   return r.status === 'DRAFT' || r.status === 'FAILED' || (r.status === 'RECONCILED' && r.costingVersionStatus !== 'PUBLISHED');
 }
 
-function hisProcedureId(code: string): string {
-  const i = code.indexOf('.');
-  return i >= 0 ? code.slice(i + 1) : code;
-}
 
 function toItemDraft(i: ProcedureCostingItem, parent: string): ItemDraft {
   const marginPct = marginText(i.marginPct) || parent;
@@ -1573,15 +1569,17 @@ export class RunDetail {
 // ── Patient encounters ──────────────────────────────────────────────────────────
 
 interface PatientEncounterRow {
-  id: string; encounterNo: string; mrn: string; patient: string; segment: string; encType: string; department: string; payer: string;
+  id: string; encounterNo: string; mrn: string; patient: string; segment: string; encType: string; department: string; payer: string; insurer?: string | null;
   physician?: string | null; admitAt: string; dischargeAt?: string | null; lengthOfStay: number; services: number;
   gross: string | number; discount: string | number; net: string | number; cost?: string | number | null;
 }
-type EncounterFilterKey = 'serviceLine' | 'department' | 'resource' | 'physician' | 'payer' | 'drg' | 'encType' | 'segment';
+/** Resource and no-billable type have no dropdown, but the Dashboard's counts still open the list filtered by them. */
+const ENCOUNTER_FILTER_KEYS = ['department', 'resource', 'physician', 'insurer', 'encType', 'segment', 'noBillableType'] as const;
+type EncounterFilterKey = typeof ENCOUNTER_FILTER_KEYS[number];
 interface PatientEncounterPage { rows: PatientEncounterRow[]; total: number; page: number; pageSize: number; phiMasked: boolean; }
 interface PatientEncounterLine {
   procedure?: string | null; procedureId?: string | null; quantity?: string | number | null; costCentre?: string | null; physician?: string | null;
-  payer?: string | null; performedAt?: string | null; gross?: string | number | null; discount?: string | number | null; net?: string | number | null; sourceRef: string; cost?: string | number | null;
+  payer?: string | null; performedAt?: string | null; gross?: string | number | null; discount?: string | number | null; net?: string | number | null; sourceRef: string; cost?: string | number | null; procedureCode?: string | null; isPackage?: boolean;
 }
 interface HisEncounterSource {
   fields: { label: string; hisColumn: string; value?: string | null }[];
@@ -1589,12 +1587,14 @@ interface HisEncounterSource {
 }
 
 /** Values for checking against HIS: no money format, and true/false as HIS bits. A third part ":n" shows 2 decimals, or none when they are 00. */
+const isZero = (v: unknown): boolean => /^0+(\.0+)?$/.test(String(v));
+
 function hisCols(spec: string[]): Col<any>[] {
   return spec.map(s => {
     const [key, label, kind] = s.split(':');
     return { key, label, sortable: false, value: (r: any) => {
       const v = r[key];
-      if (v === null || v === undefined) return '';
+      if (v === null || v === undefined || isZero(v)) return '';
       if (kind === 'n') { const n = Number(v).toFixed(2); return n.endsWith('.00') ? n.slice(0, -3) : n; }
       return typeof v === 'string' && /^\d{4}-\d{2}-\d{2}T/.test(v) ? v.slice(0, 16).replace('T', ' ') : String(v);
     } };
@@ -1602,7 +1602,38 @@ function hisCols(spec: string[]): Col<any>[] {
 }
 
 interface PatientEncounterDetailDto { encounter: PatientEncounterRow; lines: PatientEncounterLine[]; }
-interface InvoiceGroup { key: string; procedure: string; procedureId: string | null; quantity: number; gross: number; discount: number; refunds: number; net: number; cost: number; }
+interface InvoiceGroup { key: string; procedure: string; procedureCode: string | null; isPackage: boolean; procedureId: string | null; quantity: number; gross: number; discount: number; refunds: number; net: number; cost: number; }
+
+interface HisInvoiceTypeCount { invoiceType: number | null; name: string; invoices: number; encounters: number; patients: number; revenue: number }
+
+@Component({
+  selector: 'v-his-invoicing',
+  imports: [...UI],
+  template: `
+    <v-page title="HIS Invoicing" purpose="Invoice counts and revenue by HIS invoice type for the selected period.">
+      <v-state [loading]="res.isLoading()" [error]="res.error()">
+        @if (res.value(); as r) {
+          <div class="grid tiles" style="margin-bottom: 16px;">
+            <v-tile label="Min invoice no." [value]="r.data.minInvoiceNo" unit="id" />
+            <v-tile label="Max invoice no." [value]="r.data.maxInvoiceNo" unit="id" />
+          </div>
+          <v-table [rows]="r.data.types" [columns]="cols" [total]="r.data.total" caption="Invoice counts by type" empty="No invoices imported for this period." />
+        }
+      </v-state>
+    </v-page>
+  `,
+})
+export class HisInvoicing {
+  res = catalogueResource<{ minInvoiceNo: number | null; maxInvoiceNo: number | null; types: HisInvoiceTypeCount[]; total: HisInvoiceTypeCount | null }>(() => 'his-invoicing');
+  cols: Col[] = [
+    { key: 'invoiceType', label: 'Invoice type' },
+    { key: 'name', label: 'Name' },
+    { key: 'invoices', label: 'Invoices', type: 'num', dp: 0 },
+    { key: 'encounters', label: 'Encounters', type: 'num', dp: 0 },
+    { key: 'patients', label: 'Patients', type: 'num', dp: 0 },
+    { key: 'revenue', label: 'Revenue', type: 'money', dp: 0 },
+  ];
+}
 
 @Component({
   selector: 'v-patient-encounters',
@@ -1611,6 +1642,10 @@ interface InvoiceGroup { key: string; procedure: string; procedureId: string | n
     <v-page title="Patient Encounters" purpose="Patient encounters in the selected period and what was invoiced for each. Patient names show only with phi.view (FR-0.7).">
       @if (billedPackageId()) {
         <p class="muted">Showing encounters billed to this package. <a [routerLink]="['/patient-encounters']" [queryParams]="{ billedPackageId: null }" queryParamsHandling="merge">Show all</a></p>
+      }
+      @if (resourceName(); as name) { <p class="muted">Showing encounters for resource: {{ name }}.</p> }
+      @if (filters().noBillableType; as type) {
+        <p class="muted">Showing encounters with non-billable procedures{{ type === 'ALL' ? '' : ' of type: ' + type.charAt(0) + type.slice(1).toLowerCase() }}.</p>
       }
       <section class="card filters">
         @for (f of filterDefs(); track f.key) {
@@ -1628,13 +1663,15 @@ interface InvoiceGroup { key: string; procedure: string; procedureId: string | n
       </div>
       <v-state [loading]="res.isLoading() && !res.value()" [error]="res.error()">
         @if (res.value(); as r) {
-          @if (r.data.phiMasked) { <p class="faint">Patient names are hidden for your role.</p> }
-          <v-table [rows]="r.data.rows" [columns]="cols()" [serverSort]="tableSort()" (sortChange)="sortFromHeader($event)" caption="Patient encounters" empty="No encounters in this period." />
-          <div class="row" style="margin-top:10px">
-            <button class="btn" type="button" [disabled]="page() <= 1" (click)="page.set(page() - 1)">Previous</button>
-            <span class="muted">Page {{ r.data.page }} of {{ pages() }} · {{ r.data.total }} encounters</span>
-            <button class="btn" type="button" [disabled]="page() >= pages()" (click)="page.set(page() + 1)">Next</button>
+          <div class="list-head">
+            @if (r.data.phiMasked) { <p class="faint">Patient names are hidden for your role.</p> }
+            <div class="row pager">
+              <button class="btn" type="button" [disabled]="page() <= 1" (click)="page.set(page() - 1)">Previous</button>
+              <span class="muted">Page {{ r.data.page }} of {{ pages() }} · {{ r.data.total }} encounters</span>
+              <button class="btn" type="button" [disabled]="page() >= pages()" (click)="page.set(page() + 1)">Next</button>
+            </div>
           </div>
+          <v-table [rows]="r.data.rows" [columns]="cols()" [serverSort]="tableSort()" (sortChange)="sortFromHeader($event)" caption="Patient encounters" empty="No encounters in this period." />
         }
       </v-state>
     </v-page>
@@ -1644,46 +1681,74 @@ interface InvoiceGroup { key: string; procedure: string; procedureId: string | n
     .filter { display: flex; flex-direction: column; gap: 5px; min-width: 0; font-size: 12px; font-weight: 600; letter-spacing: .04em; text-transform: uppercase; color: var(--text-3); }
     .filter select { width: 100%; font: 14px var(--font); text-transform: none; letter-spacing: normal; font-weight: 400; color: var(--text); padding: 6px 8px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--surface); }
     .clear { justify-self: start; }
+    .list-head { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 12px; margin-bottom: 10px; }
+    .list-head p { margin: 0; }
+    .pager { margin-left: auto; }
   `,
 })
 export class PatientEncounters {
   private route = inject(ActivatedRoute);
+  private router = inject(Router);
   private auth = inject(Auth);
   private ctx = inject(RunContext);
   page = signal(1);
   search = signal('');
   /** The same breakdowns as the Dashboard's tabs. */
-  filters = signal<Partial<Record<EncounterFilterKey, string>>>({});
+  filters = signal<Partial<Record<EncounterFilterKey, string>>>(this.filtersIn(this.route.snapshot.queryParamMap));
   options = catalogueResource<Record<string, { value: string; label: string }[]>>(() => 'patient-encounters/filters');
   filterDefs = computed(() => {
     const o = this.options.value()?.data;
     const defs: { key: EncounterFilterKey; label: string; options: { value: string; label: string }[] }[] = [
-      { key: 'serviceLine', label: 'Service line', options: o?.['serviceLines'] ?? [] }, { key: 'department', label: 'Department', options: o?.['departments'] ?? [] },
-      { key: 'resource', label: 'Resource', options: o?.['resources'] ?? [] }, { key: 'physician', label: 'Physician', options: o?.['physicians'] ?? [] },
-      { key: 'payer', label: 'Payer', options: o?.['payers'] ?? [] }, { key: 'drg', label: 'DRG', options: o?.['drgs'] ?? [] },
+      { key: 'department', label: 'Department', options: o?.['departments'] ?? [] }, { key: 'physician', label: 'Physician', options: o?.['physicians'] ?? [] },
+      { key: 'insurer', label: 'Insurer', options: o?.['insurers'] ?? [] },
       { key: 'encType', label: 'Encounter type', options: o?.['encounterTypes'] ?? [] }, { key: 'segment', label: 'Patient segment', options: o?.['segments'] ?? [] },
     ];
-    return defs.filter(d => d.key !== 'drg' || d.options.length > 0);
+    // A filter from a link shows as selected straight away, even before or without its choice in the list.
+    const chosen = this.filters();
+    return defs.map(d => {
+      const value = chosen[d.key];
+      if (!value || d.options.some(x => x.value === value)) return d;
+      const label = !o ? 'Loading…' : value === 'none' ? 'Not assigned' : 'No encounters';
+      return { ...d, options: [{ value, label }, ...d.options] };
+    });
+  });
+  /** The resource a Dashboard count opened this list for. */
+  resourceName = computed(() => {
+    const id = this.filters().resource;
+    if (!id) return null;
+    return this.options.value()?.data['resources']?.find(x => x.value === id)?.label ?? (id === 'none' ? 'Not assigned' : 'selected resource');
   });
   anyFilter = computed(() => Object.values(this.filters()).some(v => !!v));
   setFilter(key: EncounterFilterKey, value: string): void {
-    this.filters.update(f => ({ ...f, [key]: value || undefined }));
-    this.page.set(1);
+    this.showFilters({ [key]: value || null });
   }
   clearFilters(): void {
-    this.filters.set({});
-    this.page.set(1);
+    this.showFilters(Object.fromEntries(ENCOUNTER_FILTER_KEYS.map(k => [k, null])));
   }
+  /** Filters live in the URL, so a link can open the list already filtered. */
+  private showFilters(queryParams: Params): void {
+    void this.router.navigate([], { relativeTo: this.route, queryParams, queryParamsHandling: 'merge', replaceUrl: true });
+  }
+  private filtersIn(q: ParamMap): Partial<Record<EncounterFilterKey, string>> {
+    return Object.fromEntries(ENCOUNTER_FILTER_KEYS.filter(k => q.get(k)).map(k => [k, q.get(k)!]));
+  }
+  private scope: string | null = null;
   private scopeChanged = effect(() => {
-    this.ctx.hospitalParam();
-    this.ctx.periodParam();
-    untracked(() => this.clearFilters());
+    const scope = `${this.ctx.hospitalParam()}|${this.ctx.periodParam()}`;
+    const changed = this.scope !== null && this.scope !== scope;
+    this.scope = scope;
+    if (changed) untracked(() => this.clearFilters());
   });
   sort = signal('admitAt');
   desc = signal(true);
   billedPackageId = signal(this.route.snapshot.queryParamMap.get('billedPackageId'));
   constructor() {
     this.route.queryParamMap.pipe(takeUntilDestroyed()).subscribe(q => {
+      const next = this.filtersIn(q);
+      if (JSON.stringify(next) !== JSON.stringify(this.filters())) {
+        this.filters.set(next);
+        this.page.set(1);
+      }
       const id = q.get('billedPackageId');
       if (id === this.billedPackageId()) return;
       this.page.set(1);
@@ -1716,15 +1781,14 @@ export class PatientEncounters {
     const cols: Col<PatientEncounterRow>[] = [
       { key: 'admitAt', label: 'Date', type: 'date' },
       { key: 'encounterNo', label: 'Encounter', link: r => `/patient-encounters/${r.id}`, sub: this.auth.can('phi.view') ? r => r.patient : undefined },
-      { key: 'mrn', label: 'MRN' }, { key: 'encType', label: 'Type' }, { key: 'department', label: 'Department' },
-      { key: 'payer', label: 'Payer' }, { key: 'physician', label: 'Physician', value: r => r.physician ?? '—' },
-      { key: 'lengthOfStay', label: 'LOS', type: 'num', dp: 0, blankZero: true }, { key: 'services', label: 'Services', type: 'num', dp: 0, blankZero: true },
+      { key: 'mrn', label: 'MRN' }, { key: 'encType', label: 'Type' },
+      { key: 'services', label: 'Services', type: 'num', dp: 0, blankZero: true },
     ];
     if (this.canRevenue()) cols.push(
       { key: 'gross', label: 'Gross', type: 'money', blankZero: true }, { key: 'discount', label: 'Discount', type: 'money', blankZero: true },
       { key: 'net', label: 'Net Invoice', type: 'money', blankZero: true },
     );
-    cols.push({ key: 'cost', label: 'Cost', type: 'money', blankZero: true });
+    cols.push({ key: 'cost', label: 'Cost', type: 'money', blankZero: true, bad: r => this.canRevenue() && Number(r.cost ?? 0) > Number(r.net) });
     return cols;
   });
 }
@@ -1735,18 +1799,16 @@ export class PatientEncounters {
   template: `
     <v-state [loading]="res.isLoading()" [error]="res.error()">
       @if (res.value(); as r) {
-        <v-page [title]="'Encounter ' + r.data.encounter.encounterNo" [purpose]="(canPhi() ? r.data.encounter.patient + ' · ' : '') + 'MRN ' + r.data.encounter.mrn + ' · ' + r.data.encounter.department + ' · ' + r.data.encounter.payer">
+        <v-page [title]="'Encounter ' + r.data.encounter.encounterNo" [purpose]="(canPhi() ? r.data.encounter.patient + ' · ' : '') + 'MRN ' + r.data.encounter.mrn + ' · ' + r.data.encounter.department + invoiceText(r.data.lines)">
           <div class="grid tiles">
-            <v-tile label="Services" [value]="r.data.encounter.services" unit="" />
-            <v-tile label="Length of stay" [value]="r.data.encounter.lengthOfStay" unit="" />
+            <v-tile label="Services" [value]="r.data.encounter.services" unit="" blankZero />
             @if (canRevenue()) {
               @let t = totals(r.data.lines);
-              <v-tile label="Total Amount" [value]="t.gross" />
-              <v-tile label="Discount" [value]="t.discount" />
-              <v-tile label="Refund" [value]="t.refunds" />
-              <v-tile label="Net invoiced" [value]="t.net" />
+              <v-tile label="Total Amount" [value]="t.gross" blankZero />
+              <v-tile label="Discount" [value]="t.discount" blankZero />
+              <v-tile label="Net invoiced" [value]="t.net" blankZero />
             }
-            <v-tile label="Cost" [value]="r.data.encounter.cost ?? 0" />
+            <v-tile label="Cost" [value]="r.data.encounter.cost ?? 0" blankZero />
           </div>
           <section class="card" style="margin-top:14px"><h2>Invoiced procedures ({{ groups(r.data.lines).length }})</h2>
             <v-table [rows]="groups(r.data.lines)" [columns]="groupCols()" caption="Invoiced procedures" empty="Nothing was invoiced on this encounter." />
@@ -1779,7 +1841,7 @@ export class EncounterDetail {
   res = catalogueResource<PatientEncounterDetailDto>(() => `patient-encounters/${this.id()}`);
   his = catalogueResource<HisEncounterSource>(() => `patient-encounters/${this.id()}/his-source`);
   hisFieldCols: Col<HisEncounterSource['fields'][number]>[] = [
-    { key: 'label', label: 'Field', sortable: false }, { key: 'hisColumn', label: 'HIS table and column', sortable: false }, { key: 'value', label: 'Value', sortable: false, value: r => r.value ?? '' },
+    { key: 'label', label: 'Field', sortable: false }, { key: 'hisColumn', label: 'HIS table and column', sortable: false }, { key: 'value', label: 'Value', sortable: false, value: r => isZero(r.value) ? '' : r.value ?? '' },
   ];
   hisTables(h: HisEncounterSource): { title: string; source: string; rows: any[]; cols: Col<any>[] }[] {
     const tables = [
@@ -1793,15 +1855,23 @@ export class EncounterDetail {
     ];
   }
   private moneyCols = (): Col<any>[] => this.canRevenue() ? [
-    { key: 'gross', label: 'Contracted price', type: 'money' }, { key: 'discount', label: 'Discount', type: 'money' },
+    { key: 'gross', label: 'Contracted price', type: 'money', blankZero: true }, { key: 'discount', label: 'Discount', type: 'money', blankZero: true },
     { key: 'refunds', label: 'Refund', type: 'money', blankZero: true }, { key: 'net', label: 'Net Invoiced', type: 'money', blankZero: true },
   ] : [];
   groupCols = computed<Col<InvoiceGroup>[]>(() => [
+    { key: 'procedureCode', label: 'Procedure code', value: r => r.procedureCode ? hisProcedureId(r.procedureCode) : '—' },
     { key: 'procedure', label: 'Procedure', link: r => r.procedureId ? `/procedures/${r.procedureId}` : null },
-    { key: 'quantity', label: 'Qty', type: 'num', dp: 0 },
+    { key: 'isPackage', label: 'Package', value: r => r.isPackage ? '✓' : '' },
+    { key: 'quantity', label: 'Qty', type: 'num', dp: 0, blankZero: true },
     ...this.moneyCols(),
-    { key: 'cost', label: 'Cost', type: 'money', blankZero: true },
+    { key: 'cost', label: 'Cost', type: 'money', blankZero: true, bad: r => this.canRevenue() && r.cost > r.net },
   ]);
+  /** The invoices behind this encounter's lines, as INV-2-7-1 and REV-2-7-1 both hold invoice 7. */
+  invoiceText(lines: PatientEncounterLine[]): string {
+    const invoices = [...new Set(lines.map(l => /^(?:INV|REV)-\d+-(\d+)-\d+$/i.exec(l.sourceRef)?.[1]).filter(Boolean))].sort((a, b) => Number(a) - Number(b));
+    if (!invoices.length) return '';
+    return ` · ${invoices.length > 1 ? 'Invoices' : 'Invoice'} ${invoices.join(', ')}`;
+  }
   /** The tiles add up the same rows as the table, so the two always agree. */
   totals(lines: PatientEncounterLine[]): { gross: number; discount: number; refunds: number; net: number } {
     const dp4 = (n: number) => Math.round(n * 10000) / 10000;
@@ -1813,8 +1883,9 @@ export class EncounterDetail {
     const map = new Map<string, InvoiceGroup>();
     for (const l of lines) {
       const key = l.procedureId ?? l.procedure ?? l.sourceRef;
-      const g = map.get(key) ?? { key, procedure: l.procedure ?? 'Not linked to a procedure', procedureId: l.procedureId ?? null, quantity: 0, gross: 0, discount: 0, refunds: 0, net: 0, cost: 0 };
+      const g = map.get(key) ?? { key, procedure: l.procedure ?? 'Not linked to a procedure', procedureCode: l.procedureCode ?? null, isPackage: false, procedureId: l.procedureId ?? null, quantity: 0, gross: 0, discount: 0, refunds: 0, net: 0, cost: 0 };
       g.quantity += Number(l.quantity ?? 0);
+      g.isPackage ||= !!l.isPackage;
       // Refunds are negative rows of their own, shown apart from what was charged.
       if (l.sourceRef.toUpperCase().startsWith('REF-')) g.refunds += Number(l.gross ?? 0);
       else g.gross += Number(l.gross ?? 0);

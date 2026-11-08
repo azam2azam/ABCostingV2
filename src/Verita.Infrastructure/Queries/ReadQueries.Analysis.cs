@@ -10,11 +10,17 @@ public sealed partial class ReadQueries
     // ═══ Profitability (FR-5.15 – FR-5.17) ═══════════════════════════════════════════
 
     public static readonly string[] Dimensions =
-        ["hospital", "department", "resource", "serviceLine", "physician", "payer", "procedure", "package", "drg", "encounterType", "segment"];
+        ["hospital", "department", "resource", "serviceLine", "physician", "payer", "insurer", "procedure", "package", "drg", "noBillable", "encounterType", "segment"];
 
     public sealed record ProfitRow(string Key, string Label, int Encounters, decimal Volume, decimal Revenue, decimal Direct, decimal Indirect,
-        decimal Overhead, decimal Total, decimal Contribution, decimal Operating, decimal MarginPct, string? Link);
+        decimal Overhead, decimal Total, decimal Contribution, decimal Operating, decimal MarginPct, string? Link, int? Services = null);
     public sealed record ProfitDto(string Dimension, ProfitRow[] Rows, ProfitRow Total, decimal IdleCapacity, decimal FullCostMargin);
+
+    private async Task<Dictionary<Guid, (string? Id, string? Name)>> InsurerByPayerAsync(CancellationToken ct) =>
+        (await (from p in db.Payers.AsNoTracking()
+                join i in db.Insurers.AsNoTracking() on p.InsurerId equals i.Id
+                select new { p.Id, Insurer = i.Id, i.Name }).ToListAsync(ct))
+        .ToDictionary(x => x.Id, x => ((string?)x.Insurer.ToString(), (string?)x.Name));
 
     public async Task<ProfitDto> ProfitabilityAsync(ScopedRun s, Principal p, string dimension, CancellationToken ct)
     {
@@ -33,6 +39,9 @@ public sealed partial class ReadQueries
                 showRevenue && rev != 0m ? Money.R4((rev - total) / rev * 100m) : 0m, link);
         }
 
+        if (dimension == "noBillable")
+            return await NoBillableAsync(s, (key, label, n, rev, d, i, o) => Make(key, label, n, n, rev, d, i, o, null), idle, showRevenue, ct);
+
         if (dimension == "procedure")
         {
             rows = (await (from pc in db.ProcedureCosts.AsNoTracking()
@@ -48,8 +57,17 @@ public sealed partial class ReadQueries
             {
                 "package" => $"packages/{k}", "drg" => $"drgs/{k}", "resource" => $"resources/{k}", _ => null,
             };
-            var stored = await db.RunDimensionCosts.AsNoTracking().Where(x => x.RunId == rid && (x.Dimension == dimension || x.Dimension == "hospital")).ToListAsync(ct);
-            rows = stored.Where(x => x.Dimension == dimension)
+            var read = dimension == "insurer" ? "payer" : dimension;
+            var stored = await db.RunDimensionCosts.AsNoTracking().Where(x => x.RunId == rid && (x.Dimension == read || x.Dimension == "hospital")).ToListAsync(ct);
+            if (dimension == "insurer")
+            {
+                // An encounter has one payer account, so its insurer's figures are the sum of its accounts.
+                var insurers = await InsurerByPayerAsync(ct);
+                rows = stored.Where(x => x.Dimension == read)
+                    .GroupBy(x => Guid.TryParse(x.Key, out var payer) ? insurers.GetValueOrDefault(payer) : default)
+                    .Select(g => Make(g.Key.Id ?? "", g.Key.Name ?? "Not assigned", g.Sum(x => x.Encounters), g.Sum(x => x.Encounters), g.Sum(x => x.Revenue), g.Sum(x => x.DirectCost), g.Sum(x => x.IndirectCost), g.Sum(x => x.OverheadCost), null)).ToList();
+            }
+            else rows = stored.Where(x => x.Dimension == dimension)
                 .Select(x => Make(x.Key, x.Label, x.Encounters, x.Encounters, x.Revenue, x.DirectCost, x.IndirectCost, x.OverheadCost, StoredLink(x.Key))).ToList();
             // One encounter can sit under several resources, so the total is the run's own.
             if (stored.FirstOrDefault(x => x.Dimension == "hospital") is { } whole)
@@ -59,6 +77,7 @@ public sealed partial class ReadQueries
         {
             var facts = await EncounterFacts(rid, ct);
             var doctorResource = dimension == "resource" ? await db.Providers.AsNoTracking().ToDictionaryAsync(x => x.Id, x => x.ResourceId, ct) : [];
+            var payerInsurer = dimension == "insurer" ? await InsurerByPayerAsync(ct) : [];
             var labels = dimension switch
             {
                 "hospital" => await db.Hospitals.AsNoTracking().ToDictionaryAsync(x => (Guid?)x.Id, x => x.Name, ct),
@@ -67,6 +86,7 @@ public sealed partial class ReadQueries
                 "serviceLine" => await db.ServiceLines.AsNoTracking().ToDictionaryAsync(x => (Guid?)x.Id, x => x.Name, ct),
                 "physician" => await db.Providers.AsNoTracking().ToDictionaryAsync(x => (Guid?)x.Id, x => $"{x.Name} ({x.Specialty})", ct),
                 "payer" => await db.Payers.AsNoTracking().ToDictionaryAsync(x => (Guid?)x.Id, x => x.Name, ct),
+                "insurer" => await db.Insurers.AsNoTracking().ToDictionaryAsync(x => (Guid?)x.Id, x => x.Name, ct),
                 "package" => await db.Packages.AsNoTracking().ToDictionaryAsync(x => (Guid?)x.Id, x => x.Name, ct),
                 "drg" => await db.Drgs.AsNoTracking().ToDictionaryAsync(x => (Guid?)x.Id, x => $"{x.Code} {x.Name}", ct),
                 _ => new Dictionary<Guid?, string>(),
@@ -79,6 +99,7 @@ public sealed partial class ReadQueries
                 "serviceLine" => f => f.ServiceLineId?.ToString() ?? "",
                 "physician" => f => f.ProviderId?.ToString() ?? "",
                 "payer" => f => f.PayerId.ToString(),
+                "insurer" => f => payerInsurer.GetValueOrDefault(f.PayerId).Id ?? "",
                 "package" => f => f.PackageId?.ToString() ?? "",
                 "drg" => f => f.DrgId?.ToString() ?? "",
                 "encounterType" => f => f.EncType,

@@ -29,20 +29,31 @@ public sealed class CostingModelLoader(VeritaDbContext db)
         var start = period.StartDate.ToDateTime(TimeOnly.MinValue);
         var end = period.EndDate.AddDays(1).ToDateTime(TimeOnly.MinValue);
 
-        var encounters = await (from e in db.Encounters.AsNoTracking()
+        // A HIS hospital's run takes the invoices dated in the period that count, whenever the patient was
+        // admitted, and only their lines. Anything else is costed on the encounters admitted in the period.
+        var fromHis = !string.IsNullOrWhiteSpace(hospital.HisSetupId);
+        var counted = db.RevenueTransactions.AsNoTracking().Where(HisInvoiceRules.Counts).Where(r => r.PostedAt >= start && r.PostedAt < end);
+        var inRun = fromHis
+            ? db.Encounters.AsNoTracking().Where(e => e.HospitalId == hid && counted.Any(r => r.EncounterId == e.Id))
+            : db.Encounters.AsNoTracking().Where(e => e.HospitalId == hid && e.AdmitAt >= start && e.AdmitAt < end);
+
+        var encounters = await (from e in inRun
                                 join p in db.Patients on e.PatientId equals p.Id
-                                where e.HospitalId == hid && e.AdmitAt >= start && e.AdmitAt < end
                                 orderby e.EncounterNo
                                 select new ModelEncounter(e.Id, e.DepartmentId, e.ServiceLineId, e.ProviderId, e.PayerId, e.DrgId, e.PackageId, e.EncType, p.Segment, e.LengthOfStay))
             .ToListAsync(ct);
+        var revenue = await (from r in fromHis ? counted : db.RevenueTransactions.AsNoTracking()
+                             join e in inRun on r.EncounterId equals e.Id
+                             select new ModelRevenue(r.EncounterId, r.SourceRef, r.NetAmount, r.HisUnitPrice == 0m)).ToListAsync(ct);
         var lines = await (from s in db.EncounterServices.AsNoTracking()
-                           join e in db.Encounters on s.EncounterId equals e.Id
-                           where e.HospitalId == hid && e.AdmitAt >= start && e.AdmitAt < end
-                           select new ModelLine(s.EncounterId, s.ProcedureId, s.CostCenterId, s.ProviderId, s.Quantity, s.SourceRef)).ToListAsync(ct);
-        var revenue = await (from r in db.RevenueTransactions.AsNoTracking()
-                             join e in db.Encounters on r.EncounterId equals e.Id
-                             where e.HospitalId == hid && e.AdmitAt >= start && e.AdmitAt < end
-                             select new ModelRevenue(r.EncounterId, r.SourceRef, r.NetAmount)).ToListAsync(ct);
+                           join e in inRun on s.EncounterId equals e.Id
+                           select new ModelLine(s.EncounterId, s.ProcedureId, s.CostCenterId, s.ProviderId, s.Quantity, s.SourceRef, false)).ToListAsync(ct);
+        if (fromHis)
+        {
+            var countedLines = revenue.GroupBy(r => (r.EncounterId, CostingModelPipeline.LineRef(r.SourceRef))).ToDictionary(g => g.Key, g => g.Any(r => r.ZeroPrice));
+            lines = lines.Where(l => countedLines.ContainsKey((l.EncounterId, CostingModelPipeline.LineRef(l.SourceRef))))
+                .Select(l => l with { ZeroPrice = countedLines[(l.EncounterId, CostingModelPipeline.LineRef(l.SourceRef))] }).ToList();
+        }
 
         var prices = (await db.ProcedureRates.AsNoTracking().Where(r => r.HospitalId == hid).ToListAsync(ct))
             .Where(r => r.IsEffective(period.EndDate))

@@ -132,6 +132,7 @@ public sealed partial class ReadQueries(VeritaDbContext db, IAuditWriter audit)
         var cost = Money.R4(direct + indirect + overhead);
         var tiles = new List<Tile>
         {
+            new("encounters", "Encounters", encounters, "count", "neutral", "patient-encounters", "Total no. of encounters"),
             new("direct", "Direct cost", direct, "SAR", "lower-better", "procedure-costing", "Contracted price × Margin Cost %"),
             new("indirect", "Indirect cost", indirect, "SAR", "lower-better", "indirect-costing", "Contracted price × Overhead %"),
             new("overheads", "Overheads", overhead, "SAR", "lower-better", "indirect-costing", "Encounter level overheads"),
@@ -139,6 +140,10 @@ public sealed partial class ReadQueries(VeritaDbContext db, IAuditWriter audit)
         if (p.Can("revenue.view"))
         {
             tiles.Add(new("revenue", "Revenue", revenue, "SAR", "higher-better", null, $"{encounters:N0} encounters"));
+        }
+        tiles.Add(new("total", "Total cost", cost, "SAR", "lower-better", null, "Direct + Indirect + Overheads"));
+        if (p.Can("revenue.view"))
+        {
             tiles.Add(new("margin", "Margin", Money.R4(revenue - cost), "SAR", "higher-better", null, $"{Share(revenue - cost, revenue):N1}% of revenue"));
         }
         return new DashboardDto(tiles.ToArray(),

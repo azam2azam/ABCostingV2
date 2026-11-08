@@ -174,6 +174,8 @@ public class RunDimensionCost
     public string Key { get; set; } = "";
     public string Label { get; set; } = "";
     public int Encounters { get; set; }
+    /// <summary>Service lines behind the row, where the dimension counts them.</summary>
+    public int? Services { get; set; }
     public decimal Revenue { get; set; }
     public decimal DirectCost { get; set; }
     public decimal IndirectCost { get; set; }

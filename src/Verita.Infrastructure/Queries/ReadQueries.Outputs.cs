@@ -102,7 +102,7 @@ public sealed partial class ReadQueries
         Dictionary<Guid, int> billed = [];
         if (pkgIds.Count > 0)
         {
-            billed = (await (from es in db.EncounterServices.AsNoTracking()
+            billed = (await (from es in CountedServices(s)
                              join ec in db.EncounterCosts.AsNoTracking() on es.EncounterId equals ec.EncounterId
                              join pr in db.Procedures.AsNoTracking() on es.ProcedureId equals pr.Id
                              join pkg in db.Packages.AsNoTracking() on new { pr.HospitalId, pr.Code } equals new { pkg.HospitalId, pkg.Code }
@@ -258,18 +258,19 @@ public sealed partial class ReadQueries
             .Where(c => c.RunId == s.Run.Id && c.CostType == "ACTUAL")
             .ToDictionaryAsync(c => c.ProcedureId, ct);
         var (periodStart, periodEnd) = (s.Period.StartDate.ToDateTime(TimeOnly.MinValue), s.Period.EndDate.AddDays(1).ToDateTime(TimeOnly.MinValue));
+        var fromHis = FromHis(s);
         var billed = (hasRun
-            ? await (from es in db.EncounterServices.AsNoTracking()
+            ? await (from es in CountedServices(s)
                      join ec in db.EncounterCosts.AsNoTracking() on es.EncounterId equals ec.EncounterId
                      join pr in db.Procedures.AsNoTracking() on es.ProcedureId equals pr.Id
                      join pkg in db.Packages.AsNoTracking() on new { pr.HospitalId, pr.Code } equals new { pkg.HospitalId, pkg.Code }
                      where ec.RunId == s.Run.Id && pkg.HospitalId == s.Hospital.Id
                      select new { pkg.Id, es.Quantity }).ToListAsync(ct)
-            : await (from es in db.EncounterServices.AsNoTracking()
+            : await (from es in CountedServices(s)
                      join e in db.Encounters.AsNoTracking() on es.EncounterId equals e.Id
                      join pr in db.Procedures.AsNoTracking() on es.ProcedureId equals pr.Id
                      join pkg in db.Packages.AsNoTracking() on new { pr.HospitalId, pr.Code } equals new { pkg.HospitalId, pkg.Code }
-                     where e.HospitalId == s.Hospital.Id && e.AdmitAt >= periodStart && e.AdmitAt < periodEnd && pkg.HospitalId == s.Hospital.Id
+                     where e.HospitalId == s.Hospital.Id && (fromHis || (e.AdmitAt >= periodStart && e.AdmitAt < periodEnd)) && pkg.HospitalId == s.Hospital.Id
                      select new { pkg.Id, es.Quantity }).ToListAsync(ct))
             .GroupBy(x => x.Id)
             .ToDictionary(g => g.Key, g => (int)Math.Round(g.Sum(x => x.Quantity), MidpointRounding.AwayFromZero));
@@ -840,13 +841,13 @@ public sealed partial class ReadQueries
     private async Task<decimal?> AverageEncounterFeeAsync(ScopedRun s, Guid packageId, int encounterCount, CancellationToken ct)
     {
         if (encounterCount <= 0) return null;
-        var billedEncounters = from es in db.EncounterServices.AsNoTracking()
+        var billedEncounters = from es in CountedServices(s)
                                join pr in db.Procedures.AsNoTracking() on es.ProcedureId equals pr.Id
                                join pkg in db.Packages.AsNoTracking() on new { pr.HospitalId, pr.Code } equals new { pkg.HospitalId, pkg.Code }
                                join ec in db.EncounterCosts.AsNoTracking() on es.EncounterId equals ec.EncounterId
                                where pkg.Id == packageId && ec.RunId == s.Run.Id
                                select es.EncounterId;
-        var net = await (from rt in db.RevenueTransactions.AsNoTracking()
+        var net = await (from rt in CountedRevenue(s)
                          join pr in db.Procedures.AsNoTracking() on rt.ProcedureId equals pr.Id
                          join pkg in db.Packages.AsNoTracking() on new { pr.HospitalId, pr.Code } equals new { pkg.HospitalId, pkg.Code }
                          where pkg.Id == packageId && billedEncounters.Contains(rt.EncounterId)

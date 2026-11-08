@@ -5,8 +5,8 @@ namespace Verita.Engine;
 
 public sealed record ModelEncounter(Guid Id, Guid DepartmentId, Guid? ServiceLineId, Guid? ProviderId, Guid PayerId, Guid? DrgId, Guid? PackageId,
     string EncType, string Segment, int LengthOfStay);
-public sealed record ModelLine(Guid EncounterId, Guid ProcedureId, Guid CostCenterId, Guid? ProviderId, decimal Quantity, string SourceRef);
-public sealed record ModelRevenue(Guid EncounterId, string SourceRef, decimal Net);
+public sealed record ModelLine(Guid EncounterId, Guid ProcedureId, Guid CostCenterId, Guid? ProviderId, decimal Quantity, string SourceRef, bool ZeroPrice = false);
+public sealed record ModelRevenue(Guid EncounterId, string SourceRef, decimal Net, bool ZeroPrice = false);
 public sealed record ModelProcedure(Guid Id, string Name, bool Medicine, string ProcType, decimal Price);
 public sealed record ModelEncounterOverhead(decimal Pct, decimal Amount);
 
@@ -50,10 +50,14 @@ public sealed class CostingModelContext
 public sealed class CostingModelPipeline(IStageSink sink)
 {
     public const string Method = "COSTING_MODEL";
+    /// <summary>Lines invoiced at no price, by procedure type, with a row for all of them since an encounter can hold several types.</summary>
+    public const string NoBillableDimension = "noBillable";
+    public const string NoBillableTotal = "ALL";
 
     private sealed class Totals
     {
         public HashSet<Guid> Encounters { get; } = [];
+        public int? Services;
         public decimal Revenue, Direct, Indirect, Overhead;
     }
 
@@ -107,8 +111,20 @@ public sealed class CostingModelPipeline(IStageSink sink)
         return o.Amount > 0m ? Math.Min(share, o.Amount) : share;
     }));
 
+    /// <summary>
+    /// What one line costs. A line invoiced at no price takes its fixed Zero Price amount, whatever the
+    /// catalogue price, with no indirect cost and no value for overheads to share by.
+    /// </summary>
+    private static (decimal Direct, decimal Indirect, decimal Value, bool Fixed) LineCost(CostingModelContext ctx, ModelLine line, Dictionary<Guid, decimal> directUnits, Dictionary<Guid, decimal> indirectUnits)
+    {
+        var p = ctx.Procedures.GetValueOrDefault(line.ProcedureId);
+        if (line.ZeroPrice && p is not null && Pct(p, ctx.ZeroFixedItems, ctx.ZeroFixedTypes) is { } amount)
+            return (line.Quantity * amount, 0m, 0m, true);
+        return (line.Quantity * directUnits.GetValueOrDefault(line.ProcedureId), line.Quantity * indirectUnits.GetValueOrDefault(line.ProcedureId), line.Quantity * (p?.Price ?? 0m), false);
+    }
+
     /// <summary>INV-2-7-1 and REV-2-7-1 are the same invoice line.</summary>
-    private static string LineRef(string sourceRef) =>
+    public static string LineRef(string sourceRef) =>
         sourceRef.StartsWith("INV-", StringComparison.OrdinalIgnoreCase) || sourceRef.StartsWith("REV-", StringComparison.OrdinalIgnoreCase)
             ? sourceRef[4..] : sourceRef;
 
@@ -124,21 +140,21 @@ public sealed class CostingModelPipeline(IStageSink sink)
         var direct = await RunStage("DIRECT_COST", _ =>
         {
             var units = ctx.Procedures.Values.ToDictionary(p => p.Id, p => FixedCost(ctx, p) ?? (DirectPct(ctx, p) is { } pct ? Money.R4(p.Price * pct / 100m) : 0m));
-            var total = ctx.Lines.Sum(l => l.Quantity * units.GetValueOrDefault(l.ProcedureId));
+            var total = ctx.Lines.Sum(l => LineCost(ctx, l, units, []).Direct);
             return (units, new StepResult(0, 0m, 0m, "SUCCESS", $"Direct costing under {ctx.CostingVersionCode} comes to {Fmt.Sar(total)}.",
                 new Dictionary<string, object?> { ["direct"] = Money.R4(total) }));
         }, ct);
         var indirect = await RunStage("INDIRECT_COST", _ =>
         {
             var units = ctx.Procedures.Values.ToDictionary(p => p.Id, p => ctx.PackageProcedures.Contains(p.Id) ? 0m : UnitOf(p, ctx.IndirectItems, ctx.IndirectTypes)); // A package carries no indirect cost.
-            var total = ctx.Lines.Sum(l => l.Quantity * units.GetValueOrDefault(l.ProcedureId));
+            var total = ctx.Lines.Sum(l => LineCost(ctx, l, [], units).Indirect);
             return (units, new StepResult(0, 0m, 0m, "SUCCESS", $"Procedure/activity overheads under {ctx.CostingVersionCode} come to {Fmt.Sar(total)}.",
                 new Dictionary<string, object?> { ["indirect"] = Money.R4(total) }));
         }, ct);
         var billed = await RunStage("ENCOUNTER_OVERHEAD", _ =>
         {
             var values = ctx.Encounters.ToDictionary(e => e.Id, e => linesByEncounter.TryGetValue(e.Id, out var lines)
-                ? lines.Sum(l => l.Quantity * (ctx.Procedures.GetValueOrDefault(l.ProcedureId)?.Price ?? 0m)) : 0m);
+                ? lines.Sum(l => LineCost(ctx, l, [], []).Value) : 0m);
             var total = values.Values.Sum(v => OverheadOf(ctx, v));
             return (values, new StepResult(0, 0m, 0m, "SUCCESS", $"Encounter level overheads come to {Fmt.Sar(total)}.",
                 new Dictionary<string, object?> { ["overhead"] = Money.R4(total) }));
@@ -199,6 +215,7 @@ public sealed class CostingModelPipeline(IStageSink sink)
         }
 
         var procedureTotals = new Dictionary<Guid, (decimal Volume, decimal Direct, decimal Indirect, decimal Overhead, decimal Revenue)>();
+        var zeroTotals = new Dictionary<Guid, (decimal Volume, decimal Direct)>();
         foreach (var e in ctx.Encounters)
         {
             var lines = linesByEncounter.GetValueOrDefault(e.Id) ?? [];
@@ -207,12 +224,22 @@ public sealed class CostingModelPipeline(IStageSink sink)
             decimal d = 0m, i = 0m, assignedOverhead = 0m;
             foreach (var line in lines)
             {
-                var lineDirect = line.Quantity * directUnits.GetValueOrDefault(line.ProcedureId);
-                var lineIndirect = line.Quantity * indirectUnits.GetValueOrDefault(line.ProcedureId);
-                var lineValue = line.Quantity * (ctx.Procedures.GetValueOrDefault(line.ProcedureId)?.Price ?? 0m);
+                var (lineDirect, lineIndirect, lineValue, isFixed) = LineCost(ctx, line, directUnits, indirectUnits);
+                if (isFixed)
+                {
+                    var z = zeroTotals.GetValueOrDefault(line.ProcedureId);
+                    zeroTotals[line.ProcedureId] = (z.Volume + line.Quantity, z.Direct + lineDirect);
+                }
                 var lineOverhead = value > 0m ? overhead * (lineValue / value) : 0m;
                 netByLine.Remove((line.EncounterId, LineRef(line.SourceRef)), out var net);
                 d += lineDirect; i += lineIndirect; assignedOverhead += lineOverhead;
+                if (line.ZeroPrice && ctx.Procedures.GetValueOrDefault(line.ProcedureId) is { } zeroPriced)
+                    foreach (var noBillable in new[] { TypeKey(zeroPriced).ToUpperInvariant(), NoBillableTotal })
+                    {
+                        Add(NoBillableDimension, noBillable, e.Id, net, lineDirect, lineIndirect, lineOverhead);
+                        var row = At(NoBillableDimension, noBillable);
+                        row.Services = (row.Services ?? 0) + 1;
+                    }
                 var resource = line.ProviderId is { } doctor && ctx.DoctorResource.GetValueOrDefault(doctor) is { } r ? r.ToString() : "";
                 Add("resource", resource, e.Id, net, lineDirect, lineIndirect, lineOverhead);
                 Add("costCentre", line.CostCenterId.ToString(), e.Id, net, lineDirect, lineIndirect, lineOverhead);
@@ -262,7 +289,7 @@ public sealed class CostingModelPipeline(IStageSink sink)
                 : labels.GetValueOrDefault(dimension)?.GetValueOrDefault(key) ?? key;
             output.DimensionCosts.Add(new RunDimensionCost
             {
-                Id = IdGen.Sequential(), RunId = ctx.RunId, Dimension = dimension, Key = key, Label = label, Encounters = t.Encounters.Count, Revenue = revenue,
+                Id = IdGen.Sequential(), RunId = ctx.RunId, Dimension = dimension, Key = key, Label = label, Encounters = t.Encounters.Count, Services = t.Services, Revenue = revenue,
                 DirectCost = direct, IndirectCost = indirect, OverheadCost = overhead, TotalCost = total, ContributionMargin = Money.R4(revenue - direct - indirect),
                 OperatingMargin = Money.R4(revenue - total), MarginPct = revenue != 0m ? Money.R6((revenue - total) / revenue * 100m) : 0m,
             });
@@ -285,6 +312,12 @@ public sealed class CostingModelPipeline(IStageSink sink)
                 OverheadCost = overhead, TotalCost = total, UnitCost = a.Volume > 0m ? Money.R6(total / a.Volume) : 0m, Revenue = revenue,
                 ContributionMargin = Money.R4(revenue - direct - indirect), OperatingMargin = Money.R4(revenue - total),
             });
+            if (zeroTotals.TryGetValue(p.Id, out var z))
+                output.ProcedureCosts.Add(new ProcedureCost
+                {
+                    Id = IdGen.Sequential(), RunId = ctx.RunId, ProcedureId = p.Id, CostType = "ZERO_PRICE", Volume = Money.R6(z.Volume), DirectCost = Money.R4(z.Direct),
+                    TotalCost = Money.R4(z.Direct), UnitCost = z.Volume > 0m ? Money.R6(z.Direct / z.Volume) : 0m,
+                });
         }
 
         var costs = output.EncounterCosts.ToDictionary(c => c.EncounterId);

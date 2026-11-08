@@ -1,5 +1,5 @@
 import { NgTemplateOutlet } from '@angular/common';
-import { Component, ElementRef, Pipe, PipeTransform, TemplateRef, computed, contentChild, inject, input, model, output, signal } from '@angular/core';
+import { Component, ElementRef, booleanAttribute, Pipe, PipeTransform, TemplateRef, computed, contentChild, inject, input, model, output, signal } from '@angular/core';
 import { RouterLink } from '@angular/router';
 import { Direction, compareDec, directionClass, formatDec, formatMoney } from '../core/decimal';
 import { Icon } from './icon';
@@ -107,7 +107,7 @@ export class Page {
            .tile::before { content: ""; position: absolute; left: 0; top: 14px; bottom: 14px; width: 3px; border-radius: 0 3px 3px 0; background: linear-gradient(var(--accent), var(--accent-strong)); opacity: .8; }
            .tile:hover { box-shadow: var(--shadow); transform: translateY(-1px); }
            .label { color: var(--text-3); font-size: 12px; font-weight: 600; letter-spacing: .04em; text-transform: uppercase; }
-           .value { font-size: 24px; font-weight: 700; letter-spacing: -0.02em; text-align: left; margin-top: 6px; }
+           .value { font-size: 24px; font-weight: 700; letter-spacing: -0.02em; text-align: left; margin-top: 6px; min-height: 1.2em; }
            .value a { color: inherit; }
            .note { color: var(--text-3); font-size: 12.5px; margin-top: 4px; }`,
 })
@@ -118,13 +118,17 @@ export class Tile {
   direction = input<string>('neutral');
   note = input<string | null>(null);
   link = input<string | null>(null);
+  /** Shows nothing when the value is zero. */
+  blankZero = input(false, { transform: booleanAttribute });
   text = computed(() => {
     const v = this.value();
     if (v === null || v === undefined) return '—';
+    if (this.blankZero() && !Number(v)) return '';
     if (this.unit() === 'SAR') {
       const digits = String(v).replace('-', '').split('.')[0].length;
       return digits > 5 ? formatMoney(String(v), { compact: true }) : formatMoney(String(v), { dp: digits > 3 ? 0 : 2 });
     }
+    if (this.unit() === 'id') return String(v);
     if (this.unit() === '%') return `${formatDec(String(v), 1)}%`;
     return formatDec(String(v), 0);
   });
@@ -197,6 +201,12 @@ export interface Col<T = any> {
   /** Shows the cell in red when this is true for the row. */
   bad?: (r: T) => boolean;
   link?: (r: T) => string | null;
+  /** Query parameters to add to the link, for a filtered list. */
+  linkParams?: (r: T) => Record<string, string>;
+  /** Opens from this column's cell in the total row. */
+  totalLink?: string;
+  /** Query parameters to add to the total row's link. */
+  totalLinkParams?: () => Record<string, string> | null;
   sub?: (r: T) => string | null | undefined;
   chip?: (r: T) => string | null;
   button?: (r: T) => string | null;
@@ -278,6 +288,7 @@ export interface Col<T = any> {
                 <td [class.num]="isNum(c)">
                   @if ($first) { Total }
                   @else if (c.type === 'money') { {{ val(c, total()) | money:(c.dp ?? 2) }} }
+                  @else if (c.type === 'num' && c.totalLink) { <a [routerLink]="c.totalLink" [queryParams]="c.totalLinkParams?.() ?? null" queryParamsHandling="merge">{{ val(c, total()) | num:(c.dp ?? 2) }}</a> }
                   @else if (c.type === 'num') { {{ val(c, total()) | num:(c.dp ?? 2) }} }
                   @else if (c.type === 'pct') { {{ val(c, total()) | pct }} }
                 </td>
@@ -291,7 +302,7 @@ export interface Col<T = any> {
       <p class="faint more">Showing {{ limit() }} of {{ sorted().length }} rows. <button class="btn" type="button" (click)="limit.set(limit() + pageSize())">Show {{ pageSize() }} more</button></p>
     }
     <ng-template #linked let-c="c" let-r="r" let-text="text">
-      @if (c.link && c.link(r)) { <a [routerLink]="c.link(r)" queryParamsHandling="preserve" [class]="dirClass(c, r)">{{ text }}</a> }
+      @if (c.link && c.link(r)) { <a [routerLink]="c.link(r)" [queryParams]="c.linkParams?.(r) ?? null" [queryParamsHandling]="c.linkParams ? 'merge' : 'preserve'" [class]="dirClass(c, r)">{{ text }}</a> }
       @else { <span [class]="dirClass(c, r)">{{ text }}</span> }
     </ng-template>
   `,
@@ -466,3 +477,9 @@ export class ListSearch {
 }
 
 export const UI = [Page, Tile, Table, Chip, Bar, Degraded, State, TypeTiles, ListSearch, ...PIPES] as const;
+
+/** A procedure's HIS id: its code without the hospital prefix. */
+export function hisProcedureId(code: string): string {
+  const i = code.indexOf('.');
+  return i >= 0 ? code.slice(i + 1) : code;
+}

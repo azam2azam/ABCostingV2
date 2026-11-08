@@ -6,6 +6,9 @@ import { RunContext, runInFlight } from '../core/context';
 import { runResource } from '../core/resource';
 import { Col, UI } from '../shared/ui';
 
+/** The Patient Encounters filter behind a Dashboard tab, where its name differs. */
+const ENCOUNTER_FILTER: Record<string, string> = { encounterType: 'encType', noBillable: 'noBillableType' };
+
 /** Margin by dimension, computed at read time over the run's encounter costs (FR-5.16). */
 @Component({
   selector: 'v-profit-tables',
@@ -20,6 +23,7 @@ import { Col, UI } from '../shared/ui';
       @if (res.value(); as r) {
         @if (!canRevenue()) { <p class="notice warn">Revenue is masked for your role; margins are not shown.</p> }
         @if (dim() === 'resource') { <p class="muted" style="margin:0 0 10px">By the doctor on each service line. An encounter can appear under several resources, so the Encounters column does not add up to the total.</p> }
+        @if (dim() === 'noBillable' && !$any(r.data.total).services) { <p class="muted" style="margin:0 0 10px">This run holds no non-billable lines. Run the calculation again to fill this list.</p> }
         <v-table [rows]="r.data.rows" [columns]="cols()" [total]="r.data.total" [caption]="'Profitability by ' + dim()" />
       }
     </v-state>
@@ -29,21 +33,34 @@ export class ProfitTables {
   private auth = inject(Auth);
   canRevenue = computed(() => this.auth.can('revenue.view'));
   dims = computed(() => [
-    { key: 'hospital', label: 'Hospital' }, { key: 'serviceLine', label: 'Service line' }, { key: 'department', label: 'Department' },
-    { key: 'resource', label: 'Resources' }, { key: 'physician', label: 'Physician' }, { key: 'payer', label: 'Payer' },
-    { key: 'encounterType', label: 'Encounter type' }, { key: 'segment', label: 'Patient segment' },
+    { key: 'encounterType', label: 'Encounter type' }, { key: 'department', label: 'Department' },
+    { key: 'resource', label: 'Resources' }, { key: 'physician', label: 'Physician' }, { key: 'insurer', label: 'Insurer' },
+    { key: 'segment', label: 'Patient segment' },
+    { key: 'noBillable', label: 'Non-billable' },
   ]);
-  dim = signal('hospital');
+  dim = signal('encounterType');
   res = runResource<ProfitDto>(() => 'profitability', () => ({ dimension: this.dim() }));
   cols = computed<Col[]>(() => {
     const base: Col[] = [
-      { key: 'label', label: this.dims().find(d => d.key === this.dim())?.label ?? 'Item', link: r => r.link ? '/' + r.link : null },
-      { key: 'volume', label: 'Encounters', type: 'num', dp: 0 },
+      { key: 'label', label: this.dim() === 'noBillable' ? 'Procedure type' : this.dims().find(d => d.key === this.dim())?.label ?? 'Item', link: r => r.link ? '/' + r.link : null },
+      {
+        key: 'volume', label: 'Encounters', type: 'num', dp: 0, link: () => '/patient-encounters', totalLink: '/patient-encounters',
+        linkParams: r => ({ [ENCOUNTER_FILTER[this.dim()] ?? this.dim()]: r.key || 'none' }),
+        totalLinkParams: () => this.dim() === 'noBillable' ? { noBillableType: 'ALL' } : null,
+      },
       { key: 'direct', label: 'Direct', type: 'money', dp: 0 },
       { key: 'indirect', label: 'Indirect', type: 'money', dp: 0 },
       { key: 'overhead', label: 'Overhead', type: 'money', dp: 0 },
       { key: 'total', label: 'Total cost', type: 'money', dp: 0 },
     ];
+    if (this.dim() === 'noBillable') {
+      const [type, encounters] = base;
+      return [
+        type, encounters,
+        { key: 'services', label: 'Services', type: 'num', dp: 0 },
+        { key: 'total', label: 'Total cost', type: 'money', dp: 0 },
+      ];
+    }
     if (!this.canRevenue()) return base;
     return [...base,
       { key: 'revenue', label: 'Revenue', type: 'money', dp: 0 },

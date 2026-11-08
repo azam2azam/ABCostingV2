@@ -38,6 +38,7 @@ export const routes: Routes = [
       { path: 'direct-costing', redirectTo: 'procedure-costing' },
       r('runs', exec, 'Runs'), r('runs/:id', exec, 'RunDetail'),
       r('patient-encounters', exec, 'PatientEncounters'), r('patient-encounters/:id', exec, 'EncounterDetail'),
+      r('his-invoicing', exec, 'HisInvoicing'),
       { path: 'patient-costing', redirectTo: 'patient-encounters' }, { path: 'patient-costing/:id', redirectTo: 'patient-encounters/:id' },
       r('reports', analysis, 'Reports'),
       r('audit', analysis, 'Audit', false),

@@ -90,6 +90,7 @@ public static class Security
             new("procedures", "Procedure/Activity", "costing.view", "Standard and actual cost per procedure/activity, fully decomposed into its cost components."),
             new("resources", "Resources", "masterdata.view", "Everything that costs money and is consumed, with effective-dated rates and capacity models."),
             new("patient-encounters", "Patient Encounters", "patient.view", "Patient encounters and what was invoiced for each, with the source reference of every line."),
+            new("his-invoicing", "HIS Invoicing", "revenue.view", "Invoices as held in the HIS."),
         ]),
         new("Configuration", [
             new("periods", "Periods", "costing.view", "The costing periods of the selected hospital, with the run and costing model linked to each."),

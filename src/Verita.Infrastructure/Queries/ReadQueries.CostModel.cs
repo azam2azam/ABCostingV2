@@ -90,7 +90,7 @@ public sealed partial class ReadQueries
     public async Task<CostCentreDetail> CostCentreAsync(ScopedRun s, Principal p, Guid id, CancellationToken ct)
     {
         var row = (await CostCentresAsync(s, p, ct)).FirstOrDefault(c => c.Id == id) ?? throw AppError.NotFound("Cost centre");
-        var billed = await (from es in db.EncounterServices.AsNoTracking()
+        var billed = await (from es in CountedServices(s)
                             join ec in db.EncounterCosts.AsNoTracking() on es.EncounterId equals ec.EncounterId
                             where ec.RunId == s.Run.Id && es.CostCenterId == id
                             group es by es.ProcedureId into g

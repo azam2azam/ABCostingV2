@@ -3036,7 +3036,7 @@ namespace Verita.Infrastructure.Data.Migrations
 
                     b.ToTable("ProcedureCost", null, t =>
                         {
-                            t.HasCheckConstraint("CK_ProcedureCost_CostType", "[CostType] IN (N'STANDARD', N'ACTUAL', N'BUDGET', N'FORECAST', N'TARGET')");
+                            t.HasCheckConstraint("CK_ProcedureCost_CostType", "[CostType] IN (N'STANDARD', N'ACTUAL', N'BUDGET', N'FORECAST', N'TARGET', N'ZERO_PRICE')");
                         });
                 });
 
@@ -4089,6 +4089,9 @@ namespace Verita.Infrastructure.Data.Migrations
 
                     b.Property<Guid>("RunId")
                         .HasColumnType("uniqueidentifier");
+
+                    b.Property<int?>("Services")
+                        .HasColumnType("int");
 
                     b.Property<decimal>("TotalCost")
                         .HasPrecision(19, 4)

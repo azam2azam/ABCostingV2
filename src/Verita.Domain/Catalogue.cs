@@ -77,7 +77,7 @@ public static class Catalogue
     public static readonly string[] EncTypes = ["IP", "OP", "ER", "DAYCASE"];
     public static readonly string[] PayerTypes = ["GOVERNMENT", "INSURANCE", "CORPORATE", "SELF_PAY"];
     public static readonly string[] PatientSegments = ["PEDIATRIC", "ADULT", "GERIATRIC", "MATERNITY"];
-    public static readonly string[] CostTypes = ["STANDARD", "ACTUAL", "BUDGET", "FORECAST", "TARGET"];
+    public static readonly string[] CostTypes = ["STANDARD", "ACTUAL", "BUDGET", "FORECAST", "TARGET", "ZERO_PRICE"];
     public static readonly string[] RecordStatuses = ["DRAFT", "REVIEW", "APPROVED", "PUBLISHED", "RETIRED"];
     public static readonly string[] VersionStatuses = ["DRAFT", "REVIEW", "FINANCE_APPROVED", "CLINICAL_APPROVED", "PUBLISHED", "RETIRED"];
     public static readonly string[] Baselines = ["STANDARD", "BUDGET", "FORECAST", "TARGET", "PRIOR_PERIOD"];

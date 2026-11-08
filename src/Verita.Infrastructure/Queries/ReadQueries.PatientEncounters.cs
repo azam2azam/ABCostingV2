@@ -1,11 +1,90 @@
 using Microsoft.EntityFrameworkCore;
 using Verita.Application;
 using Verita.Domain;
+using Verita.Domain.Entities;
+using Verita.Engine;
+using Verita.Infrastructure.Runs;
 
 namespace Verita.Infrastructure.Queries;
 
 public sealed partial class ReadQueries
 {
+    // ═══ HIS invoicing: invoice counts by HIS invoice type, child invoices included ═══
+
+    public sealed record HisInvoiceTypeCount(int? InvoiceType, string Name, int Invoices, int Encounters, int Patients, decimal Revenue);
+    public sealed record HisInvoicingDto(long? MinInvoiceNo, long? MaxInvoiceNo, HisInvoiceTypeCount[] Types, HisInvoiceTypeCount? Total);
+    private sealed record HisInvoiceTypeRaw(int? InvoiceType, int Invoices, int Encounters, int Patients, decimal? Revenue, long? MinInvoiceNo, long? MaxInvoiceNo);
+
+    public async Task<HisInvoicingDto> HisInvoicingAsync(ScopedRun s, CancellationToken ct)
+    {
+        var start = s.Period.StartDate.ToDateTime(TimeOnly.MinValue);
+        var end = s.Period.EndDate.AddDays(1).ToDateTime(TimeOnly.MinValue);
+        // SourceRef is REV-{transactionType}-{invoiceNo}-{line}; dropping the line leaves the invoice.
+        // The same lines a run counts: see HisInvoiceRules.
+        // ROLLUP adds the total as a row with no type. Its counts are distinct, not the sum of the
+        // rows, because a patient can have invoices of both types.
+        var rows = await db.Database.SqlQuery<HisInvoiceTypeRaw>($"""
+            SELECT t.HisInvoiceType AS InvoiceType,
+                   COUNT(DISTINCT LEFT(t.SourceRef, LEN(t.SourceRef) - CHARINDEX('-', REVERSE(t.SourceRef)))) AS Invoices,
+                   COUNT(DISTINCT t.EncounterId) AS Encounters,
+                   COUNT(DISTINCT e.PatientId) AS Patients,
+                   SUM(t.NetAmount) AS Revenue,
+                   MIN(TRY_CAST(PARSENAME(REPLACE(t.SourceRef, '-', '.'), 2) AS bigint)) AS MinInvoiceNo,
+                   MAX(TRY_CAST(PARSENAME(REPLACE(t.SourceRef, '-', '.'), 2) AS bigint)) AS MaxInvoiceNo
+            FROM RevenueTransaction t
+            INNER JOIN Encounter e ON e.Id = t.EncounterId
+            WHERE e.HospitalId = {s.Hospital.Id} AND t.PostedAt >= {start} AND t.PostedAt < {end}
+              AND t.HisLineStatus = 2 AND t.HisInvoiceType IN (1, 75)
+            GROUP BY ROLLUP(t.HisInvoiceType)
+            """).ToListAsync(ct);
+        var types = rows.Where(x => x.InvoiceType is not null).OrderBy(x => x.InvoiceType)
+            .Select(x => new HisInvoiceTypeCount(x.InvoiceType, x.InvoiceType switch
+            {
+                1 => "Outpatient",
+                _ => "Inpatient",
+            }, x.Invoices, x.Encounters, x.Patients, x.Revenue ?? 0m)).ToArray();
+        var whole = rows.FirstOrDefault(x => x.InvoiceType is null);
+        return new HisInvoicingDto(whole?.MinInvoiceNo, whole?.MaxInvoiceNo, types,
+            types.Length == 0 || whole is null ? null : new HisInvoiceTypeCount(null, "", whole.Invoices, whole.Encounters, whole.Patients, whole.Revenue ?? 0m));
+    }
+
+    // ═══ No-billable: invoice lines the period counts that carry no price, by procedure type ═══
+
+    private const string MedicineType = "MEDICINE";
+    private static readonly string[] NoBillableTypes = ["CONSULT", "IMAGING", "LAB", "PROCEDURE", MedicineType];
+
+    private IQueryable<RevenueTransaction> NoBillableLines(ScopedRun s)
+    {
+        var start = s.Period.StartDate.ToDateTime(TimeOnly.MinValue);
+        var end = s.Period.EndDate.AddDays(1).ToDateTime(TimeOnly.MinValue);
+        // A line with no procedure is left out: it has no service to cost.
+        return CountedRevenue(s).Where(r => r.HisUnitPrice == 0m && r.ProcedureId != null && r.PostedAt >= start && r.PostedAt < end);
+    }
+
+    /// <summary>Prepared by the run: read, never re-added. A run from before this was stored holds none, and shows empty until it is run again.</summary>
+    private async Task<ProfitDto> NoBillableAsync(ScopedRun s, Func<string, string, int, decimal, decimal, decimal, decimal, ProfitRow> make, decimal idle, bool showRevenue, CancellationToken ct)
+    {
+        var stored = await db.RunDimensionCosts.AsNoTracking().Where(x => x.RunId == s.Run.Id && x.Dimension == CostingModelPipeline.NoBillableDimension).ToListAsync(ct);
+        ProfitRow Row(string key, string label)
+        {
+            var x = stored.FirstOrDefault(r => r.Key == key);
+            return make(key, label, x?.Encounters ?? 0, x?.Revenue ?? 0m, x?.DirectCost ?? 0m, x?.IndirectCost ?? 0m, x?.OverheadCost ?? 0m) with { Services = x?.Services ?? 0 };
+        }
+        var others = stored.Select(x => x.Key).Where(k => k != CostingModelPipeline.NoBillableTotal).Except(NoBillableTypes).Order();
+        var rows = NoBillableTypes.Concat(others).Select(type => Row(type, type[0] + type[1..].ToLowerInvariant())).ToArray();
+        var total = Row(CostingModelPipeline.NoBillableTotal, "Total");
+        return new ProfitDto(CostingModelPipeline.NoBillableDimension, rows, total, idle, showRevenue ? Money.R4(total.Operating - idle) : 0m);
+    }
+
+    private IQueryable<EncounterBase> WithNoBillableType(IQueryable<EncounterBase> query, ScopedRun s, string type)
+    {
+        var lines = NoBillableLines(s);
+        if (type.Equals(CostingModelPipeline.NoBillableTotal, StringComparison.OrdinalIgnoreCase)) return query.Where(x => lines.Any(r => r.EncounterId == x.Id));
+        return type.Equals(MedicineType, StringComparison.OrdinalIgnoreCase)
+            ? query.Where(x => lines.Any(r => r.EncounterId == x.Id && db.Procedures.Any(pr => pr.Id == r.ProcedureId && pr.Category == MedicineType)))
+            : query.Where(x => lines.Any(r => r.EncounterId == x.Id && db.Procedures.Any(pr => pr.Id == r.ProcedureId && (pr.Category == null || pr.Category != MedicineType) && pr.ProcType == type)));
+    }
+
     // ═══ Patient encounters: the catalogue of visits and what was invoiced, no costing or run ═══
 
     public sealed class PatientEncounterQuery
@@ -24,6 +103,9 @@ public sealed partial class ReadQueries
         public string? Resource { get; init; }
         public string? Physician { get; init; }
         public string? Payer { get; init; }
+        public string? Insurer { get; init; }
+        /// <summary>Encounters holding a zero-price line of this procedure type.</summary>
+        public string? NoBillableType { get; init; }
         public string? Drg { get; init; }
         public string? Segment { get; init; }
     }
@@ -31,13 +113,13 @@ public sealed partial class ReadQueries
     public const string NotAssigned = "none";
     public sealed record FilterOption(string Value, string Label);
     public sealed record PatientEncounterFilters(FilterOption[] ServiceLines, FilterOption[] Departments, FilterOption[] Resources, FilterOption[] Physicians,
-        FilterOption[] Payers, FilterOption[] Drgs, FilterOption[] EncounterTypes, FilterOption[] Segments);
+        FilterOption[] Payers, FilterOption[] Insurers, FilterOption[] Drgs, FilterOption[] EncounterTypes, FilterOption[] Segments);
 
     public sealed record PatientEncounterRow(Guid Id, string EncounterNo, string Mrn, string Patient, string Segment, string EncType, string Department,
-        string Payer, string? Physician, DateTime AdmitAt, DateTime? DischargeAt, int LengthOfStay, int Services, decimal Gross, decimal Discount, decimal Net, decimal? Cost = null);
+        string Payer, string? Insurer, string? Physician, DateTime AdmitAt, DateTime? DischargeAt, int LengthOfStay, int Services, decimal Gross, decimal Discount, decimal Net, decimal? Cost = null);
     public sealed record PatientEncounterPage(PatientEncounterRow[] Rows, int Total, int Page, int PageSize, bool PhiMasked);
     public sealed record PatientEncounterLine(string? Procedure, Guid? ProcedureId, decimal? Quantity, string? CostCentre, string? Physician, string? Payer,
-        DateTime? PerformedAt, decimal? Gross, decimal? Discount, decimal? Net, string SourceRef, decimal? Cost = null);
+        DateTime? PerformedAt, decimal? Gross, decimal? Discount, decimal? Net, string SourceRef, decimal? Cost = null, string? ProcedureCode = null, bool IsPackage = false);
     public sealed record PatientEncounterDetail(PatientEncounterRow Encounter, PatientEncounterLine[] Lines);
 
     // Properties, not a constructor: EF has to filter and sort on these after the projection.
@@ -62,9 +144,60 @@ public sealed partial class ReadQueries
         public string? Resource { get; init; }
         public Guid? ProviderId { get; init; }
         public Guid PayerId { get; init; }
+        public Guid? InsurerId { get; init; }
+        public string? InsurerName { get; init; }
         public Guid? DrgId { get; init; }
         public string? DrgCode { get; init; }
         public string? DrgName { get; init; }
+    }
+
+    // HIS Invoicing is the source of truth for a HIS hospital: what a period holds is its counted invoice
+    // lines, whenever the patient was admitted. Other hospitals keep the encounters admitted in the period.
+    private static bool FromHis(ScopedRun s) => !string.IsNullOrWhiteSpace(s.Hospital.HisSetupId);
+
+    private IQueryable<RevenueTransaction> CountedRevenue(ScopedRun s)
+    {
+        if (!FromHis(s)) return db.RevenueTransactions.AsNoTracking();
+        var start = s.Period.StartDate.ToDateTime(TimeOnly.MinValue);
+        var end = s.Period.EndDate.AddDays(1).ToDateTime(TimeOnly.MinValue);
+        return db.RevenueTransactions.AsNoTracking().Where(HisInvoiceRules.Counts).Where(r => r.PostedAt >= start && r.PostedAt < end);
+    }
+
+    /// <summary>INV-2-7-1 and REV-2-7-1 are the same invoice line, so a service counts when its revenue line does.</summary>
+    private IQueryable<EncounterService> CountedServices(ScopedRun s)
+    {
+        if (!FromHis(s)) return db.EncounterServices.AsNoTracking();
+        var counted = CountedRevenue(s);
+        return db.EncounterServices.AsNoTracking()
+            .Where(x => counted.Any(r => r.EncounterId == x.EncounterId && r.SourceRef.Substring(4) == x.SourceRef.Substring(4)));
+    }
+
+    private IQueryable<EncounterBase> InPeriod(IQueryable<EncounterBase> query, ScopedRun s)
+    {
+        if (FromHis(s))
+        {
+            var counted = CountedRevenue(s);
+            return query.Where(x => counted.Any(r => r.EncounterId == x.Id));
+        }
+        var start = s.Period.StartDate.ToDateTime(TimeOnly.MinValue);
+        var end = s.Period.EndDate.AddDays(1).ToDateTime(TimeOnly.MinValue);
+        return query.Where(x => x.AdmitAt >= start && x.AdmitAt < end);
+    }
+
+    /// <summary>
+    /// A costing-model run files an encounter under the resource of each line's doctor, so one encounter can
+    /// sit under several resources. Not assigned holds lines with no such doctor and revenue with no service.
+    /// </summary>
+    private IQueryable<EncounterBase> ByLineResource(IQueryable<EncounterBase> query, ScopedRun s, string? resource)
+    {
+        var services = CountedServices(s);
+        if (Parse(resource) is { } id)
+            return query.Where(x => services.Any(v => v.EncounterId == x.Id && db.Providers.Any(d => d.Id == v.ProviderId && d.ResourceId == id)));
+        if (resource != NotAssigned) return query;
+        var revenue = CountedRevenue(s);
+        return query.Where(x => !services.Any(v => v.EncounterId == x.Id)
+            || services.Any(v => v.EncounterId == x.Id && !db.Providers.Any(d => d.Id == v.ProviderId && d.ResourceId != null))
+            || revenue.Any(r => r.EncounterId == x.Id && !services.Any(v => v.EncounterId == x.Id && v.SourceRef.Substring(4) == r.SourceRef.Substring(4))));
     }
 
     private IQueryable<EncounterBase> EncounterBases(ScopedRun s, Principal p, IReadOnlyDictionary<Guid, string> deptCodes)
@@ -81,13 +214,15 @@ public sealed partial class ReadQueries
                     from sl in slj.DefaultIfEmpty()
                     join g in db.Drgs on e.DrgId equals g.Id into gj
                     from g in gj.DefaultIfEmpty()
+                    join ins in db.Insurers on py.InsurerId equals ins.Id into insj
+                    from ins in insj.DefaultIfEmpty()
                     where e.HospitalId == s.Hospital.Id
                     select new EncounterBase
                     {
                         Id = e.Id, EncounterNo = e.EncounterNo, Mrn = pt.Mrn, FullName = pt.FullName, Segment = pt.Segment, EncType = e.EncType, Department = d.Name, Payer = py.Name,
                         Physician = pr != null ? pr.Name : null, AdmitAt = e.AdmitAt, DischargeAt = e.DischargeAt, LengthOfStay = e.LengthOfStay, DepartmentId = e.DepartmentId,
                         ServiceLineId = e.ServiceLineId, ServiceLine = sl != null ? sl.Name : null, ResourceId = pr != null ? pr.ResourceId : null, Resource = rs != null ? rs.Name : null,
-                        ProviderId = e.ProviderId, PayerId = e.PayerId, DrgId = e.DrgId, DrgCode = g != null ? g.Code : null, DrgName = g != null ? g.Name : null,
+                        ProviderId = e.ProviderId, PayerId = e.PayerId, InsurerId = py.InsurerId, InsurerName = ins != null ? ins.Name : null, DrgId = e.DrgId, DrgCode = g != null ? g.Code : null, DrgName = g != null ? g.Name : null,
                     };
         if (!p.AllDepartments)
         {
@@ -97,16 +232,16 @@ public sealed partial class ReadQueries
         return query;
     }
 
-    private async Task<PatientEncounterRow[]> EncounterRowsAsync(IReadOnlyList<EncounterBase> rows, Guid runId, Principal p, CancellationToken ct)
+    private async Task<PatientEncounterRow[]> EncounterRowsAsync(IReadOnlyList<EncounterBase> rows, ScopedRun s, Principal p, CancellationToken ct)
     {
         var ids = rows.Select(x => x.Id).ToList();
         // Cost is what the run stored; a period with no run has none.
-        var costs = await db.EncounterCosts.AsNoTracking().Where(x => x.RunId == runId && ids.Contains(x.EncounterId))
+        var costs = await db.EncounterCosts.AsNoTracking().Where(x => x.RunId == s.Run.Id && ids.Contains(x.EncounterId))
             .ToDictionaryAsync(x => x.EncounterId, x => x.TotalCost, ct);
-        var services = await db.EncounterServices.AsNoTracking().Where(x => ids.Contains(x.EncounterId))
+        var services = await CountedServices(s).Where(x => ids.Contains(x.EncounterId))
             .GroupBy(x => x.EncounterId).Select(g => new { g.Key, N = g.Count() }).ToDictionaryAsync(x => x.Key, x => x.N, ct);
         var billed = p.Can("revenue.view")
-            ? await db.RevenueTransactions.AsNoTracking().Where(x => ids.Contains(x.EncounterId)).GroupBy(x => x.EncounterId)
+            ? await CountedRevenue(s).Where(x => ids.Contains(x.EncounterId)).GroupBy(x => x.EncounterId)
                 .Select(g => new { g.Key, Gross = g.Sum(x => x.GrossAmount), Discount = g.Sum(x => x.Discount), Net = g.Sum(x => x.NetAmount) })
                 .ToDictionaryAsync(x => x.Key, x => (x.Gross, x.Discount, x.Net), ct)
             : [];
@@ -115,7 +250,7 @@ public sealed partial class ReadQueries
         {
             var b = billed.GetValueOrDefault(x.Id);
             return new PatientEncounterRow(x.Id, x.EncounterNo, x.Mrn, phi ? x.FullName : Security.MaskName(x.FullName),
-                x.Segment, x.EncType, x.Department, x.Payer, x.Physician, x.AdmitAt, x.DischargeAt, x.LengthOfStay, services.GetValueOrDefault(x.Id), b.Gross, b.Discount, b.Net,
+                x.Segment, x.EncType, x.Department, x.Payer, x.InsurerName, x.Physician, x.AdmitAt, x.DischargeAt, x.LengthOfStay, services.GetValueOrDefault(x.Id), b.Gross, b.Discount, b.Net,
                 costs.TryGetValue(x.Id, out var cost) ? cost : null);
         }).ToArray();
     }
@@ -123,9 +258,7 @@ public sealed partial class ReadQueries
     public async Task<PatientEncounterPage> PatientEncountersAsync(ScopedRun s, Principal p, PatientEncounterQuery q, CancellationToken ct)
     {
         var deptCodes = await db.Departments.AsNoTracking().ToDictionaryAsync(d => d.Id, d => d.CatalogCode, ct);
-        var start = s.Period.StartDate.ToDateTime(TimeOnly.MinValue);
-        var end = s.Period.EndDate.AddDays(1).ToDateTime(TimeOnly.MinValue);
-        var query = EncounterBases(s, p, deptCodes).Where(x => x.AdmitAt >= start && x.AdmitAt < end);
+        var query = InPeriod(EncounterBases(s, p, deptCodes), s);
         if (!string.IsNullOrWhiteSpace(q.Search))
         {
             var term = q.Search.Trim();
@@ -135,17 +268,21 @@ public sealed partial class ReadQueries
         if (!string.IsNullOrWhiteSpace(q.Segment)) query = query.Where(x => x.Segment == q.Segment);
         if (Parse(q.Department) is { } department) query = query.Where(x => x.DepartmentId == department);
         if (Parse(q.Payer) is { } payer) query = query.Where(x => x.PayerId == payer);
+        if (q.Insurer == NotAssigned) query = query.Where(x => x.InsurerId == null);
+        else if (Parse(q.Insurer) is { } insurer) query = query.Where(x => x.InsurerId == insurer);
         if (q.ServiceLine == NotAssigned) query = query.Where(x => x.ServiceLineId == null);
         else if (Parse(q.ServiceLine) is { } serviceLine) query = query.Where(x => x.ServiceLineId == serviceLine);
-        if (q.Resource == NotAssigned) query = query.Where(x => x.ResourceId == null);
+        if (s.Run.CostingMethod == CostingModelPipeline.Method) query = ByLineResource(query, s, q.Resource);
+        else if (q.Resource == NotAssigned) query = query.Where(x => x.ResourceId == null);
         else if (Parse(q.Resource) is { } resource) query = query.Where(x => x.ResourceId == resource);
         if (q.Physician == NotAssigned) query = query.Where(x => x.ProviderId == null);
         else if (Parse(q.Physician) is { } physician) query = query.Where(x => x.ProviderId == physician);
         if (q.Drg == NotAssigned) query = query.Where(x => x.DrgId == null);
         else if (Parse(q.Drg) is { } drg) query = query.Where(x => x.DrgId == drg);
+        if (!string.IsNullOrWhiteSpace(q.NoBillableType)) query = WithNoBillableType(query, s, q.NoBillableType);
         if (q.BilledPackageId is { } billedPackage)
         {
-            var billedEncounters = from es in db.EncounterServices.AsNoTracking()
+            var billedEncounters = from es in CountedServices(s)
                                    join pr in db.Procedures.AsNoTracking() on es.ProcedureId equals pr.Id
                                    join pk in db.Packages.AsNoTracking() on new { pr.HospitalId, pr.Code } equals new { pk.HospitalId, pk.Code }
                                    where pk.Id == billedPackage
@@ -155,6 +292,8 @@ public sealed partial class ReadQueries
         // Sorting by an amount the caller cannot see would reveal it, so that falls back to admission.
         var money = q.Sort is "gross" or "discount" or "net";
         var sort = money && !p.Can("revenue.view") ? "admitAt" : q.Sort;
+        var countedServices = CountedServices(s);
+        var countedRevenue = CountedRevenue(s);
         IQueryable<EncounterBase> By<TKey>(System.Linq.Expressions.Expression<Func<EncounterBase, TKey>> key) =>
             (q.Desc ? query.OrderByDescending(key) : query.OrderBy(key)).ThenByDescending(x => x.AdmitAt).ThenBy(x => x.EncounterNo);
         query = sort switch
@@ -164,12 +303,13 @@ public sealed partial class ReadQueries
             "encType" => By(x => x.EncType),
             "department" => By(x => x.Department),
             "payer" => By(x => x.Payer),
+            "insurer" => By(x => x.InsurerName),
             "physician" => By(x => x.Physician),
             "lengthOfStay" => By(x => x.LengthOfStay),
-            "services" => By(x => db.EncounterServices.Count(t => t.EncounterId == x.Id)),
-            "gross" => By(x => db.RevenueTransactions.Where(t => t.EncounterId == x.Id).Sum(t => (decimal?)t.GrossAmount) ?? 0m),
-            "discount" => By(x => db.RevenueTransactions.Where(t => t.EncounterId == x.Id).Sum(t => (decimal?)t.Discount) ?? 0m),
-            "net" => By(x => db.RevenueTransactions.Where(t => t.EncounterId == x.Id).Sum(t => (decimal?)t.NetAmount) ?? 0m),
+            "services" => By(x => countedServices.Count(t => t.EncounterId == x.Id)),
+            "gross" => By(x => countedRevenue.Where(t => t.EncounterId == x.Id).Sum(t => (decimal?)t.GrossAmount) ?? 0m),
+            "discount" => By(x => countedRevenue.Where(t => t.EncounterId == x.Id).Sum(t => (decimal?)t.Discount) ?? 0m),
+            "net" => By(x => countedRevenue.Where(t => t.EncounterId == x.Id).Sum(t => (decimal?)t.NetAmount) ?? 0m),
             "cost" => By(x => db.EncounterCosts.Where(t => t.EncounterId == x.Id && t.RunId == s.Run.Id).Sum(t => (decimal?)t.TotalCost) ?? 0m),
             _ => By(x => x.AdmitAt),
         };
@@ -177,7 +317,7 @@ public sealed partial class ReadQueries
         var size = Math.Clamp(q.PageSize, 1, 2000);
         var page = Math.Max(q.Page, 1);
         var rows = await query.Skip((page - 1) * size).Take(size).ToListAsync(ct);
-        var result = await EncounterRowsAsync(rows, s.Run.Id, p, ct);
+        var result = await EncounterRowsAsync(rows, s, p, ct);
         var phi = p.Can("phi.view");
         // FR-0.8: unmasked access to identifiable records is audited. Every role sees the MRN here.
         if (result.Length > 0)
@@ -192,9 +332,7 @@ public sealed partial class ReadQueries
     public async Task<PatientEncounterFilters> PatientEncounterFiltersAsync(ScopedRun s, Principal p, CancellationToken ct)
     {
         var deptCodes = await db.Departments.AsNoTracking().ToDictionaryAsync(d => d.Id, d => d.CatalogCode, ct);
-        var start = s.Period.StartDate.ToDateTime(TimeOnly.MinValue);
-        var end = s.Period.EndDate.AddDays(1).ToDateTime(TimeOnly.MinValue);
-        var q = EncounterBases(s, p, deptCodes).Where(x => x.AdmitAt >= start && x.AdmitAt < end);
+        var q = InPeriod(EncounterBases(s, p, deptCodes), s);
         static FilterOption[] Options(IEnumerable<(string? Value, string? Label)> rows, bool notAssigned = false)
         {
             var list = rows.Where(x => !string.IsNullOrEmpty(x.Value)).Select(x => new FilterOption(x.Value!, x.Label ?? x.Value!))
@@ -202,14 +340,25 @@ public sealed partial class ReadQueries
             if (notAssigned && rows.Any(x => string.IsNullOrEmpty(x.Value))) list.Insert(0, new FilterOption(NotAssigned, "Not assigned"));
             return list.ToArray();
         }
-        var serviceLines = await q.Select(x => new { x.ServiceLineId, x.ServiceLine }).Distinct().ToListAsync(ct);
-        var departments = await q.Select(x => new { x.DepartmentId, x.Department }).Distinct().ToListAsync(ct);
-        var resources = await q.Select(x => new { x.ResourceId, x.Resource }).Distinct().ToListAsync(ct);
-        var physicians = await q.Select(x => new { x.ProviderId, x.Physician }).Distinct().ToListAsync(ct);
-        var payers = await q.Select(x => new { x.PayerId, x.Payer }).Distinct().ToListAsync(ct);
-        var drgs = await q.Select(x => new { x.DrgId, x.DrgCode, x.DrgName }).Distinct().ToListAsync(ct);
-        var types = await q.Select(x => x.EncType).Distinct().ToListAsync(ct);
-        var segments = await q.Select(x => x.Segment).Distinct().ToListAsync(ct);
+        // One read instead of one per filter: this list is what a filtered link waits on.
+        var held = await q.Select(x => new
+        {
+            x.ServiceLineId, x.ServiceLine, x.DepartmentId, x.Department, x.ResourceId, x.Resource, x.ProviderId, x.Physician, x.PayerId, x.Payer,
+            x.InsurerId, x.InsurerName, x.DrgId, x.DrgCode, x.DrgName, x.EncType, x.Segment,
+        }).Distinct().ToListAsync(ct);
+        var serviceLines = held.Select(x => new { x.ServiceLineId, x.ServiceLine }).Distinct().ToList();
+        var departments = held.Select(x => new { x.DepartmentId, x.Department }).Distinct().ToList();
+        // A costing-model run files encounters by each line's doctor, so its own rows are the choices.
+        var resources = s.Run.CostingMethod == CostingModelPipeline.Method
+            ? (await db.RunDimensionCosts.AsNoTracking().Where(x => x.RunId == s.Run.Id && x.Dimension == "resource").Select(x => new { x.Key, x.Label }).ToListAsync(ct))
+                .Select(x => new { ResourceId = Guid.TryParse(x.Key, out var id) ? id : (Guid?)null, Resource = (string?)x.Label }).ToList()
+            : held.Select(x => new { x.ResourceId, x.Resource }).Distinct().ToList();
+        var physicians = held.Select(x => new { x.ProviderId, x.Physician }).Distinct().ToList();
+        var payers = held.Select(x => new { x.PayerId, x.Payer }).Distinct().ToList();
+        var insurers = held.Select(x => new { x.InsurerId, x.InsurerName }).Distinct().ToList();
+        var drgs = held.Select(x => new { x.DrgId, x.DrgCode, x.DrgName }).Distinct().ToList();
+        var types = held.Select(x => x.EncType).Distinct().ToList();
+        var segments = held.Select(x => x.Segment).Distinct().ToList();
         var anyDrg = drgs.Any(x => x.DrgId != null);
         return new PatientEncounterFilters(
             Options(serviceLines.Select(x => (x.ServiceLineId?.ToString(), x.ServiceLine)), true),
@@ -217,6 +366,7 @@ public sealed partial class ReadQueries
             Options(resources.Select(x => (x.ResourceId?.ToString(), x.Resource)), true),
             Options(physicians.Select(x => (x.ProviderId?.ToString(), x.Physician)), true),
             Options(payers.Select(x => ((string?)x.PayerId.ToString(), (string?)x.Payer))),
+            Options(insurers.Select(x => (x.InsurerId?.ToString(), x.InsurerName)), true),
             anyDrg ? Options(drgs.Select(x => (x.DrgId?.ToString(), x.DrgCode is null ? null : $"{x.DrgCode} {x.DrgName}")), true) : [],
             Options(types.Select(x => ((string?)x, (string?)x))),
             Options(segments.Select(x => ((string?)x, (string?)x))));
@@ -231,9 +381,9 @@ public sealed partial class ReadQueries
     {
         var deptCodes = await db.Departments.AsNoTracking().ToDictionaryAsync(d => d.Id, d => d.CatalogCode, ct);
         var row = await EncounterBases(s, p, deptCodes).FirstOrDefaultAsync(x => x.Id == id, ct) ?? throw AppError.NotFound("Encounter");
-        var encounter = (await EncounterRowsAsync([row], s.Run.Id, p, ct))[0];
+        var encounter = (await EncounterRowsAsync([row], s, p, ct))[0];
 
-        var services = await (from sv in db.EncounterServices.AsNoTracking()
+        var services = await (from sv in CountedServices(s)
                               join pr in db.Procedures on sv.ProcedureId equals pr.Id
                               join c in db.CostCenters on sv.CostCenterId equals c.Id
                               join doc in db.Providers on sv.ProviderId equals doc.Id into dj
@@ -242,26 +392,37 @@ public sealed partial class ReadQueries
                               orderby sv.PerformedAt
                               select new { pr.Name, sv.ProcedureId, sv.Quantity, CostCentre = c.Name, Doctor = doc != null ? doc.Name : null, sv.PerformedAt, sv.SourceRef }).ToListAsync(ct);
         var invoiced = p.Can("revenue.view")
-            ? await (from r in db.RevenueTransactions.AsNoTracking()
+            ? await (from r in CountedRevenue(s)
                      join py in db.Payers on r.PayerId equals py.Id
                      join pr in db.Procedures on r.ProcedureId equals pr.Id into pj
                      from pr in pj.DefaultIfEmpty()
                      where r.EncounterId == id
-                     select new { Procedure = pr != null ? pr.Name : null, r.ProcedureId, Payer = py.Name, r.GrossAmount, r.Discount, r.NetAmount, r.PostedAt, r.SourceRef }).ToListAsync(ct)
+                     select new { Procedure = pr != null ? pr.Name : null, r.ProcedureId, Payer = py.Name, r.GrossAmount, r.Discount, r.NetAmount, r.PostedAt, r.SourceRef, IsPackage = r.IsPackageSelected == true }).ToListAsync(ct)
             : [];
         var byLine = invoiced.GroupBy(x => InvoiceLineKey(x.SourceRef)).ToDictionary(g => g.Key, g => g.First());
         var procedureIds = services.Select(x => x.ProcedureId).Distinct().ToList();
-        var unitCosts = await db.ProcedureCosts.AsNoTracking()
-            .Where(c => c.RunId == s.Run.Id && c.CostType == "ACTUAL" && procedureIds.Contains(c.ProcedureId))
-            .ToDictionaryAsync(c => c.ProcedureId, c => c.UnitCost, ct);
+        var runCosts = (await db.ProcedureCosts.AsNoTracking()
+            .Where(c => c.RunId == s.Run.Id && (c.CostType == "ACTUAL" || c.CostType == "ZERO_PRICE") && procedureIds.Contains(c.ProcedureId)).ToListAsync(ct))
+            .ToLookup(c => c.ProcedureId);
+        // A zero-price line costs its fixed amount; ACTUAL holds both kinds of line, so the rest share what is left.
+        var zeroUnits = runCosts.Where(g => g.Any(c => c.CostType == "ZERO_PRICE")).ToDictionary(g => g.Key, g => g.First(c => c.CostType == "ZERO_PRICE").UnitCost);
+        var unitCosts = runCosts.Where(g => g.Any(c => c.CostType == "ACTUAL")).ToDictionary(g => g.Key, g =>
+        {
+            var actual = g.First(c => c.CostType == "ACTUAL");
+            var zero = g.FirstOrDefault(c => c.CostType == "ZERO_PRICE");
+            return zero is not null && actual.Volume > zero.Volume ? Money.R6((actual.TotalCost - zero.TotalCost) / (actual.Volume - zero.Volume)) : actual.UnitCost;
+        });
+        var zeroLines = (await CountedRevenue(s).Where(r => r.EncounterId == id && r.HisUnitPrice == 0m).Select(r => r.SourceRef).ToListAsync(ct))
+            .Select(InvoiceLineKey).ToHashSet(StringComparer.OrdinalIgnoreCase);
         var lines = services.Select(x =>
         {
             var key = InvoiceLineKey(x.SourceRef);
             byLine.Remove(key, out var rev);
             return new PatientEncounterLine(x.Name, x.ProcedureId, x.Quantity, x.CostCentre, x.Doctor, rev?.Payer, x.PerformedAt, rev?.GrossAmount, rev?.Discount, rev?.NetAmount, x.SourceRef,
-                unitCosts.TryGetValue(x.ProcedureId, out var unit) ? Money.R4(x.Quantity * unit) : null);
+                zeroLines.Contains(key) && zeroUnits.TryGetValue(x.ProcedureId, out var zeroUnit) ? Money.R4(x.Quantity * zeroUnit)
+                : unitCosts.TryGetValue(x.ProcedureId, out var unit) ? Money.R4(x.Quantity * unit) : null, IsPackage: rev?.IsPackage ?? false);
         }).ToList();
-        lines.AddRange(byLine.Values.Select(x => new PatientEncounterLine(x.Procedure, x.ProcedureId, null, null, null, x.Payer, x.PostedAt, x.GrossAmount, x.Discount, x.NetAmount, x.SourceRef)));
+        lines.AddRange(byLine.Values.Select(x => new PatientEncounterLine(x.Procedure, x.ProcedureId, null, null, null, x.Payer, x.PostedAt, x.GrossAmount, x.Discount, x.NetAmount, x.SourceRef, IsPackage: x.IsPackage)));
         if (p.Can("revenue.view"))
         {
             // Refunds are moving from revenue rows to RefundTransaction as fresh packs are imported; a cancelled one refunded nothing.
@@ -275,7 +436,9 @@ public sealed partial class ReadQueries
                 -r.RefundAmount, 0m, -r.RefundAmount, r.SourceRef)));
         }
         await audit.WriteAsync(p, "VIEW_PHI", "Encounter", id.ToString(), encounter.EncounterNo, metadata: new { hospital = s.Hospital.Code }, ct: ct);
-        return new PatientEncounterDetail(encounter, lines.ToArray());
+        var linedProcedures = lines.Where(l => l.ProcedureId != null).Select(l => l.ProcedureId!.Value).Distinct().ToList();
+        var codes = await db.Procedures.AsNoTracking().Where(x => linedProcedures.Contains(x.Id)).ToDictionaryAsync(x => x.Id, x => x.Code, ct);
+        return new PatientEncounterDetail(encounter, lines.Select(l => l with { ProcedureCode = l.ProcedureId is { } procedure ? codes.GetValueOrDefault(procedure) : null }).ToArray());
     }
 
     // ═══ HIS source: what an encounter holds, under the HIS table and column it came from ═══
