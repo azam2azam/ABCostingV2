@@ -10,7 +10,7 @@ public sealed partial class ReadQueries
     // ═══ Profitability (FR-5.15 – FR-5.17) ═══════════════════════════════════════════
 
     public static readonly string[] Dimensions =
-        ["hospital", "department", "resource", "serviceLine", "physician", "payer", "insurer", "procedure", "package", "drg", "noBillable", "encounterType", "segment"];
+        ["hospital", "department", "resource", "serviceLine", "physician", "payer", "insurer", "procedure", "package", "drg", "noBillable", "billable", "encounterType", "segment"];
 
     public sealed record ProfitRow(string Key, string Label, int Encounters, decimal Volume, decimal Revenue, decimal Direct, decimal Indirect,
         decimal Overhead, decimal Total, decimal Contribution, decimal Operating, decimal MarginPct, string? Link, int? Services = null);
@@ -39,8 +39,8 @@ public sealed partial class ReadQueries
                 showRevenue && rev != 0m ? Money.R4((rev - total) / rev * 100m) : 0m, link);
         }
 
-        if (dimension == "noBillable")
-            return await NoBillableAsync(s, (key, label, n, rev, d, i, o) => Make(key, label, n, n, rev, d, i, o, null), idle, showRevenue, ct);
+        if (dimension is "noBillable" or "billable")
+            return await NoBillableAsync(s, dimension, (key, label, n, rev, d, i, o) => Make(key, label, n, n, rev, d, i, o, null), idle, showRevenue, ct);
 
         if (dimension == "procedure")
         {

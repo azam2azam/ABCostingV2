@@ -114,21 +114,7 @@ public sealed partial class ReadQueries(VeritaDbContext db, IAuditWriter audit)
 
     public async Task<DashboardDto> DashboardAsync(ScopedRun s, Principal p, CancellationToken ct)
     {
-        var rid = s.Run.Id;
-        decimal direct, indirect, overhead, revenue;
-        int encounters;
-        if (s.Run.CostingMethod == CostingModelPipeline.Method)
-        {
-            var whole = await db.RunDimensionCosts.AsNoTracking().FirstOrDefaultAsync(x => x.RunId == rid && x.Dimension == "hospital", ct);
-            (direct, indirect, overhead, revenue, encounters) = (whole?.DirectCost ?? 0m, whole?.IndirectCost ?? 0m, whole?.OverheadCost ?? 0m, whole?.Revenue ?? 0m, whole?.Encounters ?? 0);
-        }
-        else
-        {
-            var whole = await db.EncounterCosts.AsNoTracking().Where(x => x.RunId == rid).GroupBy(_ => 1)
-                .Select(g => new { D = g.Sum(x => x.DirectCost), I = g.Sum(x => x.IndirectCost), O = g.Sum(x => x.OverheadCost), R = g.Sum(x => x.Revenue), N = g.Count() })
-                .FirstOrDefaultAsync(ct);
-            (direct, indirect, overhead, revenue, encounters) = (whole?.D ?? 0m, whole?.I ?? 0m, whole?.O ?? 0m, whole?.R ?? 0m, whole?.N ?? 0);
-        }
+        var (direct, indirect, overhead, revenue, encounters) = await RunTotalsAsync(s.Run, ct);
         var cost = Money.R4(direct + indirect + overhead);
         var tiles = new List<Tile>
         {
@@ -148,6 +134,21 @@ public sealed partial class ReadQueries(VeritaDbContext db, IAuditWriter audit)
         }
         return new DashboardDto(tiles.ToArray(),
             [new("DIRECT", "Direct cost", direct, Share(direct, cost), "procedure-costing", null), new("INDIRECT", "Indirect cost", indirect, Share(indirect, cost), "indirect-costing", null), new("OVERHEAD", "Overheads", overhead, Share(overhead, cost), "indirect-costing", null)]);
+    }
+
+    /// <summary>A run's whole totals: what a costing-model run stored, or the sum of an engine run's encounters.</summary>
+    private async Task<(decimal Direct, decimal Indirect, decimal Overhead, decimal Revenue, int Encounters)> RunTotalsAsync(CalculationRun run, CancellationToken ct)
+    {
+        var rid = run.Id;
+        if (run.CostingMethod == CostingModelPipeline.Method)
+        {
+            var whole = await db.RunDimensionCosts.AsNoTracking().FirstOrDefaultAsync(x => x.RunId == rid && x.Dimension == "hospital", ct);
+            return (whole?.DirectCost ?? 0m, whole?.IndirectCost ?? 0m, whole?.OverheadCost ?? 0m, whole?.Revenue ?? 0m, whole?.Encounters ?? 0);
+        }
+        var sum = await db.EncounterCosts.AsNoTracking().Where(x => x.RunId == rid).GroupBy(_ => 1)
+            .Select(g => new { D = g.Sum(x => x.DirectCost), I = g.Sum(x => x.IndirectCost), O = g.Sum(x => x.OverheadCost), R = g.Sum(x => x.Revenue), N = g.Count() })
+            .FirstOrDefaultAsync(ct);
+        return (sum?.D ?? 0m, sum?.I ?? 0m, sum?.O ?? 0m, sum?.R ?? 0m, sum?.N ?? 0);
     }
 
     // Encounter facts used by dashboards, profitability and reports.

@@ -11,9 +11,9 @@ public sealed partial class ReadQueries
 {
     // ═══ HIS invoicing: invoice counts by HIS invoice type, child invoices included ═══
 
-    public sealed record HisInvoiceTypeCount(int? InvoiceType, string Name, int Invoices, int Encounters, int Patients, decimal Revenue);
+    public sealed record HisInvoiceTypeCount(int? InvoiceType, string Name, int Invoices, int Encounters, int Patients, decimal Refunded, decimal Revenue);
     public sealed record HisInvoicingDto(long? MinInvoiceNo, long? MaxInvoiceNo, HisInvoiceTypeCount[] Types, HisInvoiceTypeCount? Total);
-    private sealed record HisInvoiceTypeRaw(int? InvoiceType, int Invoices, int Encounters, int Patients, decimal? Revenue, long? MinInvoiceNo, long? MaxInvoiceNo);
+    private sealed record HisInvoiceTypeRaw(int? InvoiceType, int Invoices, int Encounters, int Patients, decimal? Refunded, decimal? Revenue, long? MinInvoiceNo, long? MaxInvoiceNo);
 
     public async Task<HisInvoicingDto> HisInvoicingAsync(ScopedRun s, CancellationToken ct)
     {
@@ -28,7 +28,8 @@ public sealed partial class ReadQueries
                    COUNT(DISTINCT LEFT(t.SourceRef, LEN(t.SourceRef) - CHARINDEX('-', REVERSE(t.SourceRef)))) AS Invoices,
                    COUNT(DISTINCT t.EncounterId) AS Encounters,
                    COUNT(DISTINCT e.PatientId) AS Patients,
-                   SUM(t.NetAmount) AS Revenue,
+                   SUM(ISNULL(t.RefundedAmount, 0)) AS Refunded,
+                   SUM(t.NetAmount - ISNULL(t.RefundedAmount, 0)) AS Revenue,
                    MIN(TRY_CAST(PARSENAME(REPLACE(t.SourceRef, '-', '.'), 2) AS bigint)) AS MinInvoiceNo,
                    MAX(TRY_CAST(PARSENAME(REPLACE(t.SourceRef, '-', '.'), 2) AS bigint)) AS MaxInvoiceNo
             FROM RevenueTransaction t
@@ -42,10 +43,10 @@ public sealed partial class ReadQueries
             {
                 1 => "Outpatient",
                 _ => "Inpatient",
-            }, x.Invoices, x.Encounters, x.Patients, x.Revenue ?? 0m)).ToArray();
+            }, x.Invoices, x.Encounters, x.Patients, x.Refunded ?? 0m, x.Revenue ?? 0m)).ToArray();
         var whole = rows.FirstOrDefault(x => x.InvoiceType is null);
         return new HisInvoicingDto(whole?.MinInvoiceNo, whole?.MaxInvoiceNo, types,
-            types.Length == 0 || whole is null ? null : new HisInvoiceTypeCount(null, "", whole.Invoices, whole.Encounters, whole.Patients, whole.Revenue ?? 0m));
+            types.Length == 0 || whole is null ? null : new HisInvoiceTypeCount(null, "", whole.Invoices, whole.Encounters, whole.Patients, whole.Refunded ?? 0m, whole.Revenue ?? 0m));
     }
 
     // ═══ No-billable: invoice lines the period counts that carry no price, by procedure type ═══
@@ -62,18 +63,21 @@ public sealed partial class ReadQueries
     }
 
     /// <summary>Prepared by the run: read, never re-added. A run from before this was stored holds none, and shows empty until it is run again.</summary>
-    private async Task<ProfitDto> NoBillableAsync(ScopedRun s, Func<string, string, int, decimal, decimal, decimal, decimal, ProfitRow> make, decimal idle, bool showRevenue, CancellationToken ct)
+    private async Task<ProfitDto> NoBillableAsync(ScopedRun s, string dimension, Func<string, string, int, decimal, decimal, decimal, decimal, ProfitRow> make, decimal idle, bool showRevenue, CancellationToken ct)
     {
-        var stored = await db.RunDimensionCosts.AsNoTracking().Where(x => x.RunId == s.Run.Id && x.Dimension == CostingModelPipeline.NoBillableDimension).ToListAsync(ct);
+        var stored = await db.RunDimensionCosts.AsNoTracking().Where(x => x.RunId == s.Run.Id && x.Dimension == dimension).ToListAsync(ct);
         ProfitRow Row(string key, string label)
         {
             var x = stored.FirstOrDefault(r => r.Key == key);
             return make(key, label, x?.Encounters ?? 0, x?.Revenue ?? 0m, x?.DirectCost ?? 0m, x?.IndirectCost ?? 0m, x?.OverheadCost ?? 0m) with { Services = x?.Services ?? 0 };
         }
         var others = stored.Select(x => x.Key).Where(k => k != CostingModelPipeline.NoBillableTotal).Except(NoBillableTypes).Order();
-        var rows = NoBillableTypes.Concat(others).Select(type => Row(type, type[0] + type[1..].ToLowerInvariant())).ToArray();
+        // BED_DAY reads "Bed day"; a short word such as ER stays in capitals.
+        static string Label(string type) => string.Join(' ', type.Split('_', StringSplitOptions.RemoveEmptyEntries)
+            .Select((w, i) => w.Length <= 2 ? w : i == 0 ? w[0] + w[1..].ToLowerInvariant() : w.ToLowerInvariant()));
+        var rows = NoBillableTypes.Concat(others).Select(type => Row(type, Label(type))).ToArray();
         var total = Row(CostingModelPipeline.NoBillableTotal, "Total");
-        return new ProfitDto(CostingModelPipeline.NoBillableDimension, rows, total, idle, showRevenue ? Money.R4(total.Operating - idle) : 0m);
+        return new ProfitDto(dimension, rows, total, idle, showRevenue ? Money.R4(total.Operating - idle) : 0m);
     }
 
     private IQueryable<EncounterBase> WithNoBillableType(IQueryable<EncounterBase> query, ScopedRun s, string type)
@@ -119,7 +123,7 @@ public sealed partial class ReadQueries
         string Payer, string? Insurer, string? Physician, DateTime AdmitAt, DateTime? DischargeAt, int LengthOfStay, int Services, decimal Gross, decimal Discount, decimal Net, decimal? Cost = null);
     public sealed record PatientEncounterPage(PatientEncounterRow[] Rows, int Total, int Page, int PageSize, bool PhiMasked);
     public sealed record PatientEncounterLine(string? Procedure, Guid? ProcedureId, decimal? Quantity, string? CostCentre, string? Physician, string? Payer,
-        DateTime? PerformedAt, decimal? Gross, decimal? Discount, decimal? Net, string SourceRef, decimal? Cost = null, string? ProcedureCode = null, bool IsPackage = false);
+        DateTime? PerformedAt, decimal? Gross, decimal? Discount, decimal? Net, string SourceRef, decimal? Cost = null, string? ProcedureCode = null, bool IsPackage = false, decimal? Refunded = null);
     public sealed record PatientEncounterDetail(PatientEncounterRow Encounter, PatientEncounterLine[] Lines);
 
     // Properties, not a constructor: EF has to filter and sort on these after the projection.
@@ -168,8 +172,10 @@ public sealed partial class ReadQueries
     {
         if (!FromHis(s)) return db.EncounterServices.AsNoTracking();
         var counted = CountedRevenue(s);
+        // A line refunded in full counts as not given, so it is not a service either.
         return db.EncounterServices.AsNoTracking()
-            .Where(x => counted.Any(r => r.EncounterId == x.EncounterId && r.SourceRef.Substring(4) == x.SourceRef.Substring(4)));
+            .Where(x => counted.Any(r => r.EncounterId == x.EncounterId && r.SourceRef.Substring(4) == x.SourceRef.Substring(4)
+                && (r.RefundedAmount == null || r.NetAmount <= 0m || r.RefundedAmount < r.NetAmount)));
     }
 
     private IQueryable<EncounterBase> InPeriod(IQueryable<EncounterBase> query, ScopedRun s)
@@ -242,7 +248,7 @@ public sealed partial class ReadQueries
             .GroupBy(x => x.EncounterId).Select(g => new { g.Key, N = g.Count() }).ToDictionaryAsync(x => x.Key, x => x.N, ct);
         var billed = p.Can("revenue.view")
             ? await CountedRevenue(s).Where(x => ids.Contains(x.EncounterId)).GroupBy(x => x.EncounterId)
-                .Select(g => new { g.Key, Gross = g.Sum(x => x.GrossAmount), Discount = g.Sum(x => x.Discount), Net = g.Sum(x => x.NetAmount) })
+                .Select(g => new { g.Key, Gross = g.Sum(x => x.GrossAmount), Discount = g.Sum(x => x.Discount), Net = g.Sum(x => x.NetAmount - (x.RefundedAmount ?? 0m)) })
                 .ToDictionaryAsync(x => x.Key, x => (x.Gross, x.Discount, x.Net), ct)
             : [];
         var phi = p.Can("phi.view");
@@ -309,7 +315,7 @@ public sealed partial class ReadQueries
             "services" => By(x => countedServices.Count(t => t.EncounterId == x.Id)),
             "gross" => By(x => countedRevenue.Where(t => t.EncounterId == x.Id).Sum(t => (decimal?)t.GrossAmount) ?? 0m),
             "discount" => By(x => countedRevenue.Where(t => t.EncounterId == x.Id).Sum(t => (decimal?)t.Discount) ?? 0m),
-            "net" => By(x => countedRevenue.Where(t => t.EncounterId == x.Id).Sum(t => (decimal?)t.NetAmount) ?? 0m),
+            "net" => By(x => countedRevenue.Where(t => t.EncounterId == x.Id).Sum(t => (decimal?)(t.NetAmount - (t.RefundedAmount ?? 0m))) ?? 0m),
             "cost" => By(x => db.EncounterCosts.Where(t => t.EncounterId == x.Id && t.RunId == s.Run.Id).Sum(t => (decimal?)t.TotalCost) ?? 0m),
             _ => By(x => x.AdmitAt),
         };
@@ -397,7 +403,7 @@ public sealed partial class ReadQueries
                      join pr in db.Procedures on r.ProcedureId equals pr.Id into pj
                      from pr in pj.DefaultIfEmpty()
                      where r.EncounterId == id
-                     select new { Procedure = pr != null ? pr.Name : null, r.ProcedureId, Payer = py.Name, r.GrossAmount, r.Discount, r.NetAmount, r.PostedAt, r.SourceRef, IsPackage = r.IsPackageSelected == true }).ToListAsync(ct)
+                     select new { Procedure = pr != null ? pr.Name : null, r.ProcedureId, Payer = py.Name, r.GrossAmount, r.Discount, NetAmount = r.NetAmount - (r.RefundedAmount ?? 0m), Refunded = r.RefundedAmount ?? 0m, r.PostedAt, r.SourceRef, IsPackage = r.IsPackageSelected == true }).ToListAsync(ct)
             : [];
         var byLine = invoiced.GroupBy(x => InvoiceLineKey(x.SourceRef)).ToDictionary(g => g.Key, g => g.First());
         var procedureIds = services.Select(x => x.ProcedureId).Distinct().ToList();
@@ -420,10 +426,12 @@ public sealed partial class ReadQueries
             byLine.Remove(key, out var rev);
             return new PatientEncounterLine(x.Name, x.ProcedureId, x.Quantity, x.CostCentre, x.Doctor, rev?.Payer, x.PerformedAt, rev?.GrossAmount, rev?.Discount, rev?.NetAmount, x.SourceRef,
                 zeroLines.Contains(key) && zeroUnits.TryGetValue(x.ProcedureId, out var zeroUnit) ? Money.R4(x.Quantity * zeroUnit)
-                : unitCosts.TryGetValue(x.ProcedureId, out var unit) ? Money.R4(x.Quantity * unit) : null, IsPackage: rev?.IsPackage ?? false);
+                : unitCosts.TryGetValue(x.ProcedureId, out var unit) ? Money.R4(x.Quantity * unit) : null, IsPackage: rev?.IsPackage ?? false, Refunded: rev?.Refunded);
         }).ToList();
-        lines.AddRange(byLine.Values.Select(x => new PatientEncounterLine(x.Procedure, x.ProcedureId, null, null, null, x.Payer, x.PostedAt, x.GrossAmount, x.Discount, x.NetAmount, x.SourceRef, IsPackage: x.IsPackage)));
-        if (p.Can("revenue.view"))
+        lines.AddRange(byLine.Values.Select(x => new PatientEncounterLine(x.Procedure, x.ProcedureId, null, null, null, x.Payer, x.PostedAt, x.GrossAmount, x.Discount, x.NetAmount, x.SourceRef, IsPackage: x.IsPackage, Refunded: x.Refunded)));
+        // A HIS hospital's refunds are the refunded amount on each invoice line, already off its net; the refund
+        // records are dated by refund, not invoice, so adding them too would count the refund twice.
+        if (p.Can("revenue.view") && !FromHis(s))
         {
             // Refunds are moving from revenue rows to RefundTransaction as fresh packs are imported; a cancelled one refunded nothing.
             var refunds = await (from r in db.RefundTransactions.AsNoTracking()

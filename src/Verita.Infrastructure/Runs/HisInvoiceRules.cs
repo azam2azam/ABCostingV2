@@ -12,4 +12,8 @@ public static class HisInvoiceRules
     /// </summary>
     public static readonly Expression<Func<RevenueTransaction, bool>> Counts =
         r => r.HisLineStatus == 2 && (r.HisInvoiceType == 1 || r.HisInvoiceType == 75);
+
+    /// <summary>A counted line refunded in full: its service is treated as not given, so it carries no cost.</summary>
+    public static readonly Expression<Func<RevenueTransaction, bool>> FullyRefunded =
+        r => r.RefundedAmount != null && r.NetAmount > 0m && r.RefundedAmount >= r.NetAmount;
 }

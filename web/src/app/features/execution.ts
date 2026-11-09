@@ -1580,6 +1580,8 @@ interface PatientEncounterPage { rows: PatientEncounterRow[]; total: number; pag
 interface PatientEncounterLine {
   procedure?: string | null; procedureId?: string | null; quantity?: string | number | null; costCentre?: string | null; physician?: string | null;
   payer?: string | null; performedAt?: string | null; gross?: string | number | null; discount?: string | number | null; net?: string | number | null; sourceRef: string; cost?: string | number | null; procedureCode?: string | null; isPackage?: boolean;
+  /** Refunded on this invoice line, already taken off its net. */
+  refunded?: string | number | null;
 }
 interface HisEncounterSource {
   fields: { label: string; hisColumn: string; value?: string | null }[];
@@ -1604,13 +1606,13 @@ function hisCols(spec: string[]): Col<any>[] {
 interface PatientEncounterDetailDto { encounter: PatientEncounterRow; lines: PatientEncounterLine[]; }
 interface InvoiceGroup { key: string; procedure: string; procedureCode: string | null; isPackage: boolean; procedureId: string | null; quantity: number; gross: number; discount: number; refunds: number; net: number; cost: number; }
 
-interface HisInvoiceTypeCount { invoiceType: number | null; name: string; invoices: number; encounters: number; patients: number; revenue: number }
+interface HisInvoiceTypeCount { invoiceType: number | null; name: string; invoices: number; encounters: number; patients: number; refunded: number; revenue: number }
 
 @Component({
   selector: 'v-his-invoicing',
   imports: [...UI],
   template: `
-    <v-page title="HIS Invoicing" purpose="Invoice counts and revenue by HIS invoice type for the selected period.">
+    <v-page title="HIS Invoicing" purpose="Invoice counts and revenue by HIS invoice type for the selected period. Revenue is after refunds.">
       <v-state [loading]="res.isLoading()" [error]="res.error()">
         @if (res.value(); as r) {
           <div class="grid tiles" style="margin-bottom: 16px;">
@@ -1631,6 +1633,7 @@ export class HisInvoicing {
     { key: 'invoices', label: 'Invoices', type: 'num', dp: 0 },
     { key: 'encounters', label: 'Encounters', type: 'num', dp: 0 },
     { key: 'patients', label: 'Patients', type: 'num', dp: 0 },
+    { key: 'refunded', label: 'Refunded', type: 'money', dp: 0, blankZero: true },
     { key: 'revenue', label: 'Revenue', type: 'money', dp: 0 },
   ];
 }
@@ -1889,6 +1892,7 @@ export class EncounterDetail {
       // Refunds are negative rows of their own, shown apart from what was charged.
       if (l.sourceRef.toUpperCase().startsWith('REF-')) g.refunds += Number(l.gross ?? 0);
       else g.gross += Number(l.gross ?? 0);
+      g.refunds -= Number(l.refunded ?? 0);
       g.discount += Number(l.discount ?? 0);
       g.net += Number(l.net ?? 0);
       g.cost += Number(l.cost ?? 0);

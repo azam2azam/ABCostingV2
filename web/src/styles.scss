@@ -30,6 +30,13 @@
   --nature-direct: #2f6fb0;
   --nature-indirect: #7c5cc4;
   --nature-overhead: #6b7686;
+  /* Chart series: validated for colour-blind separation on this surface (dataviz validator). */
+  --chart-revenue: #2a78d6;
+  --chart-cost: #eb6834;
+  --chart-good: var(--good);
+  --chart-bad: var(--bad);
+  --chart-1: #2a78d6; --chart-2: #eb6834; --chart-3: #1baf7a; --chart-4: #eda100; --chart-5: #e87ba4; --chart-6: #008300;
+  --chart-billable: #008300; --chart-nonbillable: #6250d6;
   --focus: #0d9488;
   --shadow-sm: 0 1px 2px rgba(15, 23, 42, 0.05), 0 1px 1px rgba(15, 23, 42, 0.03);
   --shadow: 0 10px 30px -12px rgba(15, 23, 42, 0.18);
@@ -67,6 +74,12 @@
   --nature-direct: #8bb6e4;
   --nature-indirect: #b9a2e6;
   --nature-overhead: #9aa6b4;
+  --chart-revenue: #3987e5;
+  --chart-cost: #d95926;
+  --chart-good: var(--good);
+  --chart-bad: var(--bad);
+  --chart-1: #3987e5; --chart-2: #d95926; --chart-3: #199e70; --chart-4: #c98500; --chart-5: #d55181; --chart-6: #008300;
+  --chart-billable: #008300; --chart-nonbillable: #9085e9;
   --focus: #2dd4bf;
   --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.3);
   --shadow: 0 10px 30px -12px rgba(0, 0, 0, 0.55);
@@ -257,3 +270,8 @@ details summary { cursor: pointer; }
 // HIS column names are read as written, to match them against HIS.
 .his-source th, .his-source th button { text-transform: none !important; letter-spacing: 0; white-space: nowrap; }
 .his-source td { white-space: nowrap; }
+
+/* Dashboard charts */
+.charts { margin-bottom: 2px; }
+.card.chart h2 { font-size: 15px; margin: 0 0 2px; }
+.card.chart .sub { margin: 0 0 12px; font-size: 12.5px; }

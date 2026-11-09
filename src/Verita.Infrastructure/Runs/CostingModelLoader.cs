@@ -44,13 +44,17 @@ public sealed class CostingModelLoader(VeritaDbContext db)
             .ToListAsync(ct);
         var revenue = await (from r in fromHis ? counted : db.RevenueTransactions.AsNoTracking()
                              join e in inRun on r.EncounterId equals e.Id
-                             select new ModelRevenue(r.EncounterId, r.SourceRef, r.NetAmount, r.HisUnitPrice == 0m)).ToListAsync(ct);
+                             select new ModelRevenue(r.EncounterId, r.SourceRef, r.NetAmount - (r.RefundedAmount ?? 0m), r.HisUnitPrice == 0m)).ToListAsync(ct);
         var lines = await (from s in db.EncounterServices.AsNoTracking()
                            join e in inRun on s.EncounterId equals e.Id
                            select new ModelLine(s.EncounterId, s.ProcedureId, s.CostCenterId, s.ProviderId, s.Quantity, s.SourceRef, false)).ToListAsync(ct);
         if (fromHis)
         {
             var countedLines = revenue.GroupBy(r => (r.EncounterId, CostingModelPipeline.LineRef(r.SourceRef))).ToDictionary(g => g.Key, g => g.Any(r => r.ZeroPrice));
+            // A line refunded in full keeps its revenue row (now nil) but is not costed: the service was not given.
+            var refunded = (await (from r in counted.Where(HisInvoiceRules.FullyRefunded) join e in inRun on r.EncounterId equals e.Id select new { r.EncounterId, r.SourceRef }).ToListAsync(ct))
+                .Select(r => (r.EncounterId, CostingModelPipeline.LineRef(r.SourceRef))).ToHashSet();
+            foreach (var key in refunded) countedLines.Remove(key);
             lines = lines.Where(l => countedLines.ContainsKey((l.EncounterId, CostingModelPipeline.LineRef(l.SourceRef))))
                 .Select(l => l with { ZeroPrice = countedLines[(l.EncounterId, CostingModelPipeline.LineRef(l.SourceRef))] }).ToList();
         }

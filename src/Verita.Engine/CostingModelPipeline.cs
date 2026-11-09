@@ -53,6 +53,8 @@ public sealed class CostingModelPipeline(IStageSink sink)
     /// <summary>Lines invoiced at no price, by procedure type, with a row for all of them since an encounter can hold several types.</summary>
     public const string NoBillableDimension = "noBillable";
     public const string NoBillableTotal = "ALL";
+    /// <summary>The other lines, invoiced at a price, by the same procedure types, to compare against.</summary>
+    public const string BillableDimension = "billable";
 
     private sealed class Totals
     {
@@ -233,13 +235,16 @@ public sealed class CostingModelPipeline(IStageSink sink)
                 var lineOverhead = value > 0m ? overhead * (lineValue / value) : 0m;
                 netByLine.Remove((line.EncounterId, LineRef(line.SourceRef)), out var net);
                 d += lineDirect; i += lineIndirect; assignedOverhead += lineOverhead;
-                if (line.ZeroPrice && ctx.Procedures.GetValueOrDefault(line.ProcedureId) is { } zeroPriced)
-                    foreach (var noBillable in new[] { TypeKey(zeroPriced).ToUpperInvariant(), NoBillableTotal })
+                if (ctx.Procedures.GetValueOrDefault(line.ProcedureId) is { } lineProcedure)
+                {
+                    var billing = line.ZeroPrice ? NoBillableDimension : BillableDimension;
+                    foreach (var type in new[] { TypeKey(lineProcedure).ToUpperInvariant(), NoBillableTotal })
                     {
-                        Add(NoBillableDimension, noBillable, e.Id, net, lineDirect, lineIndirect, lineOverhead);
-                        var row = At(NoBillableDimension, noBillable);
+                        Add(billing, type, e.Id, net, lineDirect, lineIndirect, lineOverhead);
+                        var row = At(billing, type);
                         row.Services = (row.Services ?? 0) + 1;
                     }
+                }
                 var resource = line.ProviderId is { } doctor && ctx.DoctorResource.GetValueOrDefault(doctor) is { } r ? r.ToString() : "";
                 Add("resource", resource, e.Id, net, lineDirect, lineIndirect, lineOverhead);
                 Add("costCentre", line.CostCenterId.ToString(), e.Id, net, lineDirect, lineIndirect, lineOverhead);

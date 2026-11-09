@@ -851,7 +851,7 @@ public sealed partial class ReadQueries
                          join pr in db.Procedures.AsNoTracking() on rt.ProcedureId equals pr.Id
                          join pkg in db.Packages.AsNoTracking() on new { pr.HospitalId, pr.Code } equals new { pkg.HospitalId, pkg.Code }
                          where pkg.Id == packageId && billedEncounters.Contains(rt.EncounterId)
-                         select rt.NetAmount).SumAsync(ct);
+                         select rt.NetAmount - (rt.RefundedAmount ?? 0m)).SumAsync(ct);
         return Money.R4(net / encounterCount);
     }
 

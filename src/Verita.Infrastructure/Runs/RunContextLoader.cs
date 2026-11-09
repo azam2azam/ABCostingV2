@@ -127,7 +127,7 @@ public sealed class RunContextLoader(VeritaDbContext db)
         var revenue = await (from r in db.RevenueTransactions.AsNoTracking()
                              join e in db.Encounters on r.EncounterId equals e.Id
                              where e.HospitalId == hid && e.AdmitAt >= start && e.AdmitAt < endExclusive
-                             select new RevenueRow(r.EncounterId, r.ProcedureId, r.PayerId, r.NetAmount)).ToListAsync(ct);
+                             select new RevenueRow(r.EncounterId, r.ProcedureId, r.PayerId, r.NetAmount - (r.RefundedAmount ?? 0m))).ToListAsync(ct);
         var spans = rates.Select(r => new RateSpan(r.ResourceId, r.EffectiveFrom, r.EffectiveTo)).ToList();
 
         return new RunContext
