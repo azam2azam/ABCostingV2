@@ -275,3 +275,7 @@ details summary { cursor: pointer; }
 .charts { margin-bottom: 2px; }
 .card.chart h2 { font-size: 15px; margin: 0 0 2px; }
 .card.chart .sub { margin: 0 0 12px; font-size: 12.5px; }
+
+/* Ask VERITA spans the whole content column: its pinned header and question bar must reach the right edge on wide screens. */
+/* By id, so it outranks the shell's own (encapsulated) main rule. */
+main#main:has(> v-assistant) { max-width: none; }

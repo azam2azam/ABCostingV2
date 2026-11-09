@@ -3531,6 +3531,131 @@ export interface components {
             /** Format: int32 */
             pageSize: number;
         };
+        AssistantAskBody: {
+            /** Format: uuid */
+            threadId: string | null;
+            text: string;
+            hospital: string | null;
+            period: string | null;
+            intent: string | null;
+            pick: {
+                [key: string]: string;
+            } | null;
+            remove: string[] | null;
+        };
+        AssistantAskResult: {
+            thread: components["schemas"]["AssistantAssistantThreadDto"];
+            question: components["schemas"]["AssistantAssistantMessageDto"];
+            answer: components["schemas"]["AssistantAssistantMessageDto"];
+        };
+        AssistantAssistantMessageDto: {
+            /** Format: uuid */
+            id: string;
+            role: string;
+            text: string;
+            /** Format: date-time */
+            createdAt: string;
+            turnType: string | null;
+            reply: components["schemas"]["AssistantAssistantReply"];
+            /** Format: int32 */
+            feedback: number | null;
+            hidden: boolean;
+            stale: boolean;
+        };
+        AssistantAssistantReply: {
+            text: string;
+            band: string;
+            turnType: string | null;
+            intent: string | null;
+            intentLabel: string | null;
+            /** Format: double */
+            confidence: number;
+            score: components["schemas"]["AssistantScoreParts"];
+            assumptions: components["schemas"]["AssistantAssumptionDto"][];
+            blocks: components["schemas"]["AssistantReplyBlock"][];
+            links: components["schemas"]["AssistantReplyLink"][];
+            suggestions: components["schemas"]["AssistantOption"][];
+            options: components["schemas"]["AssistantOption"][];
+            notes: string[];
+            run: string | null;
+            runStatus: string | null;
+            hospital: string | null;
+            period: string | null;
+            navigate: components["schemas"]["AssistantReplyLink"];
+        };
+        AssistantAssistantThreadDetail: {
+            thread: components["schemas"]["AssistantAssistantThreadDto"];
+            messages: components["schemas"]["AssistantAssistantMessageDto"][];
+        };
+        AssistantAssistantThreadDto: {
+            /** Format: uuid */
+            id: string;
+            title: string;
+            isPinned: boolean;
+            isArchived: boolean;
+            /** Format: date-time */
+            createdAt: string;
+            /** Format: date-time */
+            updatedAt: string;
+            /** Format: int32 */
+            messages: number;
+            lastText: string | null;
+        };
+        AssistantAssumptionDto: {
+            kind: string;
+            label: string;
+            value: string;
+            source: string;
+            changed: boolean;
+            removable: boolean;
+            note: string | null;
+        };
+        AssistantFeedbackBody: {
+            /** Format: int32 */
+            value: number;
+            reason: string | null;
+        };
+        AssistantOption: {
+            label: string;
+            text: string;
+            intent: string | null;
+            pick: {
+                [key: string]: string;
+            } | null;
+        };
+        AssistantReplyBlock: {
+            type: string;
+            title: string | null;
+            columns: string[];
+            rows: string[][];
+            note: string | null;
+        };
+        AssistantReplyLink: {
+            label: string;
+            path: string;
+            query: {
+                [key: string]: string;
+            };
+        };
+        AssistantScoreParts: {
+            /** Format: double */
+            intent: number;
+            /** Format: double */
+            entities: number;
+            /** Format: double */
+            coverage: number;
+            /** Format: double */
+            penalty: number;
+            /** Format: double */
+            confidence: number;
+            runnerUp: string | null;
+            reasons: string[];
+        };
+        AssistantThreadPatch: {
+            title: string | null;
+            pinned: boolean | null;
+            archived: boolean | null;
+        };
     };
     responses: never;
     parameters: never;

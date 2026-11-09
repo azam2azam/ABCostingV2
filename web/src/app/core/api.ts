@@ -52,6 +52,17 @@ export type GovernanceDto = S['ReadQueriesGovernanceDto'];
 export type ComponentDto = S['ReadQueriesComponentDto'];
 export type AllocationDto = S['ReadQueriesAllocationDto'];
 export type LoginResponse = S['AuthControllerLoginResponse'];
+export type AssistantThread = S['AssistantAssistantThreadDto'];
+export type AssistantThreadDetail = Omit<S['AssistantAssistantThreadDetail'], 'messages'> & { messages: AssistantMessage[] };
+/** Swashbuckle drops nullability on referenced types: a user turn has no reply, and most replies navigate nowhere. */
+export type AssistantReply = Omit<S['AssistantAssistantReply'], 'navigate'> & { navigate: S['AssistantReplyLink'] | null };
+export type AssistantMessage = Omit<S['AssistantAssistantMessageDto'], 'reply'> & { reply: AssistantReply | null };
+export type AssistantOption = S['AssistantOption'];
+export type AssistantAssumption = S['AssistantAssumptionDto'];
+export type AssistantBlock = S['AssistantReplyBlock'];
+export type AssistantLink = S['AssistantReplyLink'];
+export type AssistantAskBody = S['AssistantAskBody'];
+export type AssistantAskResult = Omit<S['AssistantAskResult'], 'question' | 'answer'> & { question: AssistantMessage; answer: AssistantMessage };
 export type SessionDto = S['AuthControllerSessionDto'];
 
 export type Params = Record<string, string | number | boolean | null | undefined>;
@@ -73,6 +84,10 @@ export class Api {
 
   post<T>(path: string, body: unknown): Observable<T> {
     return this.http.post<T>(`${this.base}/${path}`, body);
+  }
+
+  patch<T>(path: string, body: unknown): Observable<T> {
+    return this.http.patch<T>(`${this.base}/${path}`, body);
   }
 
   put<T>(path: string, body: unknown): Observable<T> {

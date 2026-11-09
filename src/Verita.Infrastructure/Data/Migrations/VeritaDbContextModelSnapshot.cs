@@ -642,6 +642,129 @@ namespace Verita.Infrastructure.Data.Migrations
                         });
                 });
 
+            modelBuilder.Entity("Verita.Domain.Entities.AssistantMessage", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("datetime2(3)");
+
+                    b.Property<string>("DetailJson")
+                        .HasMaxLength(200)
+                        .HasColumnType("nvarchar(max)");
+
+                    b.Property<int?>("Feedback")
+                        .HasColumnType("int");
+
+                    b.Property<string>("FeedbackReason")
+                        .HasMaxLength(200)
+                        .HasColumnType("nvarchar(200)");
+
+                    b.Property<string>("Intent")
+                        .HasMaxLength(64)
+                        .HasColumnType("nvarchar(64)");
+
+                    b.Property<bool>("Matched")
+                        .HasColumnType("bit");
+
+                    b.Property<string>("ParamsJson")
+                        .HasMaxLength(200)
+                        .HasColumnType("nvarchar(max)");
+
+                    b.Property<Guid?>("ParentMessageId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<string>("Permission")
+                        .HasMaxLength(200)
+                        .HasColumnType("nvarchar(200)");
+
+                    b.Property<string>("Role")
+                        .IsRequired()
+                        .HasMaxLength(16)
+                        .HasColumnType("nvarchar(16)");
+
+                    b.Property<string>("RunCode")
+                        .HasMaxLength(200)
+                        .HasColumnType("nvarchar(200)");
+
+                    b.Property<Guid?>("RunId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<decimal>("Score")
+                        .HasPrecision(9, 6)
+                        .HasColumnType("decimal(9,6)");
+
+                    b.Property<string>("Text")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("nvarchar(max)");
+
+                    b.Property<Guid>("ThreadId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<string>("TurnType")
+                        .HasMaxLength(16)
+                        .HasColumnType("nvarchar(16)");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("Matched", "CreatedAt");
+
+                    b.HasIndex("ThreadId", "CreatedAt");
+
+                    b.ToTable("AssistantMessage", null, t =>
+                        {
+                            t.HasCheckConstraint("CK_AssistantMessage_DetailJson_Json", "[DetailJson] IS NULL OR ISJSON([DetailJson]) = 1");
+
+                            t.HasCheckConstraint("CK_AssistantMessage_ParamsJson_Json", "[ParamsJson] IS NULL OR ISJSON([ParamsJson]) = 1");
+
+                            t.HasCheckConstraint("CK_AssistantMessage_Role", "[Role] IN (N'user', N'assistant')");
+                        });
+                });
+
+            modelBuilder.Entity("Verita.Domain.Entities.AssistantThread", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<string>("ContextJson")
+                        .HasMaxLength(200)
+                        .HasColumnType("nvarchar(max)");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("datetime2(3)");
+
+                    b.Property<bool>("IsArchived")
+                        .HasColumnType("bit");
+
+                    b.Property<bool>("IsDeleted")
+                        .HasColumnType("bit");
+
+                    b.Property<bool>("IsPinned")
+                        .HasColumnType("bit");
+
+                    b.Property<string>("Title")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("nvarchar(200)");
+
+                    b.Property<DateTime>("UpdatedAt")
+                        .HasColumnType("datetime2(3)");
+
+                    b.Property<Guid>("UserId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("UserId", "IsDeleted", "UpdatedAt");
+
+                    b.ToTable("AssistantThread", null, t =>
+                        {
+                            t.HasCheckConstraint("CK_AssistantThread_ContextJson_Json", "[ContextJson] IS NULL OR ISJSON([ContextJson]) = 1");
+                        });
+                });
+
             modelBuilder.Entity("Verita.Domain.Entities.AuditLog", b =>
                 {
                     b.Property<Guid>("Id")
@@ -4750,6 +4873,24 @@ namespace Verita.Infrastructure.Data.Migrations
                         .WithMany()
                         .HasForeignKey("ReviewedById")
                         .OnDelete(DeleteBehavior.NoAction);
+                });
+
+            modelBuilder.Entity("Verita.Domain.Entities.AssistantMessage", b =>
+                {
+                    b.HasOne("Verita.Domain.Entities.AssistantThread", null)
+                        .WithMany()
+                        .HasForeignKey("ThreadId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+                });
+
+            modelBuilder.Entity("Verita.Domain.Entities.AssistantThread", b =>
+                {
+                    b.HasOne("Verita.Domain.Entities.User", null)
+                        .WithMany()
+                        .HasForeignKey("UserId")
+                        .OnDelete(DeleteBehavior.NoAction)
+                        .IsRequired();
                 });
 
             modelBuilder.Entity("Verita.Domain.Entities.AuditLog", b =>

@@ -1,5 +1,6 @@
 import { Component, computed, inject, signal } from '@angular/core';
-import { RouterLink } from '@angular/router';
+import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
+import { ActivatedRoute, RouterLink } from '@angular/router';
 import { DashboardDto, ProfitDto } from '../core/api';
 import { Auth } from '../core/auth';
 import { RunContext, runInFlight } from '../core/context';
@@ -87,6 +88,15 @@ export class ProfitTables {
     { key: 'noBillable', label: 'Non-billable' },
   ]);
   dim = signal('encounterType');
+
+  constructor() {
+    // ?tab=noBillable opens a tab directly, e.g. from the assistant's links.
+    inject(ActivatedRoute).queryParamMap.pipe(takeUntilDestroyed()).subscribe(m => {
+      const tab = m.get('tab');
+      if (tab && this.dims().some(d => d.key === tab)) this.dim.set(tab);
+    });
+  }
+
   res = runResource<ProfitDto>(() => 'profitability', () => ({ dimension: this.dim() }));
   /** Lines invoiced at a price, by the same procedure types, for the comparison on the Non-billable tab. */
   billable = runResource<ProfitDto>(() => this.dim() === 'noBillable' ? 'profitability' : null, () => ({ dimension: 'billable' }));

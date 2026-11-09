@@ -83,6 +83,7 @@ public static class Security
     [
         new("Overview", [
             new("dashboard", "Dashboard", "dashboard.view", "Direct cost, indirect cost, overheads, revenue and margin of one run, by hospital, service line, department, physician, payer, DRG, encounter type and segment."),
+            new("assistant", "Ask VERITA", "help.view", "Ask about costs, margins, variances and runs in plain words. Answers come from the same data as the screens, with no AI model."),
         ]),
         new("Catalogue", [
             new("cost-centres", "Cost Centres", "masterdata.view", "The financial units money lands in, their step-down sequence and their closing balances."),

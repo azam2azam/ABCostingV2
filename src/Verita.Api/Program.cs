@@ -61,7 +61,8 @@ builder.Services.AddSwaggerGen(o =>
     o.SwaggerDoc("v1", new() { Title = "VERITA API", Version = "v1", Description = "Hospital activity-based costing. Money is a string on the wire (NG-5)." });
     o.MapType<decimal>(() => new() { Type = "string", Format = "decimal" });
     o.MapType<decimal?>(() => new() { Type = "string", Format = "decimal", Nullable = true });
-    o.CustomSchemaIds(t => t.FullName!.Replace("Verita.Infrastructure.Queries.", "").Replace("+", "").Replace("Verita.Api.Controllers.", ""));
+    o.CustomSchemaIds(t => t.FullName!.Replace("Verita.Infrastructure.Queries.", "").Replace("+", "").Replace("Verita.Api.Controllers.", "")
+        .Replace("Verita.Infrastructure.Assistant.", "Assistant").Replace("Verita.Application.Assistant.", "Assistant"));
     o.SupportNonNullableReferenceTypes();
     o.SchemaFilter<AllPropertiesRequiredFilter>();
     o.AddSecurityDefinition("bearer", new() { Type = Microsoft.OpenApi.Models.SecuritySchemeType.Http, Scheme = "bearer", BearerFormat = "JWT" });

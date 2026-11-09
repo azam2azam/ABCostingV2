@@ -45,6 +45,7 @@ public sealed class DataController(DataHubService hub, RecipeSuggestionService r
         values["__row"] = "1";
         var result = await hub.SaveAsync(Spec(entity), await Me(), [values], dryRun: false, "DATA-ENTRY", ct);
         if (result.Rejected > 0) throw AppError.Invalid("The row was not saved.", new { errors = result.Rejects[0].Errors });
+        Verita.Infrastructure.Assistant.AssistantVocabulary.Invalidate();
         return result;
     }
 
@@ -106,7 +107,10 @@ public sealed class DataController(DataHubService hub, RecipeSuggestionService r
         log.LogInformation("Import {Mode} {File} {Bytes}b hospital={Hospital} user={Email}",
             dryRun ? "validate" : "commit", file.FileName, file.Length, hospital, p.Email);
         await using var stream = file.OpenReadStream();
-        return await his.ImportAsync(p, file.FileName, stream, hospital, dryRun, entity, ct);
+        var results = await his.ImportAsync(p, file.FileName, stream, hospital, dryRun, entity, ct);
+        // New procedures and packages should be recognisable by the assistant at once.
+        if (!dryRun) Verita.Infrastructure.Assistant.AssistantVocabulary.Invalidate();
+        return results;
     }
 
     [HttpGet("imports")]

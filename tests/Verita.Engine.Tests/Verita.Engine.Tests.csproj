@@ -21,6 +21,10 @@
   </ItemGroup>
 
   <ItemGroup>
+    <None Include="Assistant\golden.json" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+  <ItemGroup>
     <ProjectReference Include="..\..\src\Verita.Engine\Verita.Engine.csproj" />
     <ProjectReference Include="..\..\src\Verita.Infrastructure\Verita.Infrastructure.csproj" />
   </ItemGroup>

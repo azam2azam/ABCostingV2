@@ -72,6 +72,9 @@ import { Chip } from '../shared/ui';
               <span class="faint">No run for this hospital and period</span>
             }
           </div>
+          <a class="icon-btn ask-btn" routerLink="/assistant" routerLinkActive="on" [queryParams]="scopeQuery()" title="Ask VERITA">
+            <v-icon name="chat" /><span>Ask</span>
+          </a>
           <button class="icon-btn" type="button" (click)="theme.toggle()" [attr.aria-label]="theme.mode() === 'dark' ? 'Switch to light theme' : 'Switch to dark theme'">
             <v-icon [name]="theme.mode() === 'dark' ? 'sun' : 'moon'" />
           </button>
@@ -79,6 +82,7 @@ import { Chip } from '../shared/ui';
         <main id="main" tabindex="-1"><router-outlet /></main>
       </div>
     </div>
+
   `,
   styles: `
     .skip { position: absolute; left: -999px; } .skip:focus { left: 8px; top: 8px; z-index: 30; background: var(--surface-solid); padding: 6px 10px; border-radius: 8px; }
@@ -110,6 +114,9 @@ import { Chip } from '../shared/ui';
     .icon-btn { width: 36px; height: 36px; flex: none; display: grid; place-items: center; border-radius: 10px; border: 1px solid var(--border); background: var(--surface-solid);
                 color: var(--text-2); cursor: pointer; transition: color .15s, border-color .15s; }
     .icon-btn:hover { color: var(--accent); border-color: var(--accent); }
+    .ask-btn { width: auto; padding: 0 12px; gap: 6px; display: inline-flex; align-items: center; font: inherit; font-weight: 600; font-size: 13px; text-decoration: none; }
+    .ask-btn:hover { text-decoration: none; }
+    .ask-btn.on { color: var(--accent-strong); border-color: var(--accent); background: var(--accent-soft); }
     .main-col { min-width: 0; }
     .ctx { position: sticky; top: env(safe-area-inset-top, 0px); z-index: 10; display: flex; gap: 12px; align-items: center; flex-wrap: wrap; padding: 12px 28px;
            background: var(--surface); backdrop-filter: blur(18px); -webkit-backdrop-filter: blur(18px); border-bottom: 1px solid var(--border); }

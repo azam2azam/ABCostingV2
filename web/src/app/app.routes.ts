@@ -11,6 +11,7 @@ const outputs = () => import('./features/outputs');
 const exec = () => import('./features/execution');
 const analysis = () => import('./features/analysis');
 const data = () => import('./features/data');
+const assistant = () => import('./features/assistant');
 
 const r = (path: string, load: () => Promise<any>, name: string, _runScoped = true, extra: CanActivateFn[] = []) => ({
   path, canActivate: [moduleGuard, runGuard, ...extra],
@@ -24,6 +25,7 @@ export const routes: Routes = [
     children: [
       { path: '', pathMatch: 'full', redirectTo: 'dashboard' },
       r('dashboard', overview, 'Dashboard'),
+      r('assistant', assistant, 'AssistantPage'),
       { path: 'profitability', redirectTo: 'dashboard' },
       r('cost-centres', model, 'CostCentres'), r('cost-centres/:id', model, 'CostCentreDetail'),
       r('resources', model, 'Resources'), r('resources/:id', model, 'ResourceDetail'),

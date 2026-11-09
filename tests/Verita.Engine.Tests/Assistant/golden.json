@@ -1,0 +1,209 @@
+{
+  "_comment": "Golden questions for the rule-based assistant, run against FakeVocabulary. intent null = must not answer. band: answer | confirm | clarify | answerable (answer or confirm). slots: expected keys; a value of '*' means present, '-' means absent. sources: where a slot's value must come from.",
+  "screen": { "hospital": "NSH-RYD", "period": "2026-10" },
+  "single": [
+    { "q": "Give me the summary for this period", "intent": "dashboard.summary", "band": "answer", "slots": { "hospital": "NSH-RYD", "period": "2026-10" } },
+    { "q": "how are we doing", "intent": "dashboard.summary", "band": "answer" },
+    { "q": "total cost", "intent": "dashboard.summary", "band": "answer" },
+    { "q": "what is the total cost at Northgate in September", "intent": "dashboard.summary", "band": "answer", "slots": { "hospital": "NSH-RYD", "period": "2026-09" } },
+    { "q": "overview for swedi hospital 2 for november", "intent": "dashboard.summary", "band": "answer", "slots": { "hospital": "SWD-AGL", "period": "2026 Nov" } },
+    { "q": "dashboard for SWD-AGL", "intent": "dashboard.summary", "band": "answer", "slots": { "hospital": "SWD-AGL", "period": "2026 Nov" } },
+    { "q": "kpis for aug 2026", "intent": "dashboard.summary", "band": "answer", "slots": { "period": "2026-08" } },
+    { "q": "summary for 2026-09", "intent": "dashboard.summary", "band": "answer", "slots": { "period": "2026-09" } },
+    { "q": "summary for last month", "intent": "dashboard.summary", "band": "answer", "slots": { "period": "2026-09" } },
+    { "q": "what does a laparoscopic appendectomy cost", "intent": "procedure.cost", "band": "answer", "slots": { "procedure": "p-appx" } },
+    { "q": "how much does appendectomy cost", "intent": "procedure.cost", "band": "answerable", "slots": { "procedure": "p-appx" } },
+    { "q": "unit cost of CBC", "intent": "procedure.cost", "band": "answer", "slots": { "procedure": "p-cbc" } },
+    { "q": "cost of LAB-001", "intent": "procedure.cost", "band": "answer", "slots": { "procedure": "p-cbc" } },
+    { "q": "unit cost of NSH-RYD.BED-ICU-DAY", "intent": "procedure.cost", "band": "answer", "slots": { "procedure": "p-icu", "hospital": "NSH-RYD" } },
+    { "q": "what does intensive care patient day cost", "intent": "procedure.cost", "band": "answer", "slots": { "procedure": "p-icu" } },
+    { "q": "price of complete blood count in september", "intent": "procedure.cost", "band": "answer", "slots": { "procedure": "p-cbc", "period": "2026-09" } },
+    { "q": "cost of the executive health check", "intent": "procedure.cost", "band": "answer", "slots": { "procedure": "p-health" } },
+    { "q": "what does outpatient consultaton cost", "intent": "procedure.cost", "band": "answerable", "slots": { "procedure": "p-consult" } },
+    { "q": "mri brain cost", "intent": "procedure.cost", "band": "answerable", "slots": { "procedure": "p-mri" } },
+    { "q": "cost of brain imaging", "intent": "procedure.cost", "band": "clarify" },
+    { "q": "what does a procedure cost", "intent": "procedure.cost", "band": "clarify", "slots": { "procedure": "-" } },
+    { "q": "most expensive procedures", "intent": "procedure.top", "band": "answer", "slots": { "order": "top" } },
+    { "q": "top 20 procedures by volume", "intent": "procedure.top", "band": "answer", "slots": { "limit": "20", "metric": "volume" } },
+    { "q": "cheapest procedures", "intent": "procedure.top", "band": "answer", "slots": { "order": "bottom" } },
+    { "q": "most common procedures in august", "intent": "procedure.top", "band": "answer", "slots": { "metric": "volume", "period": "2026-08" } },
+    { "q": "what does the normal delivery package cost", "intent": "package.cost", "band": "answer", "slots": { "package": "k-delivery" } },
+    { "q": "margin on the cataract package", "intent": "package.cost", "band": "answer", "slots": { "package": "k-cataract" } },
+    { "q": "PKG-NVD", "intent": "package.cost", "band": "answerable", "slots": { "package": "k-delivery" } },
+    { "q": "which packages lose money", "intent": "package.losing", "band": "answer" },
+    { "q": "worst packages", "intent": "package.losing", "band": "answer" },
+    { "q": "unprofitable packages at swedi hospital 2", "intent": "package.losing", "band": "answer", "slots": { "hospital": "SWD-AGL" } },
+    { "q": "profitability by payer", "intent": "profitability.by", "band": "answer", "slots": { "dimension": "payer" } },
+    { "q": "margin by department", "intent": "profitability.by", "band": "answer", "slots": { "dimension": "department" } },
+    { "q": "which DRGs lose money", "intent": "profitability.by", "band": "answer", "slots": { "dimension": "drg", "order": "bottom" } },
+    { "q": "most profitable doctors", "intent": "profitability.by", "band": "answer", "slots": { "dimension": "physician", "order": "top" } },
+    { "q": "profit by insurance company", "intent": "profitability.by", "band": "answer", "slots": { "dimension": "insurer" } },
+    { "q": "proffitability by service line", "intent": "profitability.by", "band": "answer", "slots": { "dimension": "serviceLine" } },
+    { "q": "Non-billable encounters this period", "intent": "billing.nonbillable", "band": "answer", "slots": { "procedure": "-", "period": "2026-10" } },
+    { "q": "which services were invoiced at no price", "intent": "billing.nonbillable", "band": "answerable" },
+    { "q": "nonbillable services in september", "intent": "billing.nonbillable", "band": "answer", "slots": { "period": "2026-09" } },
+    { "q": "billable vs non-billable by procedure type", "intent": "billing.nonbillable", "band": "answerable" },
+    { "q": "what does open approval non billable cost", "intent": "procedure.cost", "band": "answer", "slots": { "procedure": "p-openappr" } },
+    { "q": "compare this month summary with aug", "intent": "dashboard.summary", "view": "compare", "band": "answer", "slots": { "period": "2026-10", "compare": "2026-08" } },
+    { "q": "compare august and september", "intent": "dashboard.summary", "view": "compare", "slots": { "period": "2026-08", "compare": "2026-09" } },
+    { "q": "summary vs september", "intent": "dashboard.summary", "view": "compare", "slots": { "period": "2026-10", "compare": "2026-09" } },
+    { "q": "compare northgate with swedi hospital 2", "intent": "dashboard.summary", "view": "compare", "slots": { "hospital": "NSH-RYD", "compare": "SWD-AGL" } },
+    { "q": "compare idle capacity with last month", "intent": "capacity.idle", "view": "compare", "slots": { "period": "2026-10", "compare": "2026-09" } },
+    { "q": "departments with the highest revenue", "intent": "profitability.by", "band": "answerable", "slots": { "dimension": "department", "measure": "revenue" } },
+    { "q": "payers by margin percentage", "intent": "profitability.by", "band": "answer", "slots": { "dimension": "payer", "measure": "marginPct" } },
+    { "q": "biggest variances", "intent": "variance.top", "band": "answer" },
+    { "q": "what is over budget", "intent": "variance.top", "band": "answerable" },
+    { "q": "why is cost above standard", "intent": "variance.top", "band": "answerable" },
+    { "q": "how much idle capacity do we have", "intent": "capacity.idle", "band": "answer" },
+    { "q": "utilization of resources", "intent": "capacity.idle", "band": "answer" },
+    { "q": "unused capacity in september", "intent": "capacity.idle", "band": "answer", "slots": { "period": "2026-09" } },
+    { "q": "any data quality issues", "intent": "quality.issues", "band": "answer" },
+    { "q": "which quality checks failed", "intent": "quality.issues", "band": "answer" },
+    { "q": "does the run reconcile to the GL", "intent": "reconciliation.status", "band": "answer" },
+    { "q": "how much is unexplained", "intent": "reconciliation.status", "band": "answer" },
+    { "q": "what is the status of the latest run", "intent": "run.status", "band": "answer" },
+    { "q": "is october published", "intent": "run.status", "band": "answerable", "slots": { "period": "2026-10" } },
+    { "q": "how did my last import go", "intent": "imports.recent", "band": "answer" },
+    { "q": "show rejected rows from imports", "intent": "imports.recent", "band": "answer" },
+    { "q": "open cost centres", "intent": "navigate", "band": "answer", "slots": { "nav": "cost-centres" } },
+    { "q": "take me to calculation runs", "intent": "navigate", "band": "answer", "slots": { "nav": "runs" } },
+    { "q": "go to the audit page", "intent": "navigate", "band": "answer", "slots": { "nav": "audit" } },
+    { "q": "open", "intent": "navigate", "band": "clarify" },
+    { "q": "what is a cost driver", "intent": "help.term", "band": "answer", "slots": { "term": "cost-driver" } },
+    { "q": "what does idle capacity mean", "intent": "help.term", "band": "answer", "slots": { "term": "idle-capacity" } },
+    { "q": "define contribution margin", "intent": "help.term", "band": "answer", "slots": { "term": "contribution-margin" } },
+    { "q": "what's a DRG", "intent": "help.term", "band": "answer", "slots": { "term": "drg" } },
+    { "q": "how do I add a month of data", "intent": "help.howto", "band": "answer", "slots": { "howto": "import-data" } },
+    { "q": "how to publish a run", "intent": "help.howto", "band": "answer", "slots": { "howto": "publish-run" } },
+    { "q": "How to create new calculation run", "intent": "help.howto", "band": "answer", "slots": { "howto": "run-costing", "hospital": "NSH-RYD", "period": "2026-10" } },
+    { "q": "how do I start a calculation for september", "intent": "help.howto", "band": "answer", "slots": { "howto": "run-costing", "period": "2026-09" } },
+    { "q": "how can I rerun a run with force", "intent": "help.howto", "band": "answer", "slots": { "howto": "rerun" } },
+    { "q": "how do I add a new period", "intent": "help.howto", "band": "answer", "slots": { "howto": "add-period" } },
+    { "q": "how do I create a new costing version", "intent": "help.howto", "band": "answer", "slots": { "howto": "change-costing-model" } },
+    { "q": "How to set direct costing values", "intent": "help.howto", "band": "answer", "slots": { "howto": "set-direct-costing" } },
+    { "q": "how do I change the margin cost percentage", "intent": "help.howto", "band": "answer", "slots": { "howto": "set-direct-costing" } },
+    { "q": "how to set package costing", "intent": "help.howto", "band": "answer", "slots": { "howto": "set-package-costing" } },
+    { "q": "how can I set overheads", "intent": "help.howto", "band": "answer", "slots": { "howto": "set-indirect-costing" } },
+    { "q": "how do I add encounter overheads", "intent": "help.howto", "band": "answer", "slots": { "howto": "set-indirect-costing" } },
+    { "q": "what is direct cost", "intent": "help.term", "band": "answer", "slots": { "term": "direct-cost" } },
+    { "q": "How to import HIS data", "intent": "help.howto", "band": "answer", "slots": { "howto": "import-his" } },
+    { "q": "how do I load a month of HIS facts", "intent": "help.howto", "band": "answer", "slots": { "howto": "import-his" } },
+    { "q": "how to use the his extract utility", "intent": "help.howto", "band": "answer", "slots": { "howto": "import-his" } },
+    { "q": "how do I upload csv templates", "intent": "help.howto", "band": "answer", "slots": { "howto": "import-data" } },
+    { "q": "how do I export the dashboard to excel", "intent": "help.howto", "band": "clarify", "slots": { "howto": "-" } },
+    { "q": "how many calculation runs are there", "intent": "run.status", "band": "answerable" },
+    { "q": "how can I change a rate", "intent": "help.howto", "band": "answer", "slots": { "howto": "edit-data" } },
+    { "q": "what's the weather like", "intent": null },
+    { "q": "tell me a joke", "intent": null },
+    { "q": "asdfgh qwerty", "intent": null },
+    { "q": "who won the football match yesterday", "intent": null }
+  ],
+  "conversations": [
+    {
+      "name": "summary, drill down, change hospital, compare",
+      "turns": [
+        { "q": "Give me the summary for this period", "intent": "dashboard.summary", "turn": "NEW", "band": "answer" },
+        { "q": "break it down", "intent": "dashboard.summary", "turn": "DRILLDOWN", "view": "detail", "band": "answer" },
+        { "q": "and for Swedi Hospital 2?", "intent": "dashboard.summary", "turn": "REFINE", "band": "answer", "slots": { "hospital": "SWD-AGL" }, "sources": { "hospital": "explicit" } },
+        { "q": "what about august", "intent": "dashboard.summary", "turn": "REFINE", "band": "answer", "slots": { "hospital": "SWD-AGL", "period": "2026 Aug" }, "sources": { "hospital": "carried", "period": "explicit" } },
+        { "q": "compare with Northgate", "intent": "dashboard.summary", "turn": "REFINE", "view": "compare", "band": "answer", "slots": { "hospital": "SWD-AGL", "compare": "NSH-RYD" } }
+      ]
+    },
+    {
+      "name": "procedure cost, explain, other hospital by code",
+      "turns": [
+        { "q": "unit cost of complete blood count", "intent": "procedure.cost", "turn": "NEW", "band": "answer", "slots": { "procedure": "p-cbc" } },
+        { "q": "how was this calculated?", "intent": "procedure.cost", "turn": "DRILLDOWN", "view": "detail", "slots": { "procedure": "p-cbc" } },
+        { "q": "I don't understand, explain it simpler", "intent": "procedure.cost", "turn": "DRILLDOWN", "view": "explain" },
+        { "q": "same for swedi hospital 2", "intent": "procedure.cost", "turn": "REFINE", "band": "answer", "slots": { "hospital": "SWD-AGL", "procedure": "s-cbc" } },
+        { "q": "compare with northgate", "intent": "procedure.cost", "turn": "REFINE", "view": "compare", "slots": { "compare": "NSH-RYD", "procedure": "s-cbc" } }
+      ]
+    },
+    {
+      "name": "profitability refinements",
+      "turns": [
+        { "q": "profitability by payer", "intent": "profitability.by", "turn": "NEW", "slots": { "dimension": "payer" } },
+        { "q": "which ones lose money?", "intent": "profitability.by", "turn": "REFINE", "slots": { "dimension": "payer", "order": "bottom" } },
+        { "q": "by department", "intent": "profitability.by", "turn": "REFINE", "slots": { "dimension": "department" }, "sources": { "dimension": "explicit" } },
+        { "q": "top 5", "intent": "profitability.by", "turn": "REFINE", "slots": { "limit": "5", "dimension": "department" } },
+        { "q": "thanks", "turn": "META" },
+        { "q": "and in september?", "intent": "profitability.by", "turn": "REFINE", "slots": { "period": "2026-09", "dimension": "department" } }
+      ]
+    },
+    {
+      "name": "topic change carries only hospital and period",
+      "turns": [
+        { "q": "what does a complete blood count cost at swedi hospital 2", "intent": "procedure.cost", "turn": "NEW", "slots": { "procedure": "s-cbc" } },
+        { "q": "show me last month's import errors", "intent": "imports.recent", "turn": "NEW", "slots": { "procedure": "-" } },
+        { "q": "how much idle capacity do we have", "intent": "capacity.idle", "turn": "NEW", "slots": { "procedure": "-", "hospital": "NSH-RYD" } }
+      ]
+    },
+    {
+      "name": "summary then by payer moves to profitability",
+      "turns": [
+        { "q": "how are we doing", "intent": "dashboard.summary", "turn": "NEW" },
+        { "q": "by payer", "intent": "profitability.by", "turn": "SHIFT", "slots": { "dimension": "payer" } }
+      ]
+    },
+    {
+      "name": "correction swaps the intent",
+      "turns": [
+        { "q": "cost of normal delivery", "intent": "procedure.cost", "band": "clarify" },
+        { "q": "no, I meant the normal delivery package", "intent": "package.cost", "turn": "CORRECTION", "slots": { "package": "k-delivery" } }
+      ]
+    },
+    {
+      "name": "missing procedure, then just the name",
+      "turns": [
+        { "q": "what does a procedure cost", "intent": "procedure.cost", "turn": "CLARIFY", "band": "clarify" },
+        { "q": "CBC", "intent": "procedure.cost", "turn": "REFINE", "band": "answer", "slots": { "procedure": "p-cbc" } }
+      ]
+    },
+    {
+      "name": "ambiguous procedure is asked about, not guessed",
+      "turns": [
+        { "q": "cost of biopsy at swedi hospital 2", "intent": "procedure.cost", "turn": "CLARIFY", "band": "clarify", "options": 2 },
+        { "q": "cost of biopsy at swedi hospital 2", "intent": "procedure.cost", "pick": { "procedure": "s-breast" }, "pickIntent": "procedure.cost", "band": "answer", "slots": { "procedure": "s-breast" } }
+      ]
+    },
+    {
+      "name": "variance then why",
+      "turns": [
+        { "q": "biggest variances", "intent": "variance.top", "turn": "NEW" },
+        { "q": "why?", "intent": "variance.top", "turn": "DRILLDOWN", "view": "detail" },
+        { "q": "what is a variance?", "intent": "help.term", "turn": "NEW", "slots": { "term": "variance" } }
+      ]
+    },
+    {
+      "name": "rephrase within the window",
+      "turns": [
+        { "q": "idle capacity", "intent": "capacity.idle", "turn": "NEW" },
+        { "q": "how much capacity is unused", "intent": "capacity.idle", "turn": "REPHRASE" }
+      ]
+    },
+    {
+      "name": "a list refined straight after",
+      "turns": [
+        { "q": "most expensive procedures", "intent": "procedure.top", "turn": "NEW" },
+        { "q": "top 5 by volume", "intent": "procedure.top", "turn": "REFINE", "slots": { "limit": "5", "metric": "volume" } },
+        { "q": "does it reconcile?", "intent": "reconciliation.status", "turn": "SHIFT", "band": "answer" }
+      ]
+    },
+    {
+      "name": "rank by a measure, then by another",
+      "turns": [
+        { "q": "Top 10 department by margin %", "intent": "profitability.by", "turn": "NEW", "band": "answer", "slots": { "dimension": "department", "measure": "marginPct", "limit": "10", "order": "top" } },
+        { "q": "by revenue", "intent": "profitability.by", "turn": "REFINE", "band": "answer", "slots": { "dimension": "department", "measure": "revenue", "limit": "10" } },
+        { "q": "lowest 5", "intent": "profitability.by", "turn": "REFINE", "slots": { "measure": "revenue", "limit": "5", "order": "bottom" } },
+        { "q": "by payer", "intent": "profitability.by", "turn": "REFINE", "slots": { "dimension": "payer", "measure": "revenue" } }
+      ]
+    },
+    {
+      "name": "remove an assumption",
+      "turns": [
+        { "q": "most expensive procedures in september", "intent": "procedure.top", "slots": { "period": "2026-09" } },
+        { "q": "", "remove": ["period"], "intent": "procedure.top", "turn": "REFINE", "slots": { "period": "2026-10" }, "sources": { "period": "screen" } }
+      ]
+    }
+  ]
+}

@@ -28,6 +28,8 @@ public static class DependencyInjection
         services.AddScoped<DataHub.DataHubService>();
         services.AddScoped<DataHub.HisImportService>();
         services.AddScoped<CostingSeed.RecipeSuggestionService>();
+        services.AddScoped<Assistant.AssistantAnswers>();
+        services.AddScoped<Assistant.AssistantService>();
         return services;
     }
 }

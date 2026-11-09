@@ -93,6 +93,9 @@ public sealed class VeritaDbContext(DbContextOptions<VeritaDbContext> options) :
     public DbSet<ApprovalRequest> ApprovalRequests => Set<ApprovalRequest>();
     public DbSet<AuditLog> AuditLogs => Set<AuditLog>();
     public DbSet<ImportBatch> ImportBatches => Set<ImportBatch>();
+    // Assistant
+    public DbSet<AssistantThread> AssistantThreads => Set<AssistantThread>();
+    public DbSet<AssistantMessage> AssistantMessages => Set<AssistantMessage>();
 
     /// <summary>Master-data tables get SQL Server system versioning as an audit mechanism —
     /// never used to serve effective-dated costing (BRD section 18).</summary>
@@ -108,10 +111,10 @@ public sealed class VeritaDbContext(DbContextOptions<VeritaDbContext> options) :
     private static readonly HashSet<string> LongText =
     [
         "Description", "Explanation", "Narrative", "Summary", "Message", "DetailJson", "MetricsJson", "BeforeJson", "AfterJson",
-        "Metadata", "RequestNote", "ReviewNote", "RejectReasons", "Notes", "ErrorMessage",
+        "Metadata", "RequestNote", "ReviewNote", "RejectReasons", "Notes", "ErrorMessage", "ContextJson", "ParamsJson", "Text",
     ];
 
-    private static readonly HashSet<string> JsonColumns = ["DetailJson", "MetricsJson", "BeforeJson", "AfterJson", "Metadata"];
+    private static readonly HashSet<string> JsonColumns = ["DetailJson", "MetricsJson", "BeforeJson", "AfterJson", "Metadata", "ContextJson", "ParamsJson"];
 
     protected override void ConfigureConventions(ModelConfigurationBuilder b)
     {
@@ -309,6 +312,8 @@ public sealed class VeritaDbContext(DbContextOptions<VeritaDbContext> options) :
         Fk<ApprovalRequest, User>(x => x.ReviewedById);
         Fk<ApprovalRequest, CostingVersion>(x => x.CostingVersionId);
         Fk<AuditLog, User>(x => x.UserId);
+        Fk<AssistantThread, User>(x => x.UserId);
+        mb.Entity<AssistantMessage>().HasOne<AssistantThread>().WithMany().HasForeignKey(x => x.ThreadId).OnDelete(DeleteBehavior.Cascade);
     }
 
     private static void Indexes(ModelBuilder mb)
@@ -379,5 +384,12 @@ public sealed class VeritaDbContext(DbContextOptions<VeritaDbContext> options) :
         mb.Entity<AuditLog>().HasIndex(x => new { x.EntityType, x.EntityId });
         mb.Entity<AuditLog>().HasIndex(x => x.ActorEmail);
         mb.Entity<ApprovalRequest>().HasIndex(x => new { x.EntityType, x.EntityId });
+        mb.Entity<AssistantThread>().HasIndex(x => new { x.UserId, x.IsDeleted, x.UpdatedAt });
+        mb.Entity<AssistantMessage>().HasIndex(x => new { x.ThreadId, x.CreatedAt });
+        mb.Entity<AssistantMessage>().HasIndex(x => new { x.Matched, x.CreatedAt });
+        mb.Entity<AssistantMessage>().Property(x => x.Role).HasMaxLength(16);
+        mb.Entity<AssistantMessage>().Property(x => x.TurnType).HasMaxLength(16);
+        mb.Entity<AssistantMessage>().Property(x => x.Intent).HasMaxLength(64);
+        mb.Entity<AssistantMessage>().ToTable(t => t.HasCheckConstraint("CK_AssistantMessage_Role", "[Role] IN (N'user', N'assistant')"));
     }
 }
