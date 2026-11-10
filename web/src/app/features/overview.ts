@@ -226,11 +226,24 @@ export class ProfitTables {
   });
 }
 
+function dashboardPending(ctx: RunContext): string {
+  const code = ctx.periodParam();
+  const selected = ctx.periodsForHospital().find(p => p.code === code);
+  const period = selected ? `${selected.code} (${selected.startDate} – ${selected.endDate})` : code ?? 'this period';
+  const run = ctx.run();
+  if (!run) return `The calculation has not been run for ${period}.`;
+  if (runInFlight(run.status)) return `The calculation for ${period} is still running.`;
+  return run.status === 'FAILED'
+    ? `The calculation for ${period} failed, so there are no figures to show.`
+    : `The calculation has not been run for ${period}.`;
+}
+
+/** Summary only — multi-month trend charts live here and must not be reused by IP/OP/ER. */
 @Component({
-  selector: 'v-run-summary',
+  selector: 'v-dashboard',
   imports: [RouterLink, ProfitTables, ...CHARTS, ...UI],
   template: `
-    <v-page [title]="title()" [purpose]="purpose()">
+    <v-page title="Summary" purpose="Direct cost, indirect cost, overheads, revenue and margin for one costed run. Every figure opens the screen that explains it.">
       @if (!calculated()) {
         <p class="notice warn">
           {{ pending() }}
@@ -242,8 +255,7 @@ export class ProfitTables {
             <div class="grid tiles">
               @for (t of r.data.headline; track t.key) {
                 <v-tile [label]="t.label" [value]="t.value" [unit]="t.unit" [direction]="t.direction" [note]="t.note"
-                  [link]="t.link ? '/' + t.link : null"
-                  [linkParams]="encType() && t.link === 'patient-encounters' ? { encType: encType()! } : null" />
+                  [link]="t.link ? '/' + t.link : null" />
               }
             </div>
             <v-state [loading]="trend.isLoading()" [error]="trend.error()">
@@ -269,7 +281,7 @@ export class ProfitTables {
               }
             </v-state>
             @if (canProfitability()) {
-              <div style="margin-top:14px"><v-profit-tables [encType]="encType()" [omitDims]="omitDims()" /></div>
+              <div style="margin-top:14px"><v-profit-tables /></div>
             }
           }
         </v-state>
@@ -277,27 +289,13 @@ export class ProfitTables {
     </v-page>
   `,
 })
-export class RunSummary {
-  title = input('Summary');
-  purpose = input('Direct cost, indirect cost, overheads, revenue and margin for one costed run. Every figure opens the screen that explains it.');
-  encType = input<string | null>(null);
-  omitDims = input<string[]>([]);
+export class Dashboard {
   private auth = inject(Auth);
   private ctx = inject(RunContext);
   calculated = computed(() => ['RECONCILED', 'PUBLISHED'].includes(this.ctx.run()?.status ?? ''));
-  pending = computed(() => {
-    const code = this.ctx.periodParam();
-    const selected = this.ctx.periodsForHospital().find(p => p.code === code);
-    const period = selected ? `${selected.code} (${selected.startDate} – ${selected.endDate})` : code ?? 'this period';
-    const run = this.ctx.run();
-    if (!run) return `The calculation has not been run for ${period}.`;
-    if (runInFlight(run.status)) return `The calculation for ${period} is still running.`;
-    return run.status === 'FAILED'
-      ? `The calculation for ${period} failed, so there are no figures to show.`
-      : `The calculation has not been run for ${period}.`;
-  });
-  res = runResource<DashboardDto>(() => this.calculated() ? 'dashboard' : null, () => ({ encType: this.encType() }));
-  trend = runResource<DashboardTrendDto>(() => this.calculated() ? 'dashboard/trend' : null, () => ({ encType: this.encType() }));
+  pending = computed(() => dashboardPending(this.ctx));
+  res = runResource<DashboardDto>(() => this.calculated() ? 'dashboard' : null);
+  trend = runResource<DashboardTrendDto>(() => this.calculated() ? 'dashboard/trend' : null);
   canProfitability = computed(() => this.auth.can('profitability.view'));
   canRevenue = computed(() => this.auth.can('revenue.view'));
   sar = sar;
@@ -324,31 +322,67 @@ export class RunSummary {
   });
 }
 
+/** IP / OP / ER only — separate from Summary so that screen can evolve independently. */
 @Component({
-  selector: 'v-dashboard',
-  imports: [RunSummary],
-  template: `<v-run-summary />`,
+  selector: 'v-enc-dashboard',
+  imports: [RouterLink, ProfitTables, ...UI],
+  template: `
+    <v-page [title]="title()" [purpose]="purpose()">
+      @if (!calculated()) {
+        <p class="notice warn">
+          {{ pending() }}
+          <a routerLink="/runs" queryParamsHandling="preserve">Go to Calculation Runs</a>
+        </p>
+      } @else {
+        <v-state [loading]="res.isLoading()" [error]="res.error()">
+          @if (res.value(); as r) {
+            <div class="grid tiles">
+              @for (t of r.data.headline; track t.key) {
+                <v-tile [label]="t.label" [value]="t.value" [unit]="t.unit" [direction]="t.direction" [note]="t.note"
+                  [link]="t.link ? '/' + t.link : null"
+                  [linkParams]="t.link === 'patient-encounters' ? { encType: encType() } : null" />
+              }
+            </div>
+            @if (canProfitability()) {
+              <div style="margin-top:14px"><v-profit-tables [encType]="encType()" [omitDims]="omitDims()" /></div>
+            }
+          }
+        </v-state>
+      }
+    </v-page>
+  `,
 })
-export class Dashboard {}
+export class EncDashboard {
+  title = input.required<string>();
+  purpose = input.required<string>();
+  encType = input.required<string>();
+  omitDims = input<string[]>([]);
+  private auth = inject(Auth);
+  private ctx = inject(RunContext);
+  calculated = computed(() => ['RECONCILED', 'PUBLISHED'].includes(this.ctx.run()?.status ?? ''));
+  pending = computed(() => dashboardPending(this.ctx));
+  res = runResource<DashboardDto>(() => this.calculated() ? 'dashboard' : null, () => ({ encType: this.encType() }));
+  canProfitability = computed(() => this.auth.can('profitability.view'));
+}
 
 @Component({
   selector: 'v-ip-dashboard',
-  imports: [RunSummary],
-  template: `<v-run-summary title="IP Dashboard" purpose="Inpatient (IP) cost, revenue and margin for one costed run — the same Summary layout, limited to IP encounters." encType="IP" />`,
+  imports: [EncDashboard],
+  template: `<v-enc-dashboard title="IP Dashboard" purpose="Inpatient (IP) cost, revenue and margin for one costed run — limited to IP encounters." encType="IP" />`,
 })
 export class IpDashboard {}
 
 @Component({
   selector: 'v-op-dashboard',
-  imports: [RunSummary],
-  template: `<v-run-summary title="OP Dashboard" purpose="Outpatient (OP) cost, revenue and margin for one costed run — OP encounters only (ER has its own dashboard)." encType="OP" />`,
+  imports: [EncDashboard],
+  template: `<v-enc-dashboard title="OP Dashboard" purpose="Outpatient (OP) cost, revenue and margin for one costed run — OP encounters only (ER has its own dashboard)." encType="OP" />`,
 })
 export class OpDashboard {}
 
 @Component({
   selector: 'v-er-dashboard',
-  imports: [RunSummary],
-  template: `<v-run-summary title="ER Dashboard" purpose="Emergency (ER) cost, revenue and margin for one costed run — the same Summary layout, limited to ER encounters." encType="ER" [omitDims]="omit" />`,
+  imports: [EncDashboard],
+  template: `<v-enc-dashboard title="ER Dashboard" purpose="Emergency (ER) cost, revenue and margin for one costed run — limited to ER encounters." encType="ER" [omitDims]="omit" />`,
 })
 export class ErDashboard {
   omit = ['department', 'resource'];
