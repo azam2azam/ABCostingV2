@@ -155,32 +155,51 @@ public sealed partial class ReadQueries(VeritaDbContext db, IAuditWriter audit)
             .ToListAsync(ct);
         var best = runs.GroupBy(r => r.PeriodId)
             .ToDictionary(g => g.Key, g => g.OrderByDescending(r => r.FinishedAt ?? r.StartedAt ?? DateTime.MinValue).First());
+        var runIds = best.Values.Select(r => r.Id).ToList();
+        // One grouped read for all costed runs — avoid loading every encounter row per period.
+        Dictionary<Guid, Dictionary<string, int>> byRunType = [];
+        if (runIds.Count > 0)
+        {
+            var typeCounts = await (
+                from ec in db.EncounterCosts.AsNoTracking()
+                join e in db.Encounters.AsNoTracking() on ec.EncounterId equals e.Id
+                where runIds.Contains(ec.RunId)
+                group e by new { ec.RunId, e.EncType } into g
+                select new { g.Key.RunId, g.Key.EncType, N = g.Count() }).ToListAsync(ct);
+            byRunType = typeCounts.GroupBy(x => x.RunId)
+                .ToDictionary(g => g.Key, g => g.ToDictionary(x => x.EncType, x => x.N));
+        }
         var months = new List<TrendPoint>();
         foreach (var period in periods)
         {
             if (!best.TryGetValue(period.Id, out var run)) continue;
-            var facts = await EncounterFacts(run.Id, ct);
             var (direct, indirect, overhead, revenue, encounters) = string.IsNullOrWhiteSpace(encType)
                 ? await RunTotalsAsync(run, ct)
-                : TotalsFromFacts(facts.Where(f => f.EncType == encType).ToList());
+                : await RunTotalsForEncTypeAsync(run.Id, encType, ct);
             var cost = Money.R4(direct + indirect + overhead);
             revenue = showRevenue ? Money.R4(revenue) : 0m;
             var margin = showRevenue ? Money.R4(revenue - cost) : 0m;
             var marginPct = showRevenue && revenue != 0m ? Money.R4(margin / revenue * 100m) : 0m;
-            var scoped = string.IsNullOrWhiteSpace(encType) ? facts : facts.Where(f => f.EncType == encType).ToList();
+            byRunType.TryGetValue(run.Id, out var types);
+            types ??= [];
+            int TypeCount(string t) => string.IsNullOrWhiteSpace(encType) || encType == t ? types.GetValueOrDefault(t) : 0;
             months.Add(new TrendPoint(period.Code, period.StartDate, period.EndDate, encounters, revenue, cost, margin, marginPct,
-                scoped.Count(f => f.EncType == "IP"), scoped.Count(f => f.EncType == "OP"), scoped.Count(f => f.EncType == "ER")));
+                TypeCount("IP"), TypeCount("OP"), TypeCount("ER")));
         }
         return new DashboardTrendDto(months.ToArray());
     }
 
-    private static (decimal Direct, decimal Indirect, decimal Overhead, decimal Revenue, int Encounters) TotalsFromFacts(List<EncFact> facts) =>
-        (Money.R4(facts.Sum(f => f.Direct)), Money.R4(facts.Sum(f => f.Indirect)), Money.R4(facts.Sum(f => f.Overhead)),
-            Money.R4(facts.Sum(f => f.Revenue)), facts.Count);
-
     private async Task<(decimal Direct, decimal Indirect, decimal Overhead, decimal Revenue, int Encounters)> RunTotalsForEncTypeAsync(
-        Guid runId, string encType, CancellationToken ct) =>
-        TotalsFromFacts((await EncounterFacts(runId, ct)).Where(f => f.EncType == encType).ToList());
+        Guid runId, string encType, CancellationToken ct)
+    {
+        var sum = await (from ec in db.EncounterCosts.AsNoTracking()
+                         join e in db.Encounters.AsNoTracking() on ec.EncounterId equals e.Id
+                         where ec.RunId == runId && e.EncType == encType
+                         group ec by 1 into g
+                         select new { D = g.Sum(x => x.DirectCost), I = g.Sum(x => x.IndirectCost), O = g.Sum(x => x.OverheadCost),
+                             R = g.Sum(x => x.Revenue), N = g.Count() }).FirstOrDefaultAsync(ct);
+        return (sum?.D ?? 0m, sum?.I ?? 0m, sum?.O ?? 0m, sum?.R ?? 0m, sum?.N ?? 0);
+    }
 
     /// <summary>A run's whole totals: what a costing-model run stored, or the sum of an engine run's encounters.</summary>
     private async Task<(decimal Direct, decimal Indirect, decimal Overhead, decimal Revenue, int Encounters)> RunTotalsAsync(CalculationRun run, CancellationToken ct)
