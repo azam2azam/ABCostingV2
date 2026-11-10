@@ -45,17 +45,17 @@ const ENCOUNTER_FILTER: Record<string, string> = { encounterType: 'encType', noB
           <div class="grid two charts">
             @if (dim() === 'noBillable') {
               <section class="card chart">
-                <h2>Total cost and encounters by procedure type</h2>
-                <p class="faint sub">Share of the cost of lines invoiced at no price.</p>
-                <v-pie [slices]="pie()" caption="Non-billable cost by procedure type" centreLabel="total cost" />
-              </section>
-              <section class="card chart">
                 <h2>Billable vs non-billable services by procedure type</h2>
                 <p class="faint sub">Invoice lines by procedure type, with the share invoiced at no price.</p>
                 @if (billable.value(); as b) {
                   @if ($any(b.data.total).services) { <v-hbars [rows]="compare(r.data, b.data)" [series]="compareSeries" [format]="count" [tickFormat]="countTick" /> }
                   @else { <p class="faint">This run holds no billable lines by type. Run the calculation again to compare.</p> }
                 }
+              </section>
+              <section class="card chart">
+                <h2>Total cost and encounters by procedure type</h2>
+                <p class="faint sub">Share of the cost of lines invoiced at no price.</p>
+                <v-pie [slices]="pie()" caption="Non-billable cost by procedure type" centreLabel="total cost" />
               </section>
             } @else if (dim() === 'segment') {
               <section class="card chart">
@@ -243,17 +243,17 @@ export class ProfitTables {
           <div class="grid two charts">
             @if (dim() === 'noBillable') {
               <section class="card chart">
-                <h2>Total cost and encounters by procedure type</h2>
-                <p class="faint sub">Share of the cost of lines invoiced at no price.</p>
-                <v-pie [slices]="pie()" caption="Non-billable cost by procedure type" centreLabel="total cost" />
-              </section>
-              <section class="card chart">
                 <h2>Billable vs non-billable services by procedure type</h2>
                 <p class="faint sub">Invoice lines by procedure type, with the share invoiced at no price.</p>
                 @if (billable.value(); as b) {
                   @if ($any(b.data.total).services) { <v-hbars [rows]="compare(r.data, b.data)" [series]="compareSeries" [format]="count" [tickFormat]="countTick" /> }
                   @else { <p class="faint">This run holds no billable lines by type. Run the calculation again to compare.</p> }
                 }
+              </section>
+              <section class="card chart">
+                <h2>Total cost and encounters by procedure type</h2>
+                <p class="faint sub">Share of the cost of lines invoiced at no price.</p>
+                <v-pie [slices]="pie()" caption="Non-billable cost by procedure type" centreLabel="total cost" />
               </section>
             } @else if (dim() === 'segment') {
               <section class="card chart">
