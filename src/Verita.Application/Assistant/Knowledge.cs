@@ -185,7 +185,15 @@ public static class Knowledge
     {
         foreach (var d in Dimensions) yield return new("dimension", d.Key, d.Label, d.Aliases);
         foreach (var n in Security.AllNavItems)
-            yield return new("nav", n.Path, n.Label, [n.Label, n.Path.Replace('-', ' ')], n.Permission);
+        {
+            var aliases = new List<string> { n.Label, n.Path.Replace('-', ' ') };
+            // Extra phrases so "open inpatient dashboard" / "open Summary" resolve after the Dashboard rename.
+            if (n.Path == "dashboard") aliases.AddRange(["summary dashboard", "the summary", "run summary"]);
+            else if (n.Path == "ip-dashboard") aliases.AddRange(["inpatient dashboard", "ip summary", "inpatient summary"]);
+            else if (n.Path == "op-dashboard") aliases.AddRange(["outpatient dashboard", "op summary", "outpatient summary"]);
+            else if (n.Path == "er-dashboard") aliases.AddRange(["emergency dashboard", "er summary", "emergency summary"]);
+            yield return new("nav", n.Path, n.Label, aliases.ToArray(), n.Permission);
+        }
         foreach (var t in Terms) yield return new("term", t.Key, t.Label, t.Aliases);
         foreach (var h in HowTos) yield return new("howto", h.Key, h.Title, h.Aliases);
     }

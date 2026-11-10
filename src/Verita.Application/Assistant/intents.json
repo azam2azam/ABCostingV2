@@ -3,18 +3,18 @@
   "intents": [
     {
       "id": "dashboard.summary",
-      "label": "Run summary",
+      "label": "Summary",
       "permission": "dashboard.view",
       "path": "dashboard",
-      "keywords": { "summary": 1.0, "overview": 1.0, "dashboard": 1.0, "headline": 0.8, "kpi": 1.0, "total": 0.5, "revenue": 0.6, "margin": 0.4, "overall": 0.6, "cost": 0.35, "spend": 0.4, "encounter": 0.3 },
-      "phrases": { "how are we doing": 1.0, "total cost": 0.9, "total revenue": 0.9, "overall cost": 0.9, "big picture": 0.9 },
+      "keywords": { "summary": 1.0, "overview": 1.0, "dashboard": 1.0, "headline": 0.8, "kpi": 1.0, "total": 0.5, "revenue": 0.6, "margin": 0.4, "overall": 0.6, "cost": 0.35, "spend": 0.4, "encounter": 0.3, "inpatient": 0.5, "outpatient": 0.5, "emergency": 0.5 },
+      "phrases": { "how are we doing": 1.0, "total cost": 0.9, "total revenue": 0.9, "overall cost": 0.9, "big picture": 0.9, "ip summary": 0.9, "op summary": 0.9, "er summary": 0.9, "ip dashboard": 0.8, "op dashboard": 0.8, "er dashboard": 0.8 },
       "entities": {},
       "required": [],
-      "uses": ["hospital", "period"],
+      "uses": ["hospital", "period", "encType"],
       "drilldown": true,
       "compare": true,
-      "examples": ["Give me the summary for this period", "What is the total cost at Northgate in October?", "How are we doing?"],
-      "suggestions": ["Break it down", "Compare with the previous period", "Profitability by service line"]
+      "examples": ["Give me the summary for this period", "What is the total cost at Northgate in October?", "How are we doing?", "IP summary for this period"],
+      "suggestions": ["Break it down", "Compare with the previous period", "Open IP Dashboard", "Profitability by service line"]
     },
     {
       "id": "procedure.cost",
@@ -87,11 +87,11 @@
       "phrases": { "lose money": 0.5, "losing money": 0.5, "make money": 0.6, "most profitable": 0.9, "least profitable": 0.9 },
       "entities": { "dimension": 0.5, "measure": 0.4 },
       "required": [],
-      "uses": ["hospital", "period", "dimension", "order", "limit", "measure"],
+      "uses": ["hospital", "period", "dimension", "order", "limit", "measure", "encType"],
       "drilldown": true,
       "compare": false,
-      "examples": ["Profitability by payer", "Which DRGs lose money?", "Margin by department"],
-      "suggestions": ["By payer", "By department", "Break it down"]
+      "examples": ["Profitability by payer", "Which DRGs lose money?", "Margin by department", "IP margin by department"],
+      "suggestions": ["By payer", "By department", "Open IP Dashboard"]
     },
     {
       "id": "billing.nonbillable",
@@ -106,7 +106,7 @@
       "drilldown": true,
       "compare": true,
       "examples": ["Non-billable encounters this period", "Which services were invoiced at no price?", "Billable vs non-billable by procedure type"],
-      "suggestions": ["Compare with billable", "Compare with the previous period", "Profitability by service line"]
+      "suggestions": ["Compare with billable", "Open Summary", "Non-billable encounters"]
     },
     {
       "id": "variance.top",
