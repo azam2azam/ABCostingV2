@@ -186,7 +186,7 @@ export class ProfitTables {
           ...(this.encType() ? { encType: this.encType()! } : {}),
           [ENCOUNTER_FILTER[this.dim()] ?? this.dim()]: r.key || 'none',
         }),
-        totalLinkParams: () => {
+        totalLinkParams: (): Record<string, string> | null => {
           if (this.dim() === 'noBillable') return { noBillableType: 'ALL' };
           const enc = this.encType();
           return enc ? { encType: enc } : null;
