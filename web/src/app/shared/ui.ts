@@ -79,9 +79,10 @@ export class Chip {
     <ng-content />
   `,
   styles: `.page-head { display: flex; gap: 16px; align-items: flex-end; justify-content: space-between; flex-wrap: wrap; margin-bottom: 20px; }
+           .page-head > div:first-child { flex: 1; min-width: 0; }
            .page-head h1 { font-size: 26px; }
-           .page-head p { max-width: 80ch; margin: 0; }
-           .actions { display: flex; gap: 8px; flex-wrap: wrap; }`,
+           .page-head p { margin: 0; }
+           .actions { display: flex; gap: 8px; flex-wrap: wrap; flex-shrink: 0; }`,
 })
 export class Page {
   title = input.required<string>();
@@ -97,7 +98,9 @@ export class Page {
     <div class="tile">
       <div class="label">{{ label() }}</div>
       <div class="value num" [class]="'value num ' + cls()">
-        @if (link()) { <a [routerLink]="link()" queryParamsHandling="preserve">{{ text() }}</a> } @else { {{ text() }} }
+        @if (link()) {
+          <a [routerLink]="link()" [queryParams]="linkParams()" [queryParamsHandling]="linkParams() ? 'merge' : 'preserve'">{{ text() }}</a>
+        } @else { {{ text() }} }
       </div>
       @if (note()) { <div class="note">{{ note() }}</div> }
     </div>
@@ -118,6 +121,7 @@ export class Tile {
   direction = input<string>('neutral');
   note = input<string | null>(null);
   link = input<string | null>(null);
+  linkParams = input<Record<string, string> | null>(null);
   /** Shows nothing when the value is zero. */
   blankZero = input(false, { transform: booleanAttribute });
   text = computed(() => {

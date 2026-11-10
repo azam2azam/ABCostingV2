@@ -81,11 +81,14 @@ public static class Security
     /// <summary>FR-11.4: the modules, plus data entry and import, grouped by what a person is doing.</summary>
     public static readonly NavGroup[] Navigation =
     [
-        new("Overview", [
-            new("dashboard", "Dashboard", "dashboard.view", "Direct cost, indirect cost, overheads, revenue and margin of one run, by hospital, service line, department, physician, payer, DRG, encounter type and segment."),
-            new("assistant", "Ask VERITA", "help.view", "Ask about costs, margins, variances and runs in plain words. Answers come from the same data as the screens, with no AI model."),
+        new("Dashboard", [
+            new("dashboard", "Summary", "dashboard.view", "Direct cost, indirect cost, overheads, revenue and margin for one costed run — each figure opens the screen that explains it. Includes period vs 6-month trends and stacked profitability charts."),
+            new("ip-dashboard", "IP Dashboard", "dashboard.view", "Inpatient (IP) cost, revenue and margin for one costed run — limited to IP encounters."),
+            new("op-dashboard", "OP Dashboard", "dashboard.view", "Outpatient (OP) cost, revenue and margin for one costed run — OP encounters only (ER has its own dashboard)."),
+            new("er-dashboard", "ER Dashboard", "dashboard.view", "Emergency (ER) cost, revenue and margin for one costed run — limited to ER encounters."),
         ]),
         new("Catalogue", [
+            new("departments", "Departments", "costing.view", "Cost, revenue and margin by department for the selected hospital and period — the same figures as Summary's Department section."),
             new("cost-centres", "Cost Centres", "masterdata.view", "The financial units money lands in, their step-down sequence and their closing balances."),
             new("packages", "Packages", "costing.view", "Bundled episodes: cost, revenue, variance and margin against the contracted price."),
             new("procedures", "Procedure/Activity", "costing.view", "Standard and actual cost per procedure/activity, fully decomposed into its cost components."),

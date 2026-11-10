@@ -63,18 +63,30 @@ public sealed class AssistantAnswers(ReadQueries q, DataHubService hub)
     private static string Where(ScopedRun s) => $"{s.Hospital.Name}, {s.Period.Code}";
     private static Dictionary<string, string> Scope(ScopedRun s) => new() { ["hospital"] = s.Hospital.Code, ["period"] = s.Period.Code };
     private static ReplyLink Screen(string label, string path, ScopedRun? s) => new(label, path, s is null ? [] : Scope(s));
+    private static string? EncType(Interpretation it) => it["encType"]?.Key is { Length: > 0 } e ? e : null;
+    private static string EncLabel(string? enc) => enc switch { "IP" => "Inpatient (IP)", "OP" => "Outpatient (OP)", "ER" => "Emergency (ER)", _ => "" };
+    private static (string Label, string Path) DashboardScreen(string? enc) => enc switch
+    {
+        "IP" => ("Open IP Dashboard", "ip-dashboard"),
+        "OP" => ("Open OP Dashboard", "op-dashboard"),
+        "ER" => ("Open ER Dashboard", "er-dashboard"),
+        _ => ("Open Summary", "dashboard"),
+    };
 
     // ── Run summary ──────────────────────────────────────────────────────────────────
 
     private async Task Dashboard(Answer a, Principal p, Interpretation it, ScopedRun s, CancellationToken ct)
     {
-        var d = await q.DashboardAsync(s, p, ct);
+        var enc = EncType(it);
+        var d = await q.DashboardAsync(s, p, ct, enc);
         var t = d.Headline.ToDictionary(x => x.Key);
         foreach (var tile in d.Headline) a.Figures.Add(new(tile.Key, tile.Label, tile.Value, tile.Unit == "count" ? "" : tile.Unit));
         var total = t.GetValueOrDefault("total")?.Value ?? 0m;
-        var text = $"{Where(s)}: total cost is {Cur(s)} {Money(total)} — direct {Money(t.GetValueOrDefault("direct")?.Value ?? 0)}, " +
+        var scope = string.IsNullOrEmpty(EncLabel(enc)) ? Where(s) : $"{EncLabel(enc)} at {Where(s)}";
+        var encWord = enc is null ? "encounters" : $"{enc} encounters";
+        var text = $"{scope}: total cost is {Cur(s)} {Money(total)} — direct {Money(t.GetValueOrDefault("direct")?.Value ?? 0)}, " +
                    $"indirect {Money(t.GetValueOrDefault("indirect")?.Value ?? 0)} and overheads {Money(t.GetValueOrDefault("overheads")?.Value ?? 0)}, " +
-                   $"over {Number(t.GetValueOrDefault("encounters")?.Value ?? 0)} encounters.";
+                   $"over {Number(t.GetValueOrDefault("encounters")?.Value ?? 0)} {encWord}.";
         if (t.TryGetValue("revenue", out var rev) && t.TryGetValue("margin", out var mar))
             text += $" Revenue is {Cur(s)} {Money(rev.Value)}, leaving a margin of {Cur(s)} {Money(mar.Value)} ({mar.Note}).";
         else text += " Revenue and margin need revenue.view, which your role does not hold.";
@@ -85,14 +97,22 @@ public sealed class AssistantAnswers(ReadQueries q, DataHubService hub)
             a.Blocks.Add(new("table", "Cost by nature", ["Nature", Cur(s), "Share"], d.CostNature.Select(b => new[] { b.Label, Money(b.Value), Pct(b.Share) }).ToArray()));
             if (p.Can("profitability.view"))
             {
-                var pr = await q.ProfitabilityAsync(s, p, "serviceLine", ct);
+                var pr = await q.ProfitabilityAsync(s, p, "serviceLine", ct, enc);
                 a.Blocks.Add(new("table", "By service line (highest cost first)", ["Service line", "Encounters", "Total cost", "Margin %"],
                     pr.Rows.OrderByDescending(r => r.Total).Take(8).Select(r => new[] { r.Label, Number(r.Encounters), Money(r.Total), Pct(r.MarginPct) }).ToArray()));
             }
             a.Text += " The breakdown by cost nature is below.";
         }
         a.Terms.AddRange(["direct-cost", "indirect-cost", "overhead"]);
-        a.Links.Add(Screen("Open the dashboard", "dashboard", s));
+        var (label, path) = DashboardScreen(enc);
+        a.Links.Add(Screen(label, path, s));
+        if (enc is null)
+        {
+            a.Links.Add(Screen("Open IP Dashboard", "ip-dashboard", s));
+            a.Links.Add(Screen("Open OP Dashboard", "op-dashboard", s));
+            a.Links.Add(Screen("Open ER Dashboard", "er-dashboard", s));
+        }
+        else a.Links.Add(Screen("Open Summary", "dashboard", s));
     }
 
     // ── Procedures ───────────────────────────────────────────────────────────────────
@@ -225,7 +245,10 @@ public sealed class AssistantAnswers(ReadQueries q, DataHubService hub)
     {
         var dim = it["dimension"]?.Key ?? "serviceLine";
         var label = Knowledge.DimensionByKey(dim)?.Label ?? dim;
-        var d = await q.ProfitabilityAsync(s, p, dim, ct);
+        var enc = EncType(it);
+        // Encounter-type dashboards already fix the type; grouping by encounter type is empty/noise.
+        if (enc is not null && dim == "encounterType") dim = "department";
+        var d = await q.ProfitabilityAsync(s, p, dim, ct, enc);
         if (d.Rows.Length == 0) { a.Text = $"There is nothing to show by {label.ToLowerInvariant()} in {Where(s)}."; return; }
         var showRevenue = p.Can("revenue.view");
         var bottom = Bottom(it);
@@ -254,10 +277,11 @@ public sealed class AssistantAnswers(ReadQueries q, DataHubService hub)
         var pool = measure == "marginPct" ? d.Rows.Where(r => r.Revenue != 0).ToList() : d.Rows.ToList();
         var ranked = (bottom ? pool.OrderBy(key) : pool.OrderByDescending(key)).Take(Limit(it)).ToList();
         var noun = label.ToLowerInvariant();
+        var where = string.IsNullOrEmpty(EncLabel(enc)) ? Where(s) : $"{EncLabel(enc)} at {Where(s)}";
 
         if (it["measure"] is not null && ranked.Count > 0)
         {
-            a.Text = $"{(bottom ? "Lowest" : "Top")} {ranked.Count} by {measureLabel}, {noun} in {Where(s)}: " +
+            a.Text = $"{(bottom ? "Lowest" : "Top")} {ranked.Count} by {measureLabel}, {noun} in {where}: " +
                      string.Join("; ", ranked.Take(3).Select((r, i) => $"{i + 1}. {r.Label} ({Fmt(key(r))})")) + "." +
                      (showRevenue ? $" Overall margin is {Cur(s)} {Money(d.Total.Operating)} ({Pct(d.Total.MarginPct)})." : "") +
                      (measure == "marginPct" && pool.Count < d.Rows.Length ? $" {d.Rows.Length - pool.Count} with no revenue are left out." : "");
@@ -267,11 +291,11 @@ public sealed class AssistantAnswers(ReadQueries q, DataHubService hub)
             var best = d.Rows.MaxBy(r => r.Operating)!;
             var worst = d.Rows.MinBy(r => r.Operating)!;
             var losing = d.Rows.Count(r => r.Operating < 0);
-            a.Text = $"By {noun} in {Where(s)}: the overall margin is {Cur(s)} {Money(d.Total.Operating)} ({Pct(d.Total.MarginPct)}). " +
+            a.Text = $"By {noun} in {where}: the overall margin is {Cur(s)} {Money(d.Total.Operating)} ({Pct(d.Total.MarginPct)}). " +
                      $"Most profitable is {best.Label} ({Cur(s)} {Money(best.Operating)}); least profitable is {worst.Label} ({Cur(s)} {Money(worst.Operating)})." +
                      (losing > 0 ? $" {losing} of {d.Rows.Length} lose money." : "");
         }
-        else a.Text = $"Cost by {noun} in {Where(s)}, highest first. Margins need revenue.view, which your role does not hold.";
+        else a.Text = $"Cost by {noun} in {where}, highest first. Margins need revenue.view, which your role does not hold.";
 
         // The usual columns, plus the ranking measure when it is not one of them.
         var cols = (showRevenue ? new List<string> { label, "Encounters", "Revenue", "Total cost", "Margin", "Margin %" } : [label, "Encounters", "Total cost"]);
@@ -291,12 +315,13 @@ public sealed class AssistantAnswers(ReadQueries q, DataHubService hub)
             a.Blocks.Add(new("table", "Cost build-up", [label, "Direct", "Indirect", "Overheads", "Contribution"],
                 ranked.Select(r => new[] { r.Label, Money(r.Direct), Money(r.Indirect), Money(r.Overhead), Money(r.Contribution) }).ToArray()));
         a.Terms.AddRange(["contribution-margin", "operating-margin"]);
-        a.Links.Add(Screen("Open the dashboard", "dashboard", s));
+        var (dashLabel, dashPath) = DashboardScreen(enc);
+        a.Links.Add(Screen(dashLabel, dashPath, s));
     }
 
-    // ── Non-billable (the dashboard's last tab) ──────────────────────────────────────
+    // ── Non-billable (Summary's Non-billable section) ────────────────────────────────
 
-    /// <summary>Lines invoiced at no price, by procedure type: the same query as the dashboard's Non-billable tab.</summary>
+    /// <summary>Lines invoiced at no price, by procedure type: the same query as Summary's Non-billable section.</summary>
     private async Task NonBillable(Answer a, Principal p, Interpretation it, ScopedRun s, CancellationToken ct)
     {
         var d = await q.ProfitabilityAsync(s, p, "noBillable", ct);
@@ -304,7 +329,7 @@ public sealed class AssistantAnswers(ReadQueries q, DataHubService hub)
         if (d.Rows.Length == 0 || services == 0)
         {
             a.Text = $"Run {s.Run.Code} holds no non-billable lines for {Where(s)}. If you expected some, run the calculation again to fill this list.";
-            a.Links.Add(Screen("Open the dashboard", "dashboard", s));
+            a.Links.Add(new("Open Non-billable on Summary", "dashboard", new(Scope(s)) { ["tab"] = "noBillable" }));
             return;
         }
         var ranked = (Bottom(it) ? d.Rows.OrderBy(r => r.Total) : d.Rows.OrderByDescending(r => r.Total)).Take(Limit(it)).ToList();
@@ -330,7 +355,7 @@ public sealed class AssistantAnswers(ReadQueries q, DataHubService hub)
             }).ToArray();
             a.Blocks.Add(new("table", "Billable vs non-billable services", ["Procedure type", "Billable", "Non-billable", "% non-billable"], rows));
         }
-        a.Links.Add(new("Open the Non-billable tab", "dashboard", new(Scope(s)) { ["tab"] = "noBillable" }));
+        a.Links.Add(new("Open Non-billable on Summary", "dashboard", new(Scope(s)) { ["tab"] = "noBillable" }));
         a.Links.Add(new("Non-billable encounters", "patient-encounters", new(Scope(s)) { ["noBillableType"] = "ALL" }));
     }
 
@@ -473,6 +498,7 @@ public sealed class AssistantAnswers(ReadQueries q, DataHubService hub)
         a.Text = $"Opening {nav.Label}: {nav.Purpose}";
         var query = new Dictionary<string, string>();
         if (it["hospital"] is { } h) query["hospital"] = h.Key;
+        if (it["period"] is { } per) query["period"] = per.Key;
         a.Navigate = new(nav.Label, nav.Path, query);
         a.Links.Add(a.Navigate);
     }
@@ -571,7 +597,9 @@ public sealed class AssistantAnswers(ReadQueries q, DataHubService hub)
     {
         var how = it.Intent switch
         {
-            "dashboard.summary" => "Total cost is direct cost + indirect cost + overheads for every encounter in the run. Margin is revenue minus total cost.",
+            "dashboard.summary" => EncType(it) is { } enc
+                ? $"Total cost is direct cost + indirect cost + overheads for {enc} encounters in the run. Margin is revenue minus total cost."
+                : "Total cost is direct cost + indirect cost + overheads for every encounter in the run. Margin is revenue minus total cost.",
             "procedure.cost" => "Unit cost is the procedure's total cost in the run divided by how many times it was performed. The margin shown compares that unit cost with the list price.",
             "procedure.top" => "Procedures are ranked by unit cost (total cost ÷ volume) or by volume; procedures not performed in the run are left out.",
             "package.cost" => "A package's cost per case is the cost of its component procedures for one case. Its margin is the contracted price minus that cost.",

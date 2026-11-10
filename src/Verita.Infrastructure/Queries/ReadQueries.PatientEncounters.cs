@@ -123,7 +123,9 @@ public sealed partial class ReadQueries
         string Payer, string? Insurer, string? Physician, DateTime AdmitAt, DateTime? DischargeAt, int LengthOfStay, int Services, decimal Gross, decimal Discount, decimal Net, decimal? Cost = null);
     public sealed record PatientEncounterPage(PatientEncounterRow[] Rows, int Total, int Page, int PageSize, bool PhiMasked);
     public sealed record PatientEncounterLine(string? Procedure, Guid? ProcedureId, decimal? Quantity, string? CostCentre, string? Physician, string? Payer,
-        DateTime? PerformedAt, decimal? Gross, decimal? Discount, decimal? Net, string SourceRef, decimal? Cost = null, string? ProcedureCode = null, bool IsPackage = false, decimal? Refunded = null);
+        DateTime? PerformedAt, decimal? Gross, decimal? Discount, decimal? Net, string SourceRef, decimal? Cost = null, string? ProcedureCode = null, bool IsPackage = false, decimal? Refunded = null,
+        /// <summary>When the line billed a package header, the Packages row to open (same HIS code as the procedure).</summary>
+        Guid? PackageId = null);
     public sealed record PatientEncounterDetail(PatientEncounterRow Encounter, PatientEncounterLine[] Lines);
 
     // Properties, not a constructor: EF has to filter and sort on these after the projection.
@@ -446,7 +448,15 @@ public sealed partial class ReadQueries
         await audit.WriteAsync(p, "VIEW_PHI", "Encounter", id.ToString(), encounter.EncounterNo, metadata: new { hospital = s.Hospital.Code }, ct: ct);
         var linedProcedures = lines.Where(l => l.ProcedureId != null).Select(l => l.ProcedureId!.Value).Distinct().ToList();
         var codes = await db.Procedures.AsNoTracking().Where(x => linedProcedures.Contains(x.Id)).ToDictionaryAsync(x => x.Id, x => x.Code, ct);
-        return new PatientEncounterDetail(encounter, lines.Select(l => l with { ProcedureCode = l.ProcedureId is { } procedure ? codes.GetValueOrDefault(procedure) : null }).ToArray());
+        // Package headers are billed as procedures of the same code but listed under Packages, not Procedure/Activity.
+        var packageByCode = await db.Packages.AsNoTracking().Where(x => x.HospitalId == s.Hospital.Id)
+            .ToDictionaryAsync(x => x.Code, x => x.Id, ct);
+        return new PatientEncounterDetail(encounter, lines.Select(l =>
+        {
+            var code = l.ProcedureId is { } procedure ? codes.GetValueOrDefault(procedure) : null;
+            Guid? packageId = l.IsPackage && code is { } c && packageByCode.TryGetValue(c, out var pk) ? pk : null;
+            return l with { ProcedureCode = code, PackageId = packageId };
+        }).ToArray());
     }
 
     // ═══ HIS source: what an encounter holds, under the HIS table and column it came from ═══

@@ -53,7 +53,7 @@ public sealed record PackageInfo(Guid Id, string Code, string Name, decimal Pric
 
 public sealed record PostingRow(Guid GlAccountId, string AccountCode, string AccountName, Guid CostCenterId, decimal Amount);
 public sealed record MappingRow(Guid GlAccountId, Guid CostCenterId, Guid CostPoolId, decimal Weight, string AccountLabel, string CostCenterName);
-public sealed record EncounterRow(Guid Id, int LengthOfStay, Guid PayerId, Guid? DrgId, Guid? PackageId, bool IsSurgical);
+public sealed record EncounterRow(Guid Id, int LengthOfStay, Guid PayerId, Guid? DrgId, Guid? PackageId, bool IsSurgical, string EncType = "");
 public sealed record ServiceRow(Guid Id, Guid EncounterId, Guid ProcedureId, Guid CostCenterId, Guid? ProviderId, decimal Quantity);
 public sealed record RevenueRow(Guid EncounterId, Guid? ProcedureId, Guid PayerId, decimal NetAmount);
 public sealed record RateSpan(Guid ResourceId, DateOnly From, DateOnly? To);

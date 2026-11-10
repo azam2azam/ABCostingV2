@@ -4,10 +4,10 @@ using Verita.Domain.Entities;
 namespace Verita.Engine.Stages;
 
 /// <summary>
-/// Stage 9 — package and DRG roll-ups (FR-5.11 to FR-5.14). Department, physician, payer and
-/// service-line profitability are deliberately not materialised: they are group-bys over
-/// EncounterCost computed at read time (FR-5.16). Packages and DRGs get tables because they need
-/// percentiles and outlier counts.
+/// Stage 9 — package and DRG roll-ups (FR-5.11 to FR-5.14), plus hospital and encounter-type
+/// totals for Summary trend charts. Department, physician, payer and service-line profitability
+/// stay as group-bys over EncounterCost at read time (FR-5.16). Packages and DRGs get tables
+/// because they need percentiles and outlier counts.
 /// </summary>
 public static class Aggregate
 {
@@ -63,14 +63,37 @@ public static class Aggregate
             });
         }
 
+        // ── Summary trend: hospital + encounter type (IP / OP / ER) ───────────────
+        void AddDim(string dimension, string key, string label, IEnumerable<Guid> encounterIds)
+        {
+            var ids = encounterIds.Where(actual.EncounterTotals.ContainsKey).ToList();
+            var direct = Money.R4(ids.Sum(id => actual.EncounterTotals[id].DirectCost));
+            var indirect = Money.R4(ids.Sum(id => actual.EncounterTotals[id].IndirectCost));
+            var overhead = Money.R4(ids.Sum(id => actual.EncounterTotals[id].OverheadCost));
+            var revenue = Money.R4(ids.Sum(id => actual.EncounterTotals[id].Revenue));
+            var total = Money.R4(direct + indirect + overhead);
+            output.DimensionCosts.Add(new RunDimensionCost
+            {
+                Id = IdGen.Sequential(), RunId = ctx.RunId, Dimension = dimension, Key = key, Label = label,
+                Encounters = ids.Count, Services = ids.Sum(id => actual.EncounterTotals[id].ServiceCount),
+                Revenue = revenue, DirectCost = direct, IndirectCost = indirect, OverheadCost = overhead, TotalCost = total,
+                ContributionMargin = Money.R4(revenue - direct - indirect), OperatingMargin = Money.R4(revenue - total),
+                MarginPct = revenue != 0m ? Money.R6((revenue - total) / revenue * 100m) : 0m,
+            });
+        }
+        AddDim("hospital", ctx.HospitalId.ToString(), ctx.HospitalName, actual.EncounterTotals.Keys);
+        foreach (var g in ctx.Encounters.Where(e => actual.EncounterTotals.ContainsKey(e.Id)).GroupBy(e => e.EncType))
+            AddDim("encounterType", g.Key, string.IsNullOrWhiteSpace(g.Key) ? "Not assigned" : g.Key, g.Select(e => e.Id));
+
         var lossMaking = output.PackageCosts.Count(p => p.OperatingMargin < 0m);
-        return new StepResult(output.PackageCosts.Count + output.DrgSummaries.Count, 0m, 0m, "SUCCESS",
+        return new StepResult(output.PackageCosts.Count + output.DrgSummaries.Count + output.DimensionCosts.Count, 0m, 0m, "SUCCESS",
             $"{output.PackageCosts.Count} packages and {output.DrgSummaries.Count} DRGs summarised" +
             (lossMaking > 0 ? $"; {lossMaking} {Fmt.Plural(lossMaking, "package is", "packages are")} loss-making." : "."),
             new Dictionary<string, object?>
             {
                 ["packages"] = output.PackageCosts.Count, ["drgs"] = output.DrgSummaries.Count, ["lossMakingPackages"] = lossMaking,
                 ["drgOutliers"] = output.DrgSummaries.Sum(d => d.OutlierCount),
+                ["dimensionRows"] = output.DimensionCosts.Count,
             });
     }
 }

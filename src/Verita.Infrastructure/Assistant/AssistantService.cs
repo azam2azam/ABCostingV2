@@ -40,7 +40,7 @@ public sealed class AssistantService(IDbContextFactory<VeritaDbContext> factory,
     {
         ["hospital"] = "Hospital", ["period"] = "Period", ["procedure"] = "Procedure", ["package"] = "Package", ["dimension"] = "By",
         ["limit"] = "Show", ["order"] = "Order", ["metric"] = "Ranked", ["nav"] = "Screen", ["term"] = "Term", ["howto"] = "Task",
-        ["compare"] = "Compared with", ["measure"] = "Ranked by",
+        ["compare"] = "Compared with", ["measure"] = "Ranked by", ["encType"] = "Encounter type",
     };
 
     // ── Threads ──────────────────────────────────────────────────────────────────────

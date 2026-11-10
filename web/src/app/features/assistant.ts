@@ -84,13 +84,7 @@ function recall(): string | null {
           <div class="col">
             @if (messages().length === 0 && !busy()) {
               <div class="intro">
-                <span class="badge"><v-icon name="chat" [size]="22" /></span>
                 <h2>What would you like to know?</h2>
-                <p>I read the same numbers as the screens, for <em>{{ scopeLabel() }}</em> unless you name another hospital or period.
-                  Follow up with "and for September?", "why?", "break it down" or "compare with …".</p>
-                <div class="chips center">
-                  @for (s of starters; track s.label) { <button type="button" class="chip-btn" (click)="send(s.text)">{{ s.label }}</button> }
-                </div>
               </div>
             }
             @for (m of messages(); track m.id) {
@@ -100,84 +94,86 @@ function recall(): string | null {
                 <div class="msg bot" [class.hidden]="m.hidden">
                   @if (m.reply; as r) {
                     @if (r.band === 'confirm') { <div class="band warn">Check the assumptions below: I'm not fully sure I understood.</div> }
-                    <p class="text">{{ r.text }}</p>
-                    @if (r.assumptions.length) {
-                      <div class="assume" aria-label="What this answer assumed">
-                        @for (a of r.assumptions; track a.kind) {
-                          <span class="as" [class]="'as src-' + a.source" [class.changed]="a.changed" [title]="assumptionTitle(a)">
-                            <span class="k">{{ a.label }}</span> {{ a.value }}
-                            @if (a.removable && isLast(m)) {
-                              <button type="button" class="x" (click)="removeAssumption(a)" [attr.aria-label]="'Ask again without ' + a.label">×</button>
-                            }
-                          </span>
-                        }
-                      </div>
-                    }
-                    @for (b of r.blocks; track $index) {
-                      @if (b.type === 'steps') {
-                        @if (b.title) { <div class="btitle">{{ b.title }}</div> }
-                        <ol class="steps">@for (row of b.rows; track $index) { <li>{{ row[0] }}</li> }</ol>
-                      } @else if (b.type === 'list') {
-                        @if (b.title) { <div class="btitle">{{ b.title }}</div> }
-                        <ul class="steps check">@for (row of b.rows; track $index) { <li>{{ row[0] }}</li> }</ul>
-                      } @else if (b.type === 'compare' && b.rows.length) {
-                        @let flip = isSwapped(m.id, $index);
-                        <div class="cmp-head">
-                          <span class="btitle">{{ b.title }}</span>
-                          <button type="button" class="swap" (click)="toggleSwap(m.id, $index)" [attr.aria-pressed]="flip"
-                                  [title]="'Show ' + (flip ? b.columns[1] : b.columns[2]) + ' first'">
-                            <v-icon name="swap" [size]="14" /> Switch
-                          </button>
+                    <p class="text">{{ streaming()?.id === m.id ? streaming()!.shown : r.text }}@if (streaming()?.id === m.id) { <span class="caret" aria-hidden="true"></span> }</p>
+                    @if (streaming()?.id !== m.id) {
+                      @if (r.assumptions.length) {
+                        <div class="assume" aria-label="What this answer assumed">
+                          @for (a of r.assumptions; track a.kind) {
+                            <span class="as" [class]="'as src-' + a.source" [class.changed]="a.changed" [title]="assumptionTitle(a)">
+                              <span class="k">{{ a.label }}</span> {{ a.value }}
+                              @if (a.removable && isLast(m)) {
+                                <button type="button" class="x" (click)="removeAssumption(a)" [attr.aria-label]="'Ask again without ' + a.label">×</button>
+                              }
+                            </span>
+                          }
                         </div>
-                        <div class="tbl"><table>
-                          <thead><tr><th>{{ b.columns[0] }}</th><th class="num">{{ flip ? b.columns[2] : b.columns[1] }}</th>
-                            <th class="num">{{ flip ? b.columns[1] : b.columns[2] }}</th><th class="num">{{ b.columns[3] }}</th></tr></thead>
-                          <tbody>@for (row of b.rows; track $index) {
-                            <tr><td>{{ row[0] }}</td><td class="num">{{ flip ? row[2] : row[1] }}</td><td class="num">{{ flip ? row[1] : row[2] }}</td>
-                              <td class="num" [class.up]="(flip ? row[4] : row[3]).startsWith('+')" [class.down]="(flip ? row[4] : row[3]).startsWith('−')">{{ flip ? row[4] : row[3] }}</td></tr>
-                          }</tbody>
-                        </table></div>
-                      } @else if (b.type === 'figures') {
-                        <dl class="figs">@for (row of b.rows; track $index) { <div><dt>{{ row[0] }}</dt><dd>{{ row[1] }}</dd></div> }</dl>
-                      } @else if (b.rows.length) {
-                        @if (b.title) { <div class="btitle">{{ b.title }}</div> }
-                        <div class="tbl"><table>
-                          @let nums = numericColumns(b.rows);
-                          <thead><tr>@for (c of b.columns; track $index) { <th [class.num]="nums[$index]">{{ c }}</th> }</tr></thead>
-                          <tbody>@for (row of b.rows; track $index) { <tr>@for (cell of row; track $index) { <td [class.num]="nums[$index]">{{ cell }}</td> }</tr> }</tbody>
-                        </table></div>
                       }
-                      @if (b.note) { <div class="faint small">{{ b.note }}</div> }
-                    }
-                    @for (n of r.notes; track $index) { <div class="note">{{ n }}</div> }
-                    @if (r.options.length) {
-                      <div class="chips">@for (o of r.options; track $index) { <button type="button" class="chip-btn opt" (click)="choose(o)">{{ o.label }}</button> }</div>
-                    }
-                    @if (r.links.length) {
-                      <div class="links">@for (l of r.links; track $index) { <a [routerLink]="['/', l.path]" [queryParams]="withScope(l)" target="_blank" rel="noopener" [title]="l.label + ' (opens in a new tab)'">{{ l.label }} ↗</a> }</div>
-                    }
-                    @if (isLast(m) && r.suggestions.length) {
-                      <div class="chips">@for (s of r.suggestions; track $index) { <button type="button" class="chip-btn" (click)="choose(s)">{{ s.label }}</button> }</div>
-                    }
-                    <div class="foot">
-                      @if (r.run) { <span class="faint">{{ r.run }} · {{ r.runStatus }}</span> }
-                      @if (m.stale) {
-                        <span class="stale">A newer run exists</span>
-                        <button type="button" class="mini" (click)="refresh(m)" title="Answer again from the current run" aria-label="Refresh this answer"><v-icon name="refresh" [size]="14" /></button>
+                      @for (b of r.blocks; track $index) {
+                        @if (b.type === 'steps') {
+                          @if (b.title) { <div class="btitle">{{ b.title }}</div> }
+                          <ol class="steps">@for (row of b.rows; track $index) { <li>{{ row[0] }}</li> }</ol>
+                        } @else if (b.type === 'list') {
+                          @if (b.title) { <div class="btitle">{{ b.title }}</div> }
+                          <ul class="steps check">@for (row of b.rows; track $index) { <li>{{ row[0] }}</li> }</ul>
+                        } @else if (b.type === 'compare' && b.rows.length) {
+                          @let flip = isSwapped(m.id, $index);
+                          <div class="cmp-head">
+                            <span class="btitle">{{ b.title }}</span>
+                            <button type="button" class="swap" (click)="toggleSwap(m.id, $index)" [attr.aria-pressed]="flip"
+                                    [title]="'Show ' + (flip ? b.columns[1] : b.columns[2]) + ' first'">
+                              <v-icon name="swap" [size]="14" /> Switch
+                            </button>
+                          </div>
+                          <div class="tbl"><table>
+                            <thead><tr><th>{{ b.columns[0] }}</th><th class="num">{{ flip ? b.columns[2] : b.columns[1] }}</th>
+                              <th class="num">{{ flip ? b.columns[1] : b.columns[2] }}</th><th class="num">{{ b.columns[3] }}</th></tr></thead>
+                            <tbody>@for (row of b.rows; track $index) {
+                              <tr><td>{{ row[0] }}</td><td class="num">{{ flip ? row[2] : row[1] }}</td><td class="num">{{ flip ? row[1] : row[2] }}</td>
+                                <td class="num" [class.up]="(flip ? row[4] : row[3]).startsWith('+')" [class.down]="(flip ? row[4] : row[3]).startsWith('−')">{{ flip ? row[4] : row[3] }}</td></tr>
+                            }</tbody>
+                          </table></div>
+                        } @else if (b.type === 'figures') {
+                          <dl class="figs">@for (row of b.rows; track $index) { <div><dt>{{ row[0] }}</dt><dd>{{ row[1] }}</dd></div> }</dl>
+                        } @else if (b.rows.length) {
+                          @if (b.title) { <div class="btitle">{{ b.title }}</div> }
+                          <div class="tbl"><table>
+                            @let nums = numericColumns(b.rows);
+                            <thead><tr>@for (c of b.columns; track $index) { <th [class.num]="nums[$index]">{{ c }}</th> }</tr></thead>
+                            <tbody>@for (row of b.rows; track $index) { <tr>@for (cell of row; track $index) { <td [class.num]="nums[$index]">{{ cell }}</td> }</tr> }</tbody>
+                          </table></div>
+                        }
+                        @if (b.note) { <div class="faint small">{{ b.note }}</div> }
                       }
-                      <span class="spacer"></span>
-                      @if (r.intent) {
-                        <button type="button" class="conf" (click)="toggleWhy(m.id)" [attr.aria-expanded]="why() === m.id">{{ pct(r.confidence) }} sure</button>
+                      @for (n of r.notes; track $index) { <div class="note">{{ n }}</div> }
+                      @if (r.options.length) {
+                        <div class="chips">@for (o of r.options; track $index) { <button type="button" class="chip-btn opt" (click)="choose(o)">{{ o.label }}</button> }</div>
                       }
-                      <button type="button" class="mini" [class.on]="m.feedback === 1" (click)="rate(m, 1)" aria-label="Helpful" title="Helpful"><v-icon name="thumb-up" [size]="14" /></button>
-                      <button type="button" class="mini" [class.on]="m.feedback === -1" (click)="rate(m, -1)" aria-label="Not helpful" title="Not helpful"><v-icon name="thumb-down" [size]="14" /></button>
-                    </div>
-                    @if (why() === m.id) {
-                      <div class="why">
-                        Understood as <strong>{{ r.intentLabel }}</strong> ({{ r.turnType?.toLowerCase() }}).
-                        Intent {{ pct(r.score.intent) }} · names {{ pct(r.score.entities) }} · words used {{ pct(r.score.coverage) }}@if (r.score.penalty > 0) { · −{{ pct(r.score.penalty) }} }.
-                        @for (x of r.score.reasons; track $index) { <div>· {{ x }}</div> }
+                      @if (r.links.length) {
+                        <div class="links">@for (l of r.links; track $index) { <a [routerLink]="['/', l.path]" [queryParams]="withScope(l)" target="_blank" rel="noopener" [title]="l.label + ' (opens in a new tab)'">{{ l.label }} ↗</a> }</div>
+                      }
+                      @if (isLast(m) && r.suggestions.length) {
+                        <div class="chips">@for (s of r.suggestions; track $index) { <button type="button" class="chip-btn" (click)="choose(s)">{{ s.label }}</button> }</div>
+                      }
+                      <div class="foot">
+                        @if (r.run) { <span class="faint">{{ r.run }} · {{ r.runStatus }}</span> }
+                        @if (m.stale) {
+                          <span class="stale">A newer run exists</span>
+                          <button type="button" class="mini" (click)="refresh(m)" title="Answer again from the current run" aria-label="Refresh this answer"><v-icon name="refresh" [size]="14" /></button>
+                        }
+                        <span class="spacer"></span>
+                        @if (r.intent) {
+                          <button type="button" class="conf" (click)="toggleWhy(m.id)" [attr.aria-expanded]="why() === m.id">{{ pct(r.confidence) }} sure</button>
+                        }
+                        <button type="button" class="mini" [class.on]="m.feedback === 1" (click)="rate(m, 1)" aria-label="Helpful" title="Helpful"><v-icon name="thumb-up" [size]="14" /></button>
+                        <button type="button" class="mini" [class.on]="m.feedback === -1" (click)="rate(m, -1)" aria-label="Not helpful" title="Not helpful"><v-icon name="thumb-down" [size]="14" /></button>
                       </div>
+                      @if (why() === m.id) {
+                        <div class="why">
+                          Understood as <strong>{{ r.intentLabel }}</strong> ({{ r.turnType?.toLowerCase() }}).
+                          Intent {{ pct(r.score.intent) }} · names {{ pct(r.score.entities) }} · words used {{ pct(r.score.coverage) }}@if (r.score.penalty > 0) { · −{{ pct(r.score.penalty) }} }.
+                          @for (x of r.score.reasons; track $index) { <div>· {{ x }}</div> }
+                        </div>
+                      }
                     }
                   } @else {
                     <p class="text faint">{{ m.text }}</p>
@@ -194,7 +190,7 @@ function recall(): string | null {
           <div class="col row">
             <textarea #box rows="1" [(ngModel)]="input" name="q" maxlength="1000" placeholder="Ask about costs, margins, variances, runs…" aria-label="Your question"
               (keydown.enter)="enter($event)"></textarea>
-            <button class="send" type="submit" [disabled]="busy() || !input.trim()" aria-label="Send"><v-icon name="send" [size]="17" /></button>
+            <button class="send" type="submit" [disabled]="busy() || !!streaming() || !input.trim()" aria-label="Send"><v-icon name="send" [size]="17" /></button>
           </div>
         </form>
       </section>
@@ -239,9 +235,7 @@ function recall(): string | null {
     .log { flex: 1; padding: 20px 24px; }
     .col { max-width: 880px; margin: 0 auto; display: flex; flex-direction: column; gap: 14px; }
     .intro { text-align: center; padding: 48px 12px 12px; }
-    .intro .badge { display: inline-grid; place-items: center; width: 52px; height: 52px; border-radius: 16px; background: var(--accent-soft); color: var(--accent); }
-    .intro h2 { margin: 14px 0 6px; font-size: 22px; }
-    .intro p { margin: 0 auto 16px; max-width: 560px; color: var(--text-2); line-height: 1.55; }
+    .intro h2 { margin: 0; font-size: 22px; }
     .msg.user { display: flex; justify-content: flex-end; }
     .msg.user .bubble { max-width: 75%; background: var(--accent); color: #fff; padding: 9px 14px; border-radius: 16px 16px 4px 16px; white-space: pre-wrap; overflow-wrap: anywhere; }
     .msg.bot { background: var(--surface-solid); border: 1px solid var(--border); border-radius: 4px 16px 16px 16px; padding: 12px 14px; min-width: 0; box-shadow: var(--shadow-sm); }
@@ -285,7 +279,6 @@ function recall(): string | null {
     .note.bad { color: var(--bad); }
     .links { display: flex; flex-wrap: wrap; gap: 14px; margin: 0 0 10px; font-size: 13px; }
     .chips { display: flex; flex-wrap: wrap; gap: 6px; margin: 0 0 10px; }
-    .chips.center { justify-content: center; }
     .chip-btn { font: inherit; font-size: 13px; padding: 5px 12px; border-radius: 16px; text-align: left; max-width: 100%; border: 1px solid var(--border-strong); background: var(--surface-solid); color: var(--text); cursor: pointer; }
     .chip-btn:hover { border-color: var(--accent); color: var(--accent-strong); }
     .chip-btn.opt { border-color: var(--accent); }
@@ -306,8 +299,11 @@ function recall(): string | null {
     .send:disabled { opacity: .45; cursor: default; }
     .faint { color: var(--text-3); } .small { font-size: 11.5px; margin: -4px 0 8px; } .pad { padding: 8px; }
     .typing { animation: pulse 1.2s ease-in-out infinite; }
+    .caret { display: inline-block; width: 0.55ch; height: 1.05em; margin-left: 1px; vertical-align: -0.12em;
+             background: currentColor; opacity: .55; animation: blink 1s step-end infinite; }
     @keyframes pulse { 50% { opacity: .45; } }
-    @media (prefers-reduced-motion: reduce) { .typing { animation: none; } }
+    @keyframes blink { 50% { opacity: 0; } }
+    @media (prefers-reduced-motion: reduce) { .typing, .caret { animation: none; } }
     @media (max-width: 960px) {
       :host { margin: -18px -16px -32px; }
       .screen, .screen.collapsed { grid-template-columns: 1fr; }
@@ -341,29 +337,22 @@ export class AssistantPage {
   readonly renaming = signal<string | null>(null);
   readonly why = signal<string | null>(null);
   readonly listOpen = signal(false);
+  /** Live typewriter for the newest answer — tables/links appear when it finishes. */
+  readonly streaming = signal<{ id: string; shown: string } | null>(null);
   /** The conversations panel folded away on wide screens; remembered for this browser. */
   readonly collapsed = signal(readCollapsed());
   readonly filterSig = signal('');
   /** Comparison tables shown with their two columns switched, by message and block. */
   private readonly swapped = signal<ReadonlySet<string>>(new Set());
   private host = inject(ElementRef<HTMLElement>);
+  private streamToken = 0;
   input = '';
   renameText = '';
-
-  readonly starters: AssistantOption[] = [
-    { label: 'Run summary', text: 'Give me the summary for this period', intent: null, pick: null },
-    { label: 'Most expensive procedures', text: 'Most expensive procedures', intent: null, pick: null },
-    { label: 'Profitability by payer', text: 'Profitability by payer', intent: null, pick: null },
-    { label: 'Non-billable services', text: 'Non-billable encounters this period', intent: null, pick: null },
-    { label: 'Biggest variances', text: 'Biggest variances', intent: null, pick: null },
-    { label: 'Idle capacity', text: 'How much idle capacity do we have?', intent: null, pick: null },
-    { label: 'Data quality', text: 'Any data quality issues?', intent: null, pick: null },
-  ];
-
-  readonly scopeLabel = computed(() => {
-    const h = this.ctx.hospitals().find(x => x.code === this.ctx.hospitalParam());
-    return [h?.name ?? this.ctx.hospitalParam() ?? 'the latest published run', this.ctx.periodParam()].filter(Boolean).join(', ');
-  });
+  /** Hold "Looking it up…" at least this long so a fast API still feels deliberate. */
+  private static readonly ThinkMs = 700;
+  /** Typewriter pace; long answers are capped so they finish in a couple of seconds. */
+  private static readonly TypeMs = 18;
+  private static readonly TypeMaxMs = 2200;
 
   readonly filteredThreads = computed(() => {
     const f = this.filterSig().trim().toLowerCase();
@@ -378,7 +367,7 @@ export class AssistantPage {
       if (id && id !== this.threadId()) void this.openThread(id, true);
       else if (!id && !this.thread() && recall()) void this.openThread(recall()!, true);
     });
-    effect(() => { this.messages(); this.busy(); queueMicrotask(() => this.scrollDown()); });
+    effect(() => { this.messages(); this.busy(); this.streaming(); queueMicrotask(() => this.scrollDown()); });
     // Sticky parts sit just under the context bar, which wraps to two rows on narrow windows.
     const header = document.querySelector('header.ctx');
     const fit = () => {
@@ -389,7 +378,7 @@ export class AssistantPage {
     if (header && ro) ro.observe(header);
     window.addEventListener('resize', fit);
     queueMicrotask(fit);
-    inject(DestroyRef).onDestroy(() => { ro?.disconnect(); window.removeEventListener('resize', fit); });
+    inject(DestroyRef).onDestroy(() => { this.streamToken++; ro?.disconnect(); window.removeEventListener('resize', fit); });
     queueMicrotask(() => this.box()?.nativeElement.focus());
   }
 
@@ -407,6 +396,7 @@ export class AssistantPage {
 
   async openThread(id: string, quiet = false): Promise<void> {
     this.listOpen.set(false);
+    this.stopStream();
     try {
       const d = await firstValueFrom(this.api.get<AssistantThreadDetail>(`assistant/threads/${id}`));
       this.thread.set(d.thread);
@@ -421,6 +411,7 @@ export class AssistantPage {
   }
 
   newThread(): void {
+    this.stopStream();
     this.thread.set(null);
     this.messages.set([]);
     this.error.set(null);
@@ -486,7 +477,8 @@ export class AssistantPage {
   }
 
   private async ask(part: Pick<AssistantAskBody, 'text' | 'intent' | 'pick' | 'remove'>): Promise<void> {
-    if (this.busy() || (!part.text && !part.remove?.length)) return;
+    if (this.busy() || this.streaming() || (!part.text && !part.remove?.length)) return;
+    this.stopStream();
     this.busy.set(true);
     this.error.set(null);
     const pending: AssistantMessage = { id: 'pending', role: 'user', text: part.text || 'Ask again without ' + (part.remove ?? []).join(', '),
@@ -494,13 +486,17 @@ export class AssistantPage {
     this.messages.update(m => [...m, pending]);
     this.input = '';
     const isNew = !this.threadId();
+    const started = performance.now();
     try {
       const body: AssistantAskBody = { threadId: this.threadId(), hospital: this.ctx.hospitalParam(), period: this.ctx.periodParam(), ...part };
       const r = await firstValueFrom(this.api.post<AssistantAskResult>('assistant/ask', body));
+      await this.pause(AssistantPage.ThinkMs - (performance.now() - started));
       this.thread.set(r.thread);
       this.setUrl(r.thread.id);
       this.messages.update(m => [...m.filter(x => x.id !== 'pending'), r.question, r.answer]);
+      this.busy.set(false);
       void this.loadThreads();
+      await this.revealAnswer(r.answer);
       const nav = r.answer.reply?.navigate;
       if (nav) this.go(nav);
       else if (isNew) queueMicrotask(() => this.box()?.nativeElement.focus());
@@ -508,20 +504,52 @@ export class AssistantPage {
       this.messages.update(m => m.filter(x => x.id !== 'pending'));
       this.input = part.text;
       this.error.set(e?.error?.error?.message ?? 'The assistant could not answer. Try again.');
-    } finally {
       this.busy.set(false);
+    } finally {
+      if (this.busy()) this.busy.set(false);
       queueMicrotask(() => this.box()?.nativeElement.focus());
     }
   }
 
   async refresh(m: AssistantMessage): Promise<void> {
-    if (this.busy()) return;
+    if (this.busy() || this.streaming()) return;
+    this.stopStream();
     this.busy.set(true);
+    const started = performance.now();
     try {
       const r = await firstValueFrom(this.api.post<AssistantAskResult>(`assistant/messages/${m.id}/refresh`, {}));
+      await this.pause(AssistantPage.ThinkMs - (performance.now() - started));
       this.messages.update(x => [...x, r.question, r.answer]);
-    } catch { this.error.set('That answer could not be refreshed.'); }
-    finally { this.busy.set(false); }
+      this.busy.set(false);
+      await this.revealAnswer(r.answer);
+    } catch { this.error.set('That answer could not be refreshed.'); this.busy.set(false); }
+    finally { if (this.busy()) this.busy.set(false); }
+  }
+
+  /** Type the answer text out; structured blocks stay hidden until the caret finishes. */
+  private async revealAnswer(answer: AssistantMessage): Promise<void> {
+    const full = answer.reply?.text ?? answer.text ?? '';
+    const reduce = typeof matchMedia === 'function' && matchMedia('(prefers-reduced-motion: reduce)').matches;
+    if (reduce || !full) { this.streaming.set(null); return; }
+    const token = ++this.streamToken;
+    this.streaming.set({ id: answer.id, shown: '' });
+    const step = Math.max(1, Math.ceil(full.length * AssistantPage.TypeMs / AssistantPage.TypeMaxMs));
+    for (let i = 0; i < full.length; i += step) {
+      if (token !== this.streamToken) return;
+      this.streaming.set({ id: answer.id, shown: full.slice(0, Math.min(full.length, i + step)) });
+      await this.pause(AssistantPage.TypeMs);
+    }
+    if (token === this.streamToken) this.streaming.set(null);
+  }
+
+  private stopStream(): void {
+    this.streamToken++;
+    this.streaming.set(null);
+  }
+
+  private pause(ms: number): Promise<void> {
+    const wait = Math.max(0, Math.round(ms));
+    return wait === 0 ? Promise.resolve() : new Promise(resolve => setTimeout(resolve, wait));
   }
 
   async rate(m: AssistantMessage, value: 1 | -1): Promise<void> {

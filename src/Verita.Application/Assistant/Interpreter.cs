@@ -97,7 +97,7 @@ public sealed class Interpreter(IntentCatalogue catalogue)
 {
     private static readonly HashSet<string> LargeKinds = ["procedure", "package"];
     private static readonly HashSet<string> ScopeKinds = ["hospital", "period"];
-    private static readonly HashSet<string> ScalarKinds = ["limit", "order", "metric", "measure"];
+    private static readonly HashSet<string> ScalarKinds = ["limit", "order", "metric", "measure", "encType"];
     private static readonly HashSet<string> GenericPlaceWords = ["hospital", "medical", "center", "centre", "specialist", "general", "clinic", "complex", "city", "health"];
     private static string? CodeNote(string kind, string? extra) => LargeKinds.Contains(kind) && !string.IsNullOrEmpty(extra) ? "code " + extra : null;
     private static readonly HashSet<string> Pronouns = ["it", "that", "this", "those", "them", "these", "same", "there", "its", "ones", "they", "their"];
@@ -284,6 +284,22 @@ public sealed class Interpreter(IntentCatalogue catalogue)
         {
             explicitSlots["measure"] = new("measure", ms.Key, ms.Label, "explicit", 1);
             entityPositions["measure"] = Enumerable.Range(0, tokens.Length).Where(i => ms.Words.Contains(tokens[i])).ToArray();
+        }
+        // IP / OP / ER scope for Summary answers — not "by inpatient" (that is the encounter-type dimension).
+        (string Key, string Label, string[] Words)? encType =
+            padded.Contains(" by inpatient ") || padded.Contains(" by outpatient ") || padded.Contains(" by emergency ")
+                || padded.Contains(" by encounter ") || padded.Contains(" by visit ") ? null
+            : tokens.Any(t => t is "inpatient") || padded.Contains(" ip ") || padded.Contains(" ip-") || tokens.Any(t => t is "ip")
+                ? ("IP", "Inpatient", ["inpatient", "ip"])
+            : tokens.Any(t => t is "outpatient") || padded.Contains(" op ") || padded.Contains(" op-") || tokens.Any(t => t is "op")
+                ? ("OP", "Outpatient", ["outpatient", "op"])
+            : tokens.Any(t => t is "emergency" or "er") || padded.Contains(" er ") || padded.Contains(" er-")
+                ? ("ER", "Emergency", ["emergency", "er"])
+            : null;
+        if (encType is { } et)
+        {
+            explicitSlots["encType"] = new("encType", et.Key, et.Label, "explicit", 1);
+            entityPositions["encType"] = Enumerable.Range(0, tokens.Length).Where(i => et.Words.Contains(tokens[i])).ToArray();
         }
         string[] bottomWords = ["cheapest", "lowest", "least", "worst", "bottom", "losing", "lose", "loss", "unprofitable", "negative", "smallest"];
         string[] topWords = ["top", "highest", "most", "biggest", "largest", "best", "costliest", "expensive"];

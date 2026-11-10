@@ -22,14 +22,17 @@ public sealed partial class ReadQueries
                 select new { p.Id, Insurer = i.Id, i.Name }).ToListAsync(ct))
         .ToDictionary(x => x.Id, x => ((string?)x.Insurer.ToString(), (string?)x.Name));
 
-    public async Task<ProfitDto> ProfitabilityAsync(ScopedRun s, Principal p, string dimension, CancellationToken ct)
+    public async Task<ProfitDto> ProfitabilityAsync(ScopedRun s, Principal p, string dimension, CancellationToken ct, string? encType = null)
     {
         if (!Dimensions.Contains(dimension)) throw AppError.InvalidDimension(dimension, Dimensions);
         var showRevenue = p.Can("revenue.view");
         var rid = s.Run.Id;
-        var idle = await db.ResidualBuckets.AsNoTracking().Where(b => b.RunId == rid && b.Bucket == "UNUSED_CAPACITY").SumAsync(b => (decimal?)b.Amount, ct) ?? 0m;
+        var idle = string.IsNullOrWhiteSpace(encType)
+            ? await db.ResidualBuckets.AsNoTracking().Where(b => b.RunId == rid && b.Bucket == "UNUSED_CAPACITY").SumAsync(b => (decimal?)b.Amount, ct) ?? 0m
+            : 0m;
         List<ProfitRow> rows;
         ProfitRow? wholeRun = null;
+        var filterEnc = !string.IsNullOrWhiteSpace(encType);
 
         ProfitRow Make(string key, string label, int n, decimal vol, decimal rev, decimal d, decimal i, decimal o, string? link)
         {
@@ -50,7 +53,7 @@ public sealed partial class ReadQueries
                            select new { pr.Id, pr.Name, pc.Volume, pc.Revenue, pc.DirectCost, pc.IndirectCost, pc.OverheadCost }).ToListAsync(ct))
                 .Select(x => Make(x.Id.ToString(), x.Name, 0, x.Volume, x.Revenue, x.DirectCost, x.IndirectCost, x.OverheadCost, $"procedures/{x.Id}")).ToList();
         }
-        else if (s.Run.CostingMethod == CostingModelPipeline.Method)
+        else if (!filterEnc && s.Run.CostingMethod == CostingModelPipeline.Method)
         {
             // Prepared by the run: read, never re-added.
             string? StoredLink(string k) => k.Length == 0 ? null : dimension switch
@@ -76,6 +79,7 @@ public sealed partial class ReadQueries
         else
         {
             var facts = await EncounterFacts(rid, ct);
+            if (filterEnc) facts = facts.Where(f => f.EncType == encType).ToList();
             var doctorResource = dimension == "resource" ? await db.Providers.AsNoTracking().ToDictionaryAsync(x => x.Id, x => x.ResourceId, ct) : [];
             var payerInsurer = dimension == "insurer" ? await InsurerByPayerAsync(ct) : [];
             var labels = dimension switch
