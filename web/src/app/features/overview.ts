@@ -1,4 +1,4 @@
-import { Component, computed, inject, signal } from '@angular/core';
+import { Component, computed, effect, inject, input, signal } from '@angular/core';
 import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
 import { ActivatedRoute, RouterLink } from '@angular/router';
 import { DashboardDto, ProfitDto } from '../core/api';
@@ -20,11 +20,13 @@ const ENCOUNTER_FILTER: Record<string, string> = { encounterType: 'encType', noB
   selector: 'v-profit-tables',
   imports: [...CHARTS, ...UI],
   template: `
-    <div class="tabs" role="tablist">
-      @for (d of dims(); track d.key) {
-        <button role="tab" type="button" [class.active]="dim() === d.key" (click)="dim.set(d.key)">{{ d.label }}</button>
-      }
-    </div>
+    @if (!lockedDim()) {
+      <div class="tabs" role="tablist">
+        @for (d of dims(); track d.key) {
+          <button role="tab" type="button" [class.active]="dim() === d.key" (click)="dim.set(d.key)">{{ d.label }}</button>
+        }
+      </div>
+    }
     <v-state [loading]="res.isLoading()" [error]="res.error()">
       @if (res.value(); as r) {
         @if (!canRevenue()) { <p class="notice warn">Revenue is masked for your role; margins are not shown.</p> }
@@ -80,18 +82,29 @@ const ENCOUNTER_FILTER: Record<string, string> = { encounterType: 'encType', noB
 })
 export class ProfitTables {
   private auth = inject(Auth);
+  /** When set (e.g. Departments screen), only that dimension is shown and the tab strip is hidden. */
+  lockedDim = input<string | null>(null);
   canRevenue = computed(() => this.auth.can('revenue.view'));
-  dims = computed(() => [
-    { key: 'encounterType', label: 'Encounter type' }, { key: 'department', label: 'Department' },
-    { key: 'resource', label: 'Resources' }, { key: 'physician', label: 'Physician' }, { key: 'insurer', label: 'Insurer' },
-    { key: 'segment', label: 'Patient segment' },
-    { key: 'noBillable', label: 'Non-billable' },
-  ]);
+  dims = computed(() => {
+    const all = [
+      { key: 'encounterType', label: 'Encounter type' }, { key: 'department', label: 'Department' },
+      { key: 'resource', label: 'Resources' }, { key: 'physician', label: 'Physician' }, { key: 'insurer', label: 'Insurer' },
+      { key: 'segment', label: 'Patient segment' },
+      { key: 'noBillable', label: 'Non-billable' },
+    ];
+    const lock = this.lockedDim();
+    return lock ? all.filter(d => d.key === lock) : all;
+  });
   dim = signal('encounterType');
 
   constructor() {
+    effect(() => {
+      const lock = this.lockedDim();
+      if (lock) this.dim.set(lock);
+    });
     // ?tab=noBillable opens a tab directly, e.g. from the assistant's links.
     inject(ActivatedRoute).queryParamMap.pipe(takeUntilDestroyed()).subscribe(m => {
+      if (this.lockedDim()) return;
       const tab = m.get('tab');
       if (tab && this.dims().some(d => d.key === tab)) this.dim.set(tab);
     });
@@ -229,4 +242,41 @@ export class Dashboard {
   });
   res = runResource<DashboardDto>(() => this.calculated() ? 'dashboard' : null);
   canProfitability = computed(() => this.auth.can('profitability.view'));
+}
+
+/** Catalogue screen: the Dashboard department tab as its own module. */
+@Component({
+  selector: 'v-departments',
+  imports: [RouterLink, ProfitTables, ...UI],
+  template: `
+    <v-page title="Departments" purpose="Cost, revenue and margin by department for one costed run — the same figures as the Dashboard department tab. Encounter counts open Patient Encounters for that department.">
+      @if (!calculated()) {
+        <p class="notice warn">
+          {{ pending() }}
+          <a routerLink="/runs" queryParamsHandling="preserve">Go to Calculation Runs</a>
+        </p>
+      } @else if (!canProfitability()) {
+        <p class="notice warn">Department profitability is not included in your role.</p>
+      } @else {
+        <v-profit-tables lockedDim="department" />
+      }
+    </v-page>
+  `,
+})
+export class Departments {
+  private auth = inject(Auth);
+  private ctx = inject(RunContext);
+  calculated = computed(() => ['RECONCILED', 'PUBLISHED'].includes(this.ctx.run()?.status ?? ''));
+  canProfitability = computed(() => this.auth.can('profitability.view'));
+  pending = computed(() => {
+    const code = this.ctx.periodParam();
+    const selected = this.ctx.periodsForHospital().find(p => p.code === code);
+    const period = selected ? `${selected.code} (${selected.startDate} – ${selected.endDate})` : code ?? 'this period';
+    const run = this.ctx.run();
+    if (!run) return `The calculation has not been run for ${period}.`;
+    if (runInFlight(run.status)) return `The calculation for ${period} is still running.`;
+    return run.status === 'FAILED'
+      ? `The calculation for ${period} failed, so there are no figures to show.`
+      : `The calculation has not been run for ${period}.`;
+  });
 }

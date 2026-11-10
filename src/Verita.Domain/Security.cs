@@ -92,6 +92,7 @@ public static class Security
             new("resources", "Resources", "masterdata.view", "Everything that costs money and is consumed, with effective-dated rates and capacity models."),
             new("patient-encounters", "Patient Encounters", "patient.view", "Patient encounters and what was invoiced for each, with the source reference of every line."),
             new("his-invoicing", "HIS Invoicing", "revenue.view", "Invoices as held in the HIS."),
+            new("departments", "Departments", "costing.view", "Cost, revenue and margin by department for the selected hospital and period — the same view as the Dashboard department tab."),
         ]),
         new("Configuration", [
             new("periods", "Periods", "costing.view", "The costing periods of the selected hospital, with the run and costing model linked to each."),
