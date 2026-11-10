@@ -349,12 +349,12 @@ export class ProfitDimCharts {
 
 const SUMMARY_PROFIT_DIMS = [
   { key: 'encounterType', label: 'Encounter type' },
+  { key: 'noBillable', label: 'Non-billable' },
   { key: 'department', label: 'Department' },
   { key: 'resource', label: 'Resources' },
   { key: 'physician', label: 'Physician' },
   { key: 'insurer', label: 'Insurer' },
   { key: 'segment', label: 'Patient segment' },
-  { key: 'noBillable', label: 'Non-billable' },
 ];
 
 /** Summary profitability: every former tab as its own chart block, no list tables. */
