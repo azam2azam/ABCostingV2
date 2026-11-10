@@ -156,33 +156,35 @@ public sealed partial class ReadQueries(VeritaDbContext db, IAuditWriter audit)
         var best = runs.GroupBy(r => r.PeriodId)
             .ToDictionary(g => g.Key, g => g.OrderByDescending(r => r.FinishedAt ?? r.StartedAt ?? DateTime.MinValue).First());
         var runIds = best.Values.Select(r => r.Id).ToList();
-        // One grouped read for all costed runs — avoid loading every encounter row per period.
-        Dictionary<Guid, Dictionary<string, int>> byRunType = [];
-        if (runIds.Count > 0)
-        {
-            var typeCounts = await (
-                from ec in db.EncounterCosts.AsNoTracking()
-                join e in db.Encounters.AsNoTracking() on ec.EncounterId equals e.Id
-                where runIds.Contains(ec.RunId)
-                group e by new { ec.RunId, e.EncType } into g
-                select new { g.Key.RunId, g.Key.EncType, N = g.Count() }).ToListAsync(ct);
-            byRunType = typeCounts.GroupBy(x => x.RunId)
-                .ToDictionary(g => g.Key, g => g.ToDictionary(x => x.EncType, x => x.N));
-        }
+        // Prepared by AGGREGATE (hospital + encounterType). Re-run periods to fill older ENGINE runs.
+        var dims = runIds.Count == 0 ? [] : await db.RunDimensionCosts.AsNoTracking()
+            .Where(x => runIds.Contains(x.RunId) && (x.Dimension == "hospital" || x.Dimension == "encounterType"))
+            .ToListAsync(ct);
+        var hospitalByRun = dims.Where(x => x.Dimension == "hospital").ToDictionary(x => x.RunId);
+        var typesByRun = dims.Where(x => x.Dimension == "encounterType")
+            .GroupBy(x => x.RunId)
+            .ToDictionary(g => g.Key, g => g.ToDictionary(x => x.Key, x => x));
         var months = new List<TrendPoint>();
         foreach (var period in periods)
         {
             if (!best.TryGetValue(period.Id, out var run)) continue;
-            var (direct, indirect, overhead, revenue, encounters) = string.IsNullOrWhiteSpace(encType)
-                ? await RunTotalsAsync(run, ct)
-                : await RunTotalsForEncTypeAsync(run.Id, encType, ct);
+            hospitalByRun.TryGetValue(run.Id, out var hospital);
+            typesByRun.TryGetValue(run.Id, out var types);
+            types ??= [];
+            RunDimensionCost? Totals() => string.IsNullOrWhiteSpace(encType) ? hospital : types.GetValueOrDefault(encType);
+            var row = Totals();
+            // Older ENGINE runs before AGGREGATE wrote these rows: fall back once until the period is re-run.
+            var (direct, indirect, overhead, revenue, encounters) = row is not null
+                ? (row.DirectCost, row.IndirectCost, row.OverheadCost, row.Revenue, row.Encounters)
+                : string.IsNullOrWhiteSpace(encType)
+                    ? await RunTotalsAsync(run, ct)
+                    : await RunTotalsForEncTypeAsync(run.Id, encType, ct);
             var cost = Money.R4(direct + indirect + overhead);
             revenue = showRevenue ? Money.R4(revenue) : 0m;
             var margin = showRevenue ? Money.R4(revenue - cost) : 0m;
             var marginPct = showRevenue && revenue != 0m ? Money.R4(margin / revenue * 100m) : 0m;
-            byRunType.TryGetValue(run.Id, out var types);
-            types ??= [];
-            int TypeCount(string t) => string.IsNullOrWhiteSpace(encType) || encType == t ? types.GetValueOrDefault(t) : 0;
+            int TypeCount(string t) => string.IsNullOrWhiteSpace(encType) || encType == t
+                ? (types.TryGetValue(t, out var r) ? r.Encounters : 0) : 0;
             months.Add(new TrendPoint(period.Code, period.StartDate, period.EndDate, encounters, revenue, cost, margin, marginPct,
                 TypeCount("IP"), TypeCount("OP"), TypeCount("ER")));
         }
@@ -192,6 +194,9 @@ public sealed partial class ReadQueries(VeritaDbContext db, IAuditWriter audit)
     private async Task<(decimal Direct, decimal Indirect, decimal Overhead, decimal Revenue, int Encounters)> RunTotalsForEncTypeAsync(
         Guid runId, string encType, CancellationToken ct)
     {
+        var stored = await db.RunDimensionCosts.AsNoTracking()
+            .FirstOrDefaultAsync(x => x.RunId == runId && x.Dimension == "encounterType" && x.Key == encType, ct);
+        if (stored is not null) return (stored.DirectCost, stored.IndirectCost, stored.OverheadCost, stored.Revenue, stored.Encounters);
         var sum = await (from ec in db.EncounterCosts.AsNoTracking()
                          join e in db.Encounters.AsNoTracking() on ec.EncounterId equals e.Id
                          where ec.RunId == runId && e.EncType == encType
@@ -201,15 +206,12 @@ public sealed partial class ReadQueries(VeritaDbContext db, IAuditWriter audit)
         return (sum?.D ?? 0m, sum?.I ?? 0m, sum?.O ?? 0m, sum?.R ?? 0m, sum?.N ?? 0);
     }
 
-    /// <summary>A run's whole totals: what a costing-model run stored, or the sum of an engine run's encounters.</summary>
+    /// <summary>A run's hospital totals from RunDimensionCost when present; else the sum of EncounterCost.</summary>
     private async Task<(decimal Direct, decimal Indirect, decimal Overhead, decimal Revenue, int Encounters)> RunTotalsAsync(CalculationRun run, CancellationToken ct)
     {
         var rid = run.Id;
-        if (run.CostingMethod == CostingModelPipeline.Method)
-        {
-            var whole = await db.RunDimensionCosts.AsNoTracking().FirstOrDefaultAsync(x => x.RunId == rid && x.Dimension == "hospital", ct);
-            return (whole?.DirectCost ?? 0m, whole?.IndirectCost ?? 0m, whole?.OverheadCost ?? 0m, whole?.Revenue ?? 0m, whole?.Encounters ?? 0);
-        }
+        var whole = await db.RunDimensionCosts.AsNoTracking().FirstOrDefaultAsync(x => x.RunId == rid && x.Dimension == "hospital", ct);
+        if (whole is not null) return (whole.DirectCost, whole.IndirectCost, whole.OverheadCost, whole.Revenue, whole.Encounters);
         var sum = await db.EncounterCosts.AsNoTracking().Where(x => x.RunId == rid).GroupBy(_ => 1)
             .Select(g => new { D = g.Sum(x => x.DirectCost), I = g.Sum(x => x.IndirectCost), O = g.Sum(x => x.OverheadCost), R = g.Sum(x => x.Revenue), N = g.Count() })
             .FirstOrDefaultAsync(ct);

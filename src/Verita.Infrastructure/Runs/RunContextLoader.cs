@@ -118,7 +118,7 @@ public sealed class RunContextLoader(VeritaDbContext db)
         var (start, endExclusive) = PeriodBounds(period);
         var encounters = await db.Encounters.AsNoTracking().Where(e => e.HospitalId == hid && e.AdmitAt >= start && e.AdmitAt < endExclusive)
             .OrderBy(e => e.EncounterNo)
-            .Select(e => new EncounterRow(e.Id, e.LengthOfStay, e.PayerId, e.DrgId, e.PackageId, e.IsSurgical)).ToListAsync(ct);
+            .Select(e => new EncounterRow(e.Id, e.LengthOfStay, e.PayerId, e.DrgId, e.PackageId, e.IsSurgical, e.EncType)).ToListAsync(ct);
         var services = await (from s in db.EncounterServices.AsNoTracking()
                               join e in db.Encounters on s.EncounterId equals e.Id
                               where e.HospitalId == hid && e.AdmitAt >= start && e.AdmitAt < endExclusive
