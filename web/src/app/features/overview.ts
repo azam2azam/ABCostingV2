@@ -206,7 +206,7 @@ export class ProfitTables {
   selector: 'v-dashboard',
   imports: [RouterLink, ProfitTables, ...UI],
   template: `
-    <v-page title="Dashboard" purpose="Direct cost, indirect cost, overheads, revenue and margin for one costed run. Every figure opens the screen that explains it.">
+    <v-page title="Summary" purpose="Direct cost, indirect cost, overheads, revenue and margin for one costed run. Every figure opens the screen that explains it.">
       @if (!calculated()) {
         <p class="notice warn">
           {{ pending() }}
@@ -251,7 +251,7 @@ export class Dashboard {
   selector: 'v-departments',
   imports: [RouterLink, ProfitTables, ...UI],
   template: `
-    <v-page title="Departments" purpose="Cost, revenue and margin by department for one costed run — the same figures as the Dashboard department tab. Encounter counts open Patient Encounters for that department.">
+    <v-page title="Departments" purpose="Cost, revenue and margin by department for one costed run — the same figures as the Summary department tab. Encounter counts open Patient Encounters for that department.">
       @if (!calculated()) {
         <p class="notice warn">
           {{ pending() }}

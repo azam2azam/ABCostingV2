@@ -81,11 +81,11 @@ public static class Security
     /// <summary>FR-11.4: the modules, plus data entry and import, grouped by what a person is doing.</summary>
     public static readonly NavGroup[] Navigation =
     [
-        new("Overview", [
-            new("dashboard", "Dashboard", "dashboard.view", "Direct cost, indirect cost, overheads, revenue and margin of one run, by hospital, service line, department, physician, payer, DRG, encounter type and segment."),
+        new("Dashboard", [
+            new("dashboard", "Summary", "dashboard.view", "Direct cost, indirect cost, overheads, revenue and margin of one run, by hospital, service line, department, physician, payer, DRG, encounter type and segment."),
         ]),
         new("Catalogue", [
-            new("departments", "Departments", "costing.view", "Cost, revenue and margin by department for the selected hospital and period — the same view as the Dashboard department tab."),
+            new("departments", "Departments", "costing.view", "Cost, revenue and margin by department for the selected hospital and period — the same view as the Summary department tab."),
             new("cost-centres", "Cost Centres", "masterdata.view", "The financial units money lands in, their step-down sequence and their closing balances."),
             new("packages", "Packages", "costing.view", "Bundled episodes: cost, revenue, variance and margin against the contracted price."),
             new("procedures", "Procedure/Activity", "costing.view", "Standard and actual cost per procedure/activity, fully decomposed into its cost components."),
