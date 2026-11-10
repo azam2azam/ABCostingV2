@@ -421,14 +421,16 @@ export class Columns {
   }
 }
 
-/** A single-series line across categories — used for margin % and similar trends. */
-export interface LinePoint { key: string; label: string; value: number; note?: string | null; }
-
+/**
+ * One or more lines across categories. Pass rows + series (same shape as columns); a single series
+ * is fine for margin % and similar.
+ */
 @Component({
   selector: 'v-line',
-  imports: [ChartTip],
+  imports: [ChartTip, ChartLegend],
   template: `
-    @if (!points().length) { <p class="faint">Nothing to show.</p> }
+    @if (series().length > 1) { <v-chart-legend [series]="series()" /> }
+    @if (!rows().length) { <p class="faint">Nothing to show.</p> }
     @else {
       <div class="c-line">
         <div class="c-y" aria-hidden="true">
@@ -439,18 +441,23 @@ export interface LinePoint { key: string; label: string; value: number; note?: s
             <line class="c-hline" [attr.y1]="100 - pos(t)" [attr.y2]="100 - pos(t)" x1="0" x2="100"
                   [class.c-zero]="t === 0" />
           }
-          <polyline class="c-poly" [attr.points]="poly()" [attr.stroke]="color()" fill="none" vector-effect="non-scaling-stroke" />
-          @for (p of laid(); track p.key; let i = $index) {
-            <circle class="c-dot" [attr.cx]="p.x" [attr.cy]="p.y" r="1.6" [attr.fill]="color()"
-                    tabindex="0" [attr.aria-label]="p.label + ': ' + format()(p.value)"
-                    (pointermove)="show($event, points()[i])" (pointerleave)="tip.set(null)"
-                    (focus)="show($event, points()[i])" (blur)="tip.set(null)" />
+          @for (line of lines(); track line.name) {
+            <polyline class="c-poly" [attr.points]="line.points" [attr.stroke]="line.color" fill="none" vector-effect="non-scaling-stroke" />
+          }
+          @for (r of laid(); track r.key; let i = $index) {
+            <g tabindex="0" [attr.aria-label]="describe(rows()[i])"
+               (pointermove)="show($event, rows()[i])" (pointerleave)="tip.set(null)"
+               (focus)="show($event, rows()[i])" (blur)="tip.set(null)">
+              @for (pt of r.pts; track $index) {
+                <circle class="c-dot" [attr.cx]="r.x" [attr.cy]="pt.y" r="1.6" [attr.fill]="pt.color" />
+              }
+            </g>
           }
         </svg>
         <div></div>
         <div class="c-x">
-          @for (p of points(); track p.key) {
-            <span class="c-xl" [title]="p.label">{{ p.label }}</span>
+          @for (r of rows(); track r.key) {
+            <span class="c-xl" [title]="r.label">{{ r.label }}</span>
           }
         </div>
       </div>
@@ -466,35 +473,44 @@ export interface LinePoint { key: string; label: string; value: number; note?: s
            .c-hline.c-zero { stroke: var(--border-strong); }
            .c-poly { stroke-width: 2.5; }
            .c-dot { stroke: var(--surface-solid); stroke-width: 0.6; outline: none; cursor: default; }
-           .c-dot:focus-visible { stroke: var(--focus); stroke-width: 1.2; }
+           g:focus-visible .c-dot { stroke: var(--focus); stroke-width: 1.2; }
+           g:focus { outline: none; }
            .c-x { display: flex; padding-top: 6px; }
            .c-xl { flex: 1 1 0; min-width: 0; text-align: center; font-size: 12px; color: var(--text-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding: 0 2px; }`,
 })
 export class Line {
   private host = inject(ElementRef<HTMLElement>);
-  points = input.required<LinePoint[]>();
-  color = input('var(--chart-3)');
-  seriesName = input('Value');
-  format = input<(v: number) => string>(pct);
-  tickFormat = input<(v: number) => string>((v) => pct(v));
+  rows = input.required<BarRow[]>();
+  series = input.required<ChartSeries[]>();
+  format = input<(v: number) => string>(sar);
+  tickFormat = input<(v: number) => string>(tickLabel);
   tip = signal<Tip | null>(null);
-  private values = computed(() => this.points().map(p => p.value));
+  private values = computed(() => this.rows().flatMap(r => r.values.map(v => v ?? 0)));
   private up = computed(() => ticks(Math.max(0, ...this.values())));
   private down = computed(() => Math.min(0, ...this.values()) < 0 ? ticks(-Math.min(0, ...this.values())).map(t => -t).filter(t => t !== 0).reverse() : []);
   grid = computed(() => [...this.down(), ...this.up()]);
   private hi = computed(() => this.up()[this.up().length - 1] || 1);
   private lo = computed(() => this.down()[0] ?? 0);
   pos(v: number): number { return (v - this.lo()) / (this.hi() - this.lo()) * 100; }
-  laid = computed(() => {
-    const pts = this.points();
-    const n = Math.max(pts.length - 1, 1);
-    return pts.map((p, i) => ({ ...p, x: pts.length === 1 ? 50 : (i / n) * 100, y: 100 - this.pos(p.value) }));
+  private xs = computed(() => {
+    const n = this.rows().length;
+    return n <= 1 ? [50] : this.rows().map((_, i) => (i / (n - 1)) * 100);
   });
-  poly = computed(() => this.laid().map(p => `${p.x},${p.y}`).join(' '));
-  aria = computed(() => this.points().map(p => `${p.label} ${this.format()(p.value)}`).join(', '));
-  show(e: Event, p: LinePoint): void {
-    this.tip.set({ ...tipAt(this.host.nativeElement, e), title: p.note ? `${p.label} · ${p.note}` : p.label,
-      rows: [{ name: this.seriesName(), value: this.format()(p.value), color: this.color() }] });
+  laid = computed(() => this.rows().map((r, i) => ({
+    key: r.key, x: this.xs()[i],
+    pts: this.series().map((s, si) => ({ color: s.color, y: 100 - this.pos(r.values[si] ?? 0) })),
+  })));
+  lines = computed(() => this.series().map((s, si) => ({
+    name: s.name, color: s.color,
+    points: this.rows().map((r, i) => `${this.xs()[i]},${100 - this.pos(r.values[si] ?? 0)}`).join(' '),
+  })));
+  aria = computed(() => this.rows().map(r => this.describe(r)).join('; '));
+  describe(r: BarRow): string {
+    return `${r.label}: ` + this.series().map((s, i) => `${s.name} ${this.format()(r.values[i] ?? 0)}`).join(', ') + (r.note ? `, ${r.note}` : '');
+  }
+  show(e: Event, r: BarRow): void {
+    this.tip.set({ ...tipAt(this.host.nativeElement, e), title: r.note ? `${r.label} · ${r.note}` : r.label,
+      rows: this.series().map((s, i) => ({ name: s.name, value: this.format()(r.values[i] ?? 0), color: s.color })) });
   }
 }
 

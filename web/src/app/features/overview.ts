@@ -5,7 +5,7 @@ import { DashboardDto, ProfitDto } from '../core/api';
 import { Auth } from '../core/auth';
 import { RunContext, runInFlight } from '../core/context';
 import { runResource } from '../core/resource';
-import { BarRow, CHARTS, ChartSeries, DivergingRow, LinePoint, PieSlice, count, countTick, pct, sar } from '../shared/charts';
+import { BarRow, CHARTS, ChartSeries, DivergingRow, PieSlice, count, countTick, pct, sar } from '../shared/charts';
 import { Col, UI } from '../shared/ui';
 
 const num = (v: unknown): number => Number(v ?? 0) || 0;
@@ -252,18 +252,18 @@ export class ProfitTables {
                   <section class="card chart">
                     <h2>Month by month</h2>
                     <p class="faint sub">{{ canRevenue() ? 'Revenue, total cost and margin' : 'Total cost' }} across every costed period.</p>
-                    <v-columns [rows]="monthBars()" [series]="moneySeries()" [format]="sar" />
+                    <v-line [rows]="monthBars()" [series]="moneySeries()" [format]="sar" />
                   </section>
                   <section class="card chart">
                     <h2>Last 3 months</h2>
                     <p class="faint sub">The same series, recent lens only.</p>
-                    <v-columns [rows]="last3Bars()" [series]="moneySeries()" [format]="sar" />
+                    <v-line [rows]="last3Bars()" [series]="moneySeries()" [format]="sar" />
                   </section>
                   @if (canRevenue() && marginLine().length) {
                     <section class="card chart" style="grid-column: 1 / -1">
                       <h2>Margin % trend</h2>
                       <p class="faint sub">Operating margin as a share of revenue, period by period.</p>
-                      <v-line [points]="marginLine()" seriesName="Margin %" color="var(--chart-3)" [format]="pct" [tickFormat]="pct" />
+                      <v-line [rows]="marginLine()" [series]="marginSeries" [format]="pct" [tickFormat]="pct" />
                     </section>
                   }
                 </div>
@@ -305,6 +305,7 @@ export class RunSummary {
   pct = pct;
   private months = computed(() => this.trend.value()?.data.months ?? []);
   moneySeries = computed(() => this.canRevenue() ? [REVENUE, COST, MARGIN] : [COST]);
+  marginSeries: ChartSeries[] = [{ name: 'Margin %', color: 'var(--chart-3)' }];
   private toBars = (rows: TrendPoint[]): BarRow[] => rows.map(m => ({
     key: m.period,
     label: shortPeriod(m.period),
@@ -313,8 +314,8 @@ export class RunSummary {
   }));
   monthBars = computed(() => this.toBars(this.months()));
   last3Bars = computed(() => this.toBars(this.months().slice(-3)));
-  marginLine = computed<LinePoint[]>(() => this.months().map(m => ({
-    key: m.period, label: shortPeriod(m.period), value: num(m.marginPct),
+  marginLine = computed<BarRow[]>(() => this.months().map(m => ({
+    key: m.period, label: shortPeriod(m.period), values: [num(m.marginPct)],
     note: `${num(m.encounters).toLocaleString('en-US')} encounters`,
   })));
 }
