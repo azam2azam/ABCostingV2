@@ -254,6 +254,17 @@ export class ProfitTables {
                     <p class="faint sub">{{ canRevenue() ? 'Revenue, total cost and margin' : 'Total cost' }} for the last 6 costed periods, including the current one.</p>
                     <v-line [rows]="last6Bars()" [series]="moneySeries()" [format]="sar" />
                   </section>
+                  @if (canRevenue()) {
+                    <section class="card chart">
+                      <h2>Margin share by month</h2>
+                      <p class="faint sub">Each month's share of operating margin over the same six periods.</p>
+                      @if (marginShare().length) {
+                        <v-pie [slices]="marginShare()" caption="Margin share by month" centreLabel="margin" />
+                      } @else {
+                        <p class="faint">No positive margin in these periods to share.</p>
+                      }
+                    </section>
+                  }
                 </div>
               }
             </v-state>
@@ -299,6 +310,18 @@ export class RunSummary {
     note: `${num(m.encounters).toLocaleString('en-US')} enc.`,
   }));
   last6Bars = computed(() => this.toBars(this.months().slice(-6)));
+  marginShare = computed<PieSlice[]>(() => {
+    const colours = ['var(--chart-1)', 'var(--chart-2)', 'var(--chart-3)', 'var(--chart-4)', 'var(--chart-5)', 'var(--chart-6)'];
+    return this.months().slice(-6)
+      .filter(m => num(m.margin) > 0)
+      .map((m, i) => ({
+        key: m.period,
+        label: shortPeriod(m.period),
+        value: num(m.margin),
+        color: colours[i % colours.length],
+        note: `${num(m.encounters).toLocaleString('en-US')} encounters`,
+      }));
+  });
 }
 
 @Component({
