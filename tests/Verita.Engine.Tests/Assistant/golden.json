@@ -2,6 +2,7 @@
   "_comment": "Golden questions for the rule-based assistant, run against FakeVocabulary. intent null = must not answer. band: answer | confirm | clarify | answerable (answer or confirm). slots: expected keys; a value of '*' means present, '-' means absent. sources: where a slot's value must come from.",
   "screen": { "hospital": "NSH-RYD", "period": "2026-10" },
   "single": [
+        { "q": "Top 10 department by encounter count", "intent": "profitability.by", "turn": "NEW", "band": "answerable", "slots": { "dimension": "department", "limit": "10", "procedure": "-" } },
     { "q": "Give me the summary for this period", "intent": "dashboard.summary", "band": "answer", "slots": { "hospital": "NSH-RYD", "period": "2026-10" } },
     { "q": "how are we doing", "intent": "dashboard.summary", "band": "answer" },
     { "q": "total cost", "intent": "dashboard.summary", "band": "answer" },

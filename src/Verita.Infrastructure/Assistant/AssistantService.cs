@@ -126,6 +126,9 @@ public sealed class AssistantService(IDbContextFactory<VeritaDbContext> factory,
         var it = Interpreter.Interpret(text, ctx, new ScreenScope(body.Hospital, body.Period), vocab, now,
             new AskOverrides(body.Intent, body.Pick, body.Remove));
 
+        // Clicking "No, <other reading>" resends the question with that reading forced: show the click, not the question again.
+        if (display is null && body.Intent is not null && body.Pick is not { Count: > 0 } && text.Length > 0 && IntentCatalogue.Default.Get(body.Intent) is { } forced)
+            display = $"No, {forced.Label.ToLowerInvariant()}";
         var displayText = display ?? (text.Length > 0 ? text : "Without " + string.Join(", ", (body.Remove ?? []).Select(k => KindLabels.GetValueOrDefault(k, k).ToLowerInvariant())));
         var question = new AssistantMessage
         {
@@ -235,7 +238,9 @@ public sealed class AssistantService(IDbContextFactory<VeritaDbContext> factory,
         if (it.Band == Bands.Confirm)
         {
             text = $"I think you're asking about {def.Label.ToLowerInvariant()}. " + text;
-            if (it.Score.RunnerUp is { } ru && IntentCatalogue.Default.Get(ru) is { } alt)
+            // The other reading is only worth offering if it could answer: it must have what it needs from the question,
+            // otherwise the click can only end in "which procedure?" for something that was never asked.
+            if (it.Score.RunnerUp is { } ru && IntentCatalogue.Default.Get(ru) is { } alt && CanAnswer(alt, it))
                 options = [new Option($"No, {alt.Label.ToLowerInvariant()}", question, alt.Id)];
         }
 
@@ -319,6 +324,10 @@ public sealed class AssistantService(IDbContextFactory<VeritaDbContext> factory,
             return new AssumptionDto(kind, KindLabels.GetValueOrDefault(kind, kind), s.Label, s.Source, it.Changed.Contains(kind), removable, s.Note);
         }).ToArray();
     }
+
+    /// <summary>Whether an intent has every parameter it requires among those already read from the question.</summary>
+    private static bool CanAnswer(IntentDef def, Interpretation it) =>
+        def.Required.All(it.Slots.ContainsKey) && (def.RequiresAny is not { Length: > 0 } any || any.Any(it.Slots.ContainsKey));
 
     private static Option[] Suggestions(IntentDef? def) => def is null ? [] : def.Suggestions.Select(x => new Option(x, x)).ToArray();
 
