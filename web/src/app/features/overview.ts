@@ -86,18 +86,21 @@ export class ProfitTables {
   lockedDim = input<string | null>(null);
   /** Departments catalogue shows the table only. */
   hideCharts = input(false);
-  /** IP/OP dashboards restrict profitability to one encounter type. */
+  /** IP/OP/ER dashboards restrict profitability to one encounter type. */
   encType = input<string | null>(null);
+  /** Hide specific profitability tabs (e.g. ER drops Department and Resources). */
+  omitDims = input<string[]>([]);
   canRevenue = computed(() => this.auth.can('revenue.view'));
   dims = computed(() => {
     const scoped = !!this.encType();
+    const omit = new Set(this.omitDims());
     const all = [
       ...(scoped ? [] : [{ key: 'encounterType', label: 'Encounter type' }]),
       { key: 'department', label: 'Department' },
       { key: 'resource', label: 'Resources' }, { key: 'physician', label: 'Physician' }, { key: 'insurer', label: 'Insurer' },
       { key: 'segment', label: 'Patient segment' },
       ...(scoped ? [] : [{ key: 'noBillable', label: 'Non-billable' }]),
-    ];
+    ].filter(d => !omit.has(d.key));
     const lock = this.lockedDim();
     return lock ? all.filter(d => d.key === lock) : all;
   });
@@ -107,7 +110,7 @@ export class ProfitTables {
     effect(() => {
       const lock = this.lockedDim();
       if (lock) this.dim.set(lock);
-      else if (this.encType()) this.dim.set('department');
+      else if (this.encType()) this.dim.set(this.dims()[0]?.key ?? 'department');
     });
     // ?tab=noBillable opens a tab directly, e.g. from the assistant's links.
     inject(ActivatedRoute).queryParamMap.pipe(takeUntilDestroyed()).subscribe(m => {
@@ -234,7 +237,9 @@ export class ProfitTables {
                   [linkParams]="encType() && t.link === 'patient-encounters' ? { encType: encType()! } : null" />
               }
             </div>
-            @if (canProfitability()) { <div style="margin-top:14px"><v-profit-tables [encType]="encType()" /></div> }
+            @if (canProfitability()) {
+              <div style="margin-top:14px"><v-profit-tables [encType]="encType()" [omitDims]="omitDims()" /></div>
+            }
           }
         </v-state>
       }
@@ -245,6 +250,7 @@ export class RunSummary {
   title = input('Summary');
   purpose = input('Direct cost, indirect cost, overheads, revenue and margin for one costed run. Every figure opens the screen that explains it.');
   encType = input<string | null>(null);
+  omitDims = input<string[]>([]);
   private auth = inject(Auth);
   private ctx = inject(RunContext);
   calculated = computed(() => ['RECONCILED', 'PUBLISHED'].includes(this.ctx.run()?.status ?? ''));
@@ -287,9 +293,11 @@ export class OpDashboard {}
 @Component({
   selector: 'v-er-dashboard',
   imports: [RunSummary],
-  template: `<v-run-summary title="ER Dashboard" purpose="Emergency (ER) cost, revenue and margin for one costed run — the same Summary layout, limited to ER encounters." encType="ER" />`,
+  template: `<v-run-summary title="ER Dashboard" purpose="Emergency (ER) cost, revenue and margin for one costed run — the same Summary layout, limited to ER encounters." encType="ER" [omitDims]="omit" />`,
 })
-export class ErDashboard {}
+export class ErDashboard {
+  omit = ['department', 'resource'];
+}
 
 /** Catalogue screen: the Dashboard department tab as its own module. */
 @Component({
