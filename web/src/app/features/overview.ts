@@ -12,13 +12,16 @@ const num = (v: unknown): number => Number(v ?? 0) || 0;
 const REVENUE: ChartSeries = { name: 'Revenue', color: 'var(--chart-revenue)' };
 const COST: ChartSeries = { name: 'Total cost', color: 'var(--chart-cost)' };
 const MARGIN: ChartSeries = { name: 'Margin', color: 'var(--chart-3)' };
-const ENCOUNTERS: ChartSeries = { name: 'Encounters', color: 'var(--chart-1)' };
+const ENC_IP: ChartSeries = { name: 'IP', color: 'var(--chart-1)' };
+const ENC_OP: ChartSeries = { name: 'OP', color: 'var(--chart-2)' };
+const ENC_ER: ChartSeries = { name: 'ER', color: 'var(--chart-3)' };
 const shortPeriod = (code: string) => code.replace(/^20\d\d\s+/, '');
 
 /** Multi-period Summary trend — OpenAPI types catch up on the next api:types run. */
 interface TrendPoint {
   period: string; startDate: string; endDate: string; encounters: number;
   revenue: number; totalCost: number; margin: number; marginPct: number;
+  ipEncounters?: number; opEncounters?: number; erEncounters?: number;
 }
 interface DashboardTrendDto { months: TrendPoint[]; }
 
@@ -420,7 +423,7 @@ function dashboardPending(ctx: RunContext): string {
                       <v-line [rows]="last6Bars()" [series]="moneySeries()" [format]="sar" [activeKey]="period()" />
                     </section>
                     <section class="card chart">
-                      <p class="faint sub">Encounter count for the last 6 costed periods, including the current one.</p>
+                      <p class="faint sub">IP, OP and ER encounter counts for the last 6 costed periods, including the current one.</p>
                       <v-line [rows]="last6EncBars()" [series]="encSeries" [format]="count" [tickFormat]="countTick" [activeKey]="period()" />
                     </section>
                   </div>
@@ -449,7 +452,7 @@ export class Dashboard {
   sar = sar;
   count = count;
   countTick = countTick;
-  encSeries = [ENCOUNTERS];
+  encSeries = [ENC_IP, ENC_OP, ENC_ER];
   private months = computed(() => this.trend.value()?.data.months ?? []);
   moneySeries = computed(() => this.canRevenue() ? [REVENUE, COST, MARGIN] : [COST]);
   private toBars = (rows: TrendPoint[]): BarRow[] => rows.map(m => ({
@@ -462,7 +465,8 @@ export class Dashboard {
   last6EncBars = computed<BarRow[]>(() => this.months().slice(-6).map(m => ({
     key: m.period,
     label: shortPeriod(m.period),
-    values: [num(m.encounters)],
+    values: [num(m.ipEncounters), num(m.opEncounters), num(m.erEncounters)],
+    note: `${num(m.encounters).toLocaleString('en-US')} total`,
   })));
 }
 

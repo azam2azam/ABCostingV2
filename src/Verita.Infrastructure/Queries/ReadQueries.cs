@@ -141,7 +141,8 @@ public sealed partial class ReadQueries(VeritaDbContext db, IAuditWriter audit)
 
     /// <summary>One point per costed period for the hospital — Summary month-by-month charts.</summary>
     public sealed record TrendPoint(string Period, DateOnly StartDate, DateOnly EndDate, int Encounters,
-        decimal Revenue, decimal TotalCost, decimal Margin, decimal MarginPct);
+        decimal Revenue, decimal TotalCost, decimal Margin, decimal MarginPct,
+        int IpEncounters = 0, int OpEncounters = 0, int ErEncounters = 0);
     public sealed record DashboardTrendDto(TrendPoint[] Months);
 
     public async Task<DashboardTrendDto> DashboardTrendAsync(ScopedRun s, Principal p, CancellationToken ct, string? encType = null)
@@ -158,25 +159,28 @@ public sealed partial class ReadQueries(VeritaDbContext db, IAuditWriter audit)
         foreach (var period in periods)
         {
             if (!best.TryGetValue(period.Id, out var run)) continue;
+            var facts = await EncounterFacts(run.Id, ct);
             var (direct, indirect, overhead, revenue, encounters) = string.IsNullOrWhiteSpace(encType)
                 ? await RunTotalsAsync(run, ct)
-                : await RunTotalsForEncTypeAsync(run.Id, encType, ct);
+                : TotalsFromFacts(facts.Where(f => f.EncType == encType).ToList());
             var cost = Money.R4(direct + indirect + overhead);
             revenue = showRevenue ? Money.R4(revenue) : 0m;
             var margin = showRevenue ? Money.R4(revenue - cost) : 0m;
             var marginPct = showRevenue && revenue != 0m ? Money.R4(margin / revenue * 100m) : 0m;
-            months.Add(new TrendPoint(period.Code, period.StartDate, period.EndDate, encounters, revenue, cost, margin, marginPct));
+            var scoped = string.IsNullOrWhiteSpace(encType) ? facts : facts.Where(f => f.EncType == encType).ToList();
+            months.Add(new TrendPoint(period.Code, period.StartDate, period.EndDate, encounters, revenue, cost, margin, marginPct,
+                scoped.Count(f => f.EncType == "IP"), scoped.Count(f => f.EncType == "OP"), scoped.Count(f => f.EncType == "ER")));
         }
         return new DashboardTrendDto(months.ToArray());
     }
 
-    private async Task<(decimal Direct, decimal Indirect, decimal Overhead, decimal Revenue, int Encounters)> RunTotalsForEncTypeAsync(
-        Guid runId, string encType, CancellationToken ct)
-    {
-        var facts = (await EncounterFacts(runId, ct)).Where(f => f.EncType == encType).ToList();
-        return (Money.R4(facts.Sum(f => f.Direct)), Money.R4(facts.Sum(f => f.Indirect)), Money.R4(facts.Sum(f => f.Overhead)),
+    private static (decimal Direct, decimal Indirect, decimal Overhead, decimal Revenue, int Encounters) TotalsFromFacts(List<EncFact> facts) =>
+        (Money.R4(facts.Sum(f => f.Direct)), Money.R4(facts.Sum(f => f.Indirect)), Money.R4(facts.Sum(f => f.Overhead)),
             Money.R4(facts.Sum(f => f.Revenue)), facts.Count);
-    }
+
+    private async Task<(decimal Direct, decimal Indirect, decimal Overhead, decimal Revenue, int Encounters)> RunTotalsForEncTypeAsync(
+        Guid runId, string encType, CancellationToken ct) =>
+        TotalsFromFacts((await EncounterFacts(runId, ct)).Where(f => f.EncType == encType).ToList());
 
     /// <summary>A run's whole totals: what a costing-model run stored, or the sum of an engine run's encounters.</summary>
     private async Task<(decimal Direct, decimal Indirect, decimal Overhead, decimal Revenue, int Encounters)> RunTotalsAsync(CalculationRun run, CancellationToken ct)
