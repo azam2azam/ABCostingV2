@@ -1,4 +1,4 @@
-import { Component, ElementRef, computed, inject, input, signal } from '@angular/core';
+import { afterNextRender, Component, DestroyRef, ElementRef, computed, inject, input, signal } from '@angular/core';
 import { RouterLink } from '@angular/router';
 import { formatDec, formatMoney } from '../core/decimal';
 
@@ -423,7 +423,7 @@ export class Columns {
 
 /**
  * One or more lines across categories. Pass rows + series (same shape as columns); a single series
- * is fine for margin % and similar.
+ * is fine for margin % and similar. Drawn in pixel space so strokes stay sharp when the plot stretches.
  */
 @Component({
   selector: 'v-line',
@@ -436,24 +436,28 @@ export class Columns {
         <div class="c-y" aria-hidden="true">
           @for (t of grid(); track $index) { <span class="c-ytick" [style.bottom.%]="pos(t)">{{ tickFormat()(t) }}</span> }
         </div>
-        <svg class="c-svg" viewBox="0 0 100 100" preserveAspectRatio="none" role="img" [attr.aria-label]="aria()">
-          @for (t of grid(); track $index) {
-            <line class="c-hline" [attr.y1]="100 - pos(t)" [attr.y2]="100 - pos(t)" x1="0" x2="100"
-                  [class.c-zero]="t === 0" />
-          }
-          @for (line of lines(); track line.name) {
-            <polyline class="c-poly" [attr.points]="line.points" [attr.stroke]="line.color" fill="none" vector-effect="non-scaling-stroke" />
-          }
-          @for (r of laid(); track r.key; let i = $index) {
-            <g tabindex="0" [attr.aria-label]="describe(rows()[i])"
-               (pointermove)="show($event, rows()[i])" (pointerleave)="tip.set(null)"
-               (focus)="show($event, rows()[i])" (blur)="tip.set(null)">
-              @for (pt of r.pts; track $index) {
-                <circle class="c-dot" [attr.cx]="r.x" [attr.cy]="pt.y" r="1.6" [attr.fill]="pt.color" />
-              }
-            </g>
-          }
-        </svg>
+        <div class="c-plot">
+          <svg class="c-svg" [attr.viewBox]="'0 0 ' + size().w + ' ' + size().h" preserveAspectRatio="none"
+               role="img" [attr.aria-label]="aria()">
+            @for (t of grid(); track $index) {
+              <line class="c-hline" [attr.y1]="yAt(t)" [attr.y2]="yAt(t)" x1="0" [attr.x2]="size().w"
+                    [class.c-zero]="t === 0" />
+            }
+            @for (line of lines(); track line.name) {
+              <polyline class="c-poly" [attr.points]="line.points" [attr.stroke]="line.color" fill="none"
+                        stroke-linecap="round" stroke-linejoin="round" shape-rendering="geometricPrecision" />
+            }
+            @for (r of laid(); track r.key; let i = $index) {
+              <g tabindex="0" [attr.aria-label]="describe(rows()[i])"
+                 (pointermove)="show($event, rows()[i])" (pointerleave)="tip.set(null)"
+                 (focus)="show($event, rows()[i])" (blur)="tip.set(null)">
+                @for (pt of r.pts; track $index) {
+                  <circle class="c-dot" [attr.cx]="r.x" [attr.cy]="pt.y" r="3.5" [attr.fill]="pt.color" />
+                }
+              </g>
+            }
+          </svg>
+        </div>
         <div></div>
         <div class="c-x">
           @for (r of rows(); track r.key) {
@@ -468,23 +472,27 @@ export class Columns {
            .c-line { display: grid; grid-template-columns: 44px 1fr; grid-template-rows: 200px auto; column-gap: 8px; }
            .c-y { position: relative; }
            .c-ytick { position: absolute; right: 0; transform: translateY(50%); font-size: 11px; color: var(--text-3); font-variant-numeric: tabular-nums; white-space: nowrap; }
-           .c-svg { width: 100%; height: 100%; overflow: visible; }
-           .c-hline { stroke: var(--border); stroke-width: 1; vector-effect: non-scaling-stroke; }
+           .c-plot { position: relative; min-width: 0; min-height: 0; }
+           .c-svg { display: block; width: 100%; height: 100%; overflow: visible; }
+           .c-hline { stroke: var(--border); stroke-width: 1; shape-rendering: crispEdges; }
            .c-hline.c-zero { stroke: var(--border-strong); }
-           .c-poly { stroke-width: 2.5; }
-           .c-dot { stroke: var(--surface-solid); stroke-width: 0.6; outline: none; cursor: default; }
-           g:focus-visible .c-dot { stroke: var(--focus); stroke-width: 1.2; }
+           .c-poly { stroke-width: 2; }
+           .c-dot { stroke: var(--surface-solid); stroke-width: 1.5; outline: none; cursor: default; }
+           g:focus-visible .c-dot { stroke: var(--focus); stroke-width: 2; }
            g:focus { outline: none; }
            .c-x { display: flex; padding-top: 6px; }
            .c-xl { flex: 1 1 0; min-width: 0; text-align: center; font-size: 12px; color: var(--text-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding: 0 2px; }`,
 })
 export class Line {
   private host = inject(ElementRef<HTMLElement>);
+  private destroyRef = inject(DestroyRef);
   rows = input.required<BarRow[]>();
   series = input.required<ChartSeries[]>();
   format = input<(v: number) => string>(sar);
   tickFormat = input<(v: number) => string>(tickLabel);
   tip = signal<Tip | null>(null);
+  /** Plot size in CSS pixels — viewBox matches so 1 unit = 1 px and strokes stay sharp. */
+  size = signal({ w: 600, h: 200 });
   private values = computed(() => this.rows().flatMap(r => r.values.map(v => v ?? 0)));
   private up = computed(() => ticks(Math.max(0, ...this.values())));
   private down = computed(() => Math.min(0, ...this.values()) < 0 ? ticks(-Math.min(0, ...this.values())).map(t => -t).filter(t => t !== 0).reverse() : []);
@@ -492,19 +500,33 @@ export class Line {
   private hi = computed(() => this.up()[this.up().length - 1] || 1);
   private lo = computed(() => this.down()[0] ?? 0);
   pos(v: number): number { return (v - this.lo()) / (this.hi() - this.lo()) * 100; }
+  yAt(v: number): number { return Math.round((1 - this.pos(v) / 100) * this.size().h); }
   private xs = computed(() => {
     const n = this.rows().length;
-    return n <= 1 ? [50] : this.rows().map((_, i) => (i / (n - 1)) * 100);
+    const w = this.size().w;
+    return n <= 1 ? [w / 2] : this.rows().map((_, i) => (i / (n - 1)) * w);
   });
   laid = computed(() => this.rows().map((r, i) => ({
     key: r.key, x: this.xs()[i],
-    pts: this.series().map((s, si) => ({ color: s.color, y: 100 - this.pos(r.values[si] ?? 0) })),
+    pts: this.series().map((s, si) => ({ color: s.color, y: this.yAt(r.values[si] ?? 0) })),
   })));
   lines = computed(() => this.series().map((s, si) => ({
     name: s.name, color: s.color,
-    points: this.rows().map((r, i) => `${this.xs()[i]},${100 - this.pos(r.values[si] ?? 0)}`).join(' '),
+    points: this.rows().map((r, i) => `${this.xs()[i]},${this.yAt(r.values[si] ?? 0)}`).join(' '),
   })));
   aria = computed(() => this.rows().map(r => this.describe(r)).join('; '));
+  constructor() {
+    afterNextRender(() => {
+      const plot = this.host.nativeElement.querySelector('.c-plot') as HTMLElement | null;
+      if (!plot) return;
+      const ro = new ResizeObserver(entries => {
+        const { width, height } = entries[0].contentRect;
+        if (width > 0 && height > 0) this.size.set({ w: Math.round(width), h: Math.round(height) });
+      });
+      ro.observe(plot);
+      this.destroyRef.onDestroy(() => ro.disconnect());
+    });
+  }
   describe(r: BarRow): string {
     return `${r.label}: ` + this.series().map((s, i) => `${s.name} ${this.format()(r.values[i] ?? 0)}`).join(', ') + (r.note ? `, ${r.note}` : '');
   }
