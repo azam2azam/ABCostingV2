@@ -295,7 +295,6 @@ export class RunSummary {
   canProfitability = computed(() => this.auth.can('profitability.view'));
   canRevenue = computed(() => this.auth.can('revenue.view'));
   sar = sar;
-  pct = pct;
   private months = computed(() => this.trend.value()?.data.months ?? []);
   moneySeries = computed(() => this.canRevenue() ? [REVENUE, COST, MARGIN] : [COST]);
   private toBars = (rows: TrendPoint[]): BarRow[] => rows.map(m => ({
