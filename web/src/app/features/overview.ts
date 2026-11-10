@@ -53,7 +53,7 @@ const ENCOUNTER_FILTER: Record<string, string> = { encounterType: 'encType', noB
                 }
               </section>
               <section class="card chart">
-                <h2>Total cost and encounters by procedure type</h2>
+                <h2>Share by procedure type</h2>
                 <p class="faint sub">Share of the cost of lines invoiced at no price.</p>
                 <v-pie [slices]="pie()" caption="Non-billable cost by procedure type" centreLabel="total cost" />
               </section>
@@ -72,7 +72,7 @@ const ENCOUNTER_FILTER: Record<string, string> = { encounterType: 'encType', noB
             }
             @if (canRevenue() && dim() !== 'noBillable') {
               <section class="card chart">
-                <h2>Margin % by {{ dimLabel().toLowerCase() }}</h2>
+                <h2>{{ (dim() === 'segment' || dim() === 'encounterType') && marginPie().length ? 'Share by ' : 'Margin % by ' }}{{ dimLabel().toLowerCase() }}</h2>
                 @if ((dim() === 'segment' || dim() === 'encounterType') && marginPie().length) {
                   <p class="faint sub">Each {{ dimLabel().toLowerCase() }}'s share of the operating margin, with its margin %.</p>
                   <v-pie [slices]="marginPie()" [caption]="'Operating margin by ' + dimLabel().toLowerCase()" centreLabel="margin" />
@@ -251,7 +251,7 @@ export class ProfitTables {
                 }
               </section>
               <section class="card chart">
-                <h2>Total cost and encounters by procedure type</h2>
+                <h2>Share by procedure type</h2>
                 <p class="faint sub">Share of the cost of lines invoiced at no price.</p>
                 <v-pie [slices]="pie()" caption="Non-billable cost by procedure type" centreLabel="total cost" />
               </section>
@@ -270,7 +270,7 @@ export class ProfitTables {
             }
             @if (canRevenue() && dim() !== 'noBillable') {
               <section class="card chart">
-                <h2>Margin % by {{ label().toLowerCase() }}</h2>
+                <h2>{{ (dim() === 'segment' || dim() === 'encounterType') && marginPie().length ? 'Share by ' : 'Margin % by ' }}{{ label().toLowerCase() }}</h2>
                 @if ((dim() === 'segment' || dim() === 'encounterType') && marginPie().length) {
                   <p class="faint sub">Each {{ label().toLowerCase() }}'s share of the operating margin, with its margin %.</p>
                   <v-pie [slices]="marginPie()" [caption]="'Operating margin by ' + label().toLowerCase()" centreLabel="margin" />
