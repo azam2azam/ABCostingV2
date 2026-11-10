@@ -79,9 +79,10 @@ export class Chip {
     <ng-content />
   `,
   styles: `.page-head { display: flex; gap: 16px; align-items: flex-end; justify-content: space-between; flex-wrap: wrap; margin-bottom: 20px; }
+           .page-head > div:first-child { flex: 1; min-width: 0; }
            .page-head h1 { font-size: 26px; }
-           .page-head p { max-width: 80ch; margin: 0; }
-           .actions { display: flex; gap: 8px; flex-wrap: wrap; }`,
+           .page-head p { margin: 0; }
+           .actions { display: flex; gap: 8px; flex-wrap: wrap; flex-shrink: 0; }`,
 })
 export class Page {
   title = input.required<string>();
