@@ -27,6 +27,7 @@ export const routes: Routes = [
       r('dashboard', overview, 'Dashboard'),
       r('ip-dashboard', overview, 'IpDashboard'),
       r('op-dashboard', overview, 'OpDashboard'),
+      r('er-dashboard', overview, 'ErDashboard'),
       r('assistant', assistant, 'AssistantPage'),
       { path: 'profitability', redirectTo: 'dashboard' },
       r('cost-centres', model, 'CostCentres'), r('cost-centres/:id', model, 'CostCentreDetail'),

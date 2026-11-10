@@ -280,9 +280,16 @@ export class IpDashboard {}
 @Component({
   selector: 'v-op-dashboard',
   imports: [RunSummary],
-  template: `<v-run-summary title="OP Dashboard" purpose="Outpatient (OP) cost, revenue and margin for one costed run — the same Summary layout, limited to OP encounters." encType="OP" />`,
+  template: `<v-run-summary title="OP Dashboard" purpose="Outpatient (OP) cost, revenue and margin for one costed run — OP encounters only (ER has its own dashboard)." encType="OP" />`,
 })
 export class OpDashboard {}
+
+@Component({
+  selector: 'v-er-dashboard',
+  imports: [RunSummary],
+  template: `<v-run-summary title="ER Dashboard" purpose="Emergency (ER) cost, revenue and margin for one costed run — the same Summary layout, limited to ER encounters." encType="ER" />`,
+})
+export class ErDashboard {}
 
 /** Catalogue screen: the Dashboard department tab as its own module. */
 @Component({
