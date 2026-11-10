@@ -19,6 +19,65 @@ export const allocationCols: Col<AllocationDto>[] = [
   { key: 'amount', label: 'Amount', type: 'money' },
 ];
 
+// ── Departments ─────────────────────────────────────────────────────────────────
+
+/** OpenAPI types catch up on the next api:types run. */
+export interface DepartmentRow {
+  id: string;
+  code: string;
+  name: string;
+  deptType: string;
+  specialty: string | null;
+  serviceLine: string | null;
+  costCentres: number;
+  cases: number;
+  revenue: number;
+  cost: number;
+}
+
+@Component({
+  selector: 'v-departments',
+  imports: [...UI],
+  template: `
+    <v-page title="Departments" purpose="The hospital's departments from the catalogue. When a calculation has been run for the period, cases, revenue and cost are shown too.">
+      <v-state [loading]="res.isLoading()" [error]="res.error()">
+        @if (res.value()) {
+          <v-list-search [(query)]="search" placeholder="Search by name or code" />
+          <v-table [rows]="filtered()" [columns]="cols()" sortBy="name" caption="Departments"
+            [empty]="search().trim() ? 'No departments match this search.' : 'No departments in the catalogue for this hospital.'" />
+        }
+      </v-state>
+    </v-page>
+  `,
+})
+export class Departments {
+  private auth = inject(Auth);
+  res = catalogueResource<DepartmentRow[]>(() => 'departments');
+  search = signal('');
+  filtered = computed(() => (this.res.value()?.data ?? []).filter(r => matchesNameOrCode(this.search(), r.name, r.code)));
+  cols = computed<Col<DepartmentRow>[]>(() => {
+    const cols: Col<DepartmentRow>[] = [
+      { key: 'code', label: 'Code', value: r => localCode(r.code) },
+      { key: 'name', label: 'Name' },
+      { key: 'deptType', label: 'Type' },
+      { key: 'specialty', label: 'Specialty' },
+      { key: 'serviceLine', label: 'Service line' },
+      { key: 'costCentres', label: 'Cost centres', type: 'num', dp: 0 },
+      { key: 'cases', label: 'Cases', type: 'num', dp: 0, link: () => '/patient-encounters',
+        linkParams: r => ({ department: r.id }) },
+    ];
+    if (this.auth.can('revenue.view')) {
+      cols.push(
+        { key: 'revenue', label: 'Revenue', type: 'money', dp: 0 },
+        { key: 'cost', label: 'Cost', type: 'money', dp: 0 },
+      );
+    } else {
+      cols.push({ key: 'cost', label: 'Cost', type: 'money', dp: 0 });
+    }
+    return cols;
+  });
+}
+
 // ── Cost centres ────────────────────────────────────────────────────────────────
 
 @Component({

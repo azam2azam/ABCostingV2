@@ -536,39 +536,3 @@ export class ErDashboard {
   omit = ['department', 'resource'];
 }
 
-/** Catalogue screen: the Dashboard department tab as its own module. */
-@Component({
-  selector: 'v-departments',
-  imports: [RouterLink, ProfitTables, ...UI],
-  template: `
-    <v-page title="Departments" purpose="Cost, revenue and margin by department for one costed run — the same figures as the Summary department tab. Encounter counts open Patient Encounters for that department.">
-      @if (!calculated()) {
-        <p class="notice warn">
-          {{ pending() }}
-          <a routerLink="/runs" queryParamsHandling="preserve">Go to Calculation Runs</a>
-        </p>
-      } @else if (!canProfitability()) {
-        <p class="notice warn">Department profitability is not included in your role.</p>
-      } @else {
-        <v-profit-tables lockedDim="department" [hideCharts]="true" />
-      }
-    </v-page>
-  `,
-})
-export class Departments {
-  private auth = inject(Auth);
-  private ctx = inject(RunContext);
-  calculated = computed(() => ['RECONCILED', 'PUBLISHED'].includes(this.ctx.run()?.status ?? ''));
-  canProfitability = computed(() => this.auth.can('profitability.view'));
-  pending = computed(() => {
-    const code = this.ctx.periodParam();
-    const selected = this.ctx.periodsForHospital().find(p => p.code === code);
-    const period = selected ? `${selected.code} (${selected.startDate} – ${selected.endDate})` : code ?? 'this period';
-    const run = this.ctx.run();
-    if (!run) return `The calculation has not been run for ${period}.`;
-    if (runInFlight(run.status)) return `The calculation for ${period} is still running.`;
-    return run.status === 'FAILED'
-      ? `The calculation for ${period} failed, so there are no figures to show.`
-      : `The calculation has not been run for ${period}.`;
-  });
-}
