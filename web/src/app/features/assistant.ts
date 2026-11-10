@@ -84,13 +84,7 @@ function recall(): string | null {
           <div class="col">
             @if (messages().length === 0 && !busy()) {
               <div class="intro">
-                <span class="badge"><v-icon name="chat" [size]="22" /></span>
                 <h2>What would you like to know?</h2>
-                <p>I read the same numbers as the screens, for <em>{{ scopeLabel() }}</em> unless you name another hospital or period.
-                  Follow up with "and for September?", "why?", "break it down" or "compare with …".</p>
-                <div class="chips center">
-                  @for (s of starters; track s.label) { <button type="button" class="chip-btn" (click)="send(s.text)">{{ s.label }}</button> }
-                </div>
               </div>
             }
             @for (m of messages(); track m.id) {
@@ -241,9 +235,7 @@ function recall(): string | null {
     .log { flex: 1; padding: 20px 24px; }
     .col { max-width: 880px; margin: 0 auto; display: flex; flex-direction: column; gap: 14px; }
     .intro { text-align: center; padding: 48px 12px 12px; }
-    .intro .badge { display: inline-grid; place-items: center; width: 52px; height: 52px; border-radius: 16px; background: var(--accent-soft); color: var(--accent); }
-    .intro h2 { margin: 14px 0 6px; font-size: 22px; }
-    .intro p { margin: 0 auto 16px; max-width: 560px; color: var(--text-2); line-height: 1.55; }
+    .intro h2 { margin: 0; font-size: 22px; }
     .msg.user { display: flex; justify-content: flex-end; }
     .msg.user .bubble { max-width: 75%; background: var(--accent); color: #fff; padding: 9px 14px; border-radius: 16px 16px 4px 16px; white-space: pre-wrap; overflow-wrap: anywhere; }
     .msg.bot { background: var(--surface-solid); border: 1px solid var(--border); border-radius: 4px 16px 16px 16px; padding: 12px 14px; min-width: 0; box-shadow: var(--shadow-sm); }
@@ -287,7 +279,6 @@ function recall(): string | null {
     .note.bad { color: var(--bad); }
     .links { display: flex; flex-wrap: wrap; gap: 14px; margin: 0 0 10px; font-size: 13px; }
     .chips { display: flex; flex-wrap: wrap; gap: 6px; margin: 0 0 10px; }
-    .chips.center { justify-content: center; }
     .chip-btn { font: inherit; font-size: 13px; padding: 5px 12px; border-radius: 16px; text-align: left; max-width: 100%; border: 1px solid var(--border-strong); background: var(--surface-solid); color: var(--text); cursor: pointer; }
     .chip-btn:hover { border-color: var(--accent); color: var(--accent-strong); }
     .chip-btn.opt { border-color: var(--accent); }
@@ -362,21 +353,6 @@ export class AssistantPage {
   /** Typewriter pace; long answers are capped so they finish in a couple of seconds. */
   private static readonly TypeMs = 18;
   private static readonly TypeMaxMs = 2200;
-
-  readonly starters: AssistantOption[] = [
-    { label: 'Run summary', text: 'Give me the summary for this period', intent: null, pick: null },
-    { label: 'Most expensive procedures', text: 'Most expensive procedures', intent: null, pick: null },
-    { label: 'Profitability by payer', text: 'Profitability by payer', intent: null, pick: null },
-    { label: 'Non-billable services', text: 'Non-billable encounters this period', intent: null, pick: null },
-    { label: 'Biggest variances', text: 'Biggest variances', intent: null, pick: null },
-    { label: 'Idle capacity', text: 'How much idle capacity do we have?', intent: null, pick: null },
-    { label: 'Data quality', text: 'Any data quality issues?', intent: null, pick: null },
-  ];
-
-  readonly scopeLabel = computed(() => {
-    const h = this.ctx.hospitals().find(x => x.code === this.ctx.hospitalParam());
-    return [h?.name ?? this.ctx.hospitalParam() ?? 'the latest published run', this.ctx.periodParam()].filter(Boolean).join(', ');
-  });
 
   readonly filteredThreads = computed(() => {
     const f = this.filterSig().trim().toLowerCase();
