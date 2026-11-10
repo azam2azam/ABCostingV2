@@ -416,12 +416,10 @@ function dashboardPending(ctx: RunContext): string {
                   <h2 style="margin:0 0 8px;font-size:16px">Trend (6 months vs period)</h2>
                   <div class="grid two charts">
                     <section class="card chart">
-                      <h2>6 month trend</h2>
                       <p class="faint sub">{{ canRevenue() ? 'Revenue, total cost and margin' : 'Total cost' }} for the last 6 costed periods, including the current one.</p>
                       <v-line [rows]="last6Bars()" [series]="moneySeries()" [format]="sar" [activeKey]="period()" />
                     </section>
                     <section class="card chart">
-                      <h2>6 month encounter trend</h2>
                       <p class="faint sub">Encounter count for the last 6 costed periods, including the current one.</p>
                       <v-line [rows]="last6EncBars()" [series]="encSeries" [format]="count" [tickFormat]="countTick" [activeKey]="period()" />
                     </section>
