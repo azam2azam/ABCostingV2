@@ -32,7 +32,7 @@ const ENCOUNTER_FILTER: Record<string, string> = { encounterType: 'encType', noB
         @if (!canRevenue()) { <p class="notice warn">Revenue is masked for your role; margins are not shown.</p> }
         @if (dim() === 'resource') { <p class="muted" style="margin:0 0 10px">By the doctor on each service line. An encounter can appear under several resources, so the Encounters column does not add up to the total.</p> }
         @if (dim() === 'noBillable' && !$any(r.data.total).services) { <p class="muted" style="margin:0 0 10px">This run holds no non-billable lines. Run the calculation again to fill this list.</p> }
-        @if (r.data.rows.length) {
+        @if (!hideCharts() && r.data.rows.length) {
           <div class="grid two charts">
             @if (dim() === 'noBillable') {
               <section class="card chart">
@@ -84,6 +84,8 @@ export class ProfitTables {
   private auth = inject(Auth);
   /** When set (e.g. Departments screen), only that dimension is shown and the tab strip is hidden. */
   lockedDim = input<string | null>(null);
+  /** Departments catalogue shows the table only. */
+  hideCharts = input(false);
   canRevenue = computed(() => this.auth.can('revenue.view'));
   dims = computed(() => {
     const all = [
@@ -258,7 +260,7 @@ export class Dashboard {
       } @else if (!canProfitability()) {
         <p class="notice warn">Department profitability is not included in your role.</p>
       } @else {
-        <v-profit-tables lockedDim="department" />
+        <v-profit-tables lockedDim="department" [hideCharts]="true" />
       }
     </v-page>
   `,
