@@ -43,7 +43,6 @@ export class CostCentres {
     { key: 'stepDownSeq', label: 'Seq', type: 'num', dp: 0 },
     { key: 'code', label: 'Code', value: r => localCode(r.code) },
     { key: 'name', label: 'Name', link: r => `/cost-centres/${r.id}` },
-    { key: 'department', label: 'Department' },
     { key: 'ccType', label: 'Type' },
     { key: 'cases', label: 'Cases', type: 'num', dp: 0 },
     { key: 'cost', label: 'Cost', type: 'money', dp: 0 },
