@@ -254,11 +254,6 @@ export class ProfitTables {
                     <p class="faint sub">{{ canRevenue() ? 'Revenue, total cost and margin' : 'Total cost' }} for the last 6 costed periods, including the current one.</p>
                     <v-line [rows]="last6Bars()" [series]="moneySeries()" [format]="sar" />
                   </section>
-                  <section class="card chart">
-                    <h2>Last 3 months</h2>
-                    <p class="faint sub">The same series, recent lens only.</p>
-                    <v-line [rows]="last3Bars()" [series]="moneySeries()" [format]="sar" />
-                  </section>
                 </div>
               }
             </v-state>
@@ -304,7 +299,6 @@ export class RunSummary {
     note: `${num(m.encounters).toLocaleString('en-US')} enc.`,
   }));
   last6Bars = computed(() => this.toBars(this.months().slice(-6)));
-  last3Bars = computed(() => this.toBars(this.months().slice(-3)));
 }
 
 @Component({
