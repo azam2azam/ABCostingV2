@@ -5,7 +5,7 @@ import { DashboardDto, ProfitDto } from '../core/api';
 import { Auth } from '../core/auth';
 import { RunContext, runInFlight } from '../core/context';
 import { runResource } from '../core/resource';
-import { BarRow, CHARTS, ChartSeries, DivergingRow, PieSlice, count, countTick, pct, sar } from '../shared/charts';
+import { BarRow, CHARTS, ChartSeries, DivergingRow, PieSlice, count, countTick, sar } from '../shared/charts';
 import { Col, UI } from '../shared/ui';
 
 const num = (v: unknown): number => Number(v ?? 0) || 0;
@@ -259,13 +259,6 @@ export class ProfitTables {
                     <p class="faint sub">The same series, recent lens only.</p>
                     <v-line [rows]="last3Bars()" [series]="moneySeries()" [format]="sar" />
                   </section>
-                  @if (canRevenue() && marginLine().length) {
-                    <section class="card chart" style="grid-column: 1 / -1">
-                      <h2>Margin % trend</h2>
-                      <p class="faint sub">Operating margin as a share of revenue, period by period.</p>
-                      <v-line [rows]="marginLine()" [series]="marginSeries" [format]="pct" [tickFormat]="pct" />
-                    </section>
-                  }
                 </div>
               }
             </v-state>
@@ -305,7 +298,6 @@ export class RunSummary {
   pct = pct;
   private months = computed(() => this.trend.value()?.data.months ?? []);
   moneySeries = computed(() => this.canRevenue() ? [REVENUE, COST, MARGIN] : [COST]);
-  marginSeries: ChartSeries[] = [{ name: 'Margin %', color: 'var(--chart-3)' }];
   private toBars = (rows: TrendPoint[]): BarRow[] => rows.map(m => ({
     key: m.period,
     label: shortPeriod(m.period),
@@ -314,10 +306,6 @@ export class RunSummary {
   }));
   monthBars = computed(() => this.toBars(this.months()));
   last3Bars = computed(() => this.toBars(this.months().slice(-3)));
-  marginLine = computed<BarRow[]>(() => this.months().map(m => ({
-    key: m.period, label: shortPeriod(m.period), values: [num(m.marginPct)],
-    note: `${num(m.encounters).toLocaleString('en-US')} encounters`,
-  })));
 }
 
 @Component({
