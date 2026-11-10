@@ -415,7 +415,7 @@ function dashboardPending(ctx: RunContext): string {
                   <section class="card chart">
                     <h2>6 month trend</h2>
                     <p class="faint sub">{{ canRevenue() ? 'Revenue, total cost and margin' : 'Total cost' }} for the last 6 costed periods, including the current one.</p>
-                    <v-line [rows]="last6Bars()" [series]="moneySeries()" [format]="sar" />
+                    <v-line [rows]="last6Bars()" [series]="moneySeries()" [format]="sar" [activeKey]="period()" />
                   </section>
                   @if (canRevenue()) {
                     <section class="card chart">
@@ -449,6 +449,7 @@ export class Dashboard {
   trend = runResource<DashboardTrendDto>(() => this.calculated() ? 'dashboard/trend' : null);
   canProfitability = computed(() => this.auth.can('profitability.view'));
   canRevenue = computed(() => this.auth.can('revenue.view'));
+  period = computed(() => this.ctx.periodParam());
   sar = sar;
   private months = computed(() => this.trend.value()?.data.months ?? []);
   moneySeries = computed(() => this.canRevenue() ? [REVENUE, COST, MARGIN] : [COST]);

@@ -439,6 +439,10 @@ export class Columns {
         <div class="c-plot">
           <svg class="c-svg" [attr.viewBox]="'0 0 ' + size().w + ' ' + size().h" preserveAspectRatio="none"
                role="img" [attr.aria-label]="aria()">
+            @if (active(); as a) {
+              <rect class="c-active-band" [attr.x]="a.bandX" y="0" [attr.width]="a.bandW" [attr.height]="size().h" />
+              <line class="c-active-line" [attr.x1]="a.x" [attr.x2]="a.x" y1="0" [attr.y2]="size().h" />
+            }
             @for (t of grid(); track $index) {
               <line class="c-hline" [attr.y1]="yAt(t)" [attr.y2]="yAt(t)" x1="0" [attr.x2]="size().w"
                     [class.c-zero]="t === 0" />
@@ -448,11 +452,12 @@ export class Columns {
                         stroke-linecap="round" stroke-linejoin="round" shape-rendering="geometricPrecision" />
             }
             @for (r of laid(); track r.key; let i = $index) {
-              <g tabindex="0" [attr.aria-label]="describe(rows()[i])"
+              <g tabindex="0" [attr.aria-label]="describe(rows()[i])" [class.c-active-pts]="r.key === activeKey()"
                  (pointermove)="show($event, rows()[i])" (pointerleave)="tip.set(null)"
                  (focus)="show($event, rows()[i])" (blur)="tip.set(null)">
                 @for (pt of r.pts; track $index) {
-                  <circle class="c-dot" [attr.cx]="r.x" [attr.cy]="pt.y" r="3.5" [attr.fill]="pt.color" />
+                  <circle class="c-dot" [attr.cx]="r.x" [attr.cy]="pt.y"
+                          [attr.r]="r.key === activeKey() ? 5 : 3.5" [attr.fill]="pt.color" />
                 }
               </g>
             }
@@ -461,7 +466,7 @@ export class Columns {
         <div></div>
         <div class="c-x">
           @for (r of rows(); track r.key) {
-            <span class="c-xl" [title]="r.label">{{ r.label }}</span>
+            <span class="c-xl" [class.c-xl-active]="r.key === activeKey()" [title]="r.label">{{ r.label }}</span>
           }
         </div>
       </div>
@@ -474,20 +479,26 @@ export class Columns {
            .c-ytick { position: absolute; right: 0; transform: translateY(50%); font-size: 11px; color: var(--text-3); font-variant-numeric: tabular-nums; white-space: nowrap; }
            .c-plot { position: relative; min-width: 0; min-height: 0; }
            .c-svg { display: block; width: 100%; height: 100%; overflow: visible; }
+           .c-active-band { fill: var(--accent-soft); }
+           .c-active-line { stroke: var(--accent); stroke-width: 1.5; shape-rendering: crispEdges; }
            .c-hline { stroke: var(--border); stroke-width: 1; shape-rendering: crispEdges; }
            .c-hline.c-zero { stroke: var(--border-strong); }
            .c-poly { stroke-width: 2; }
            .c-dot { stroke: var(--surface-solid); stroke-width: 1.5; outline: none; cursor: default; }
+           .c-active-pts .c-dot { stroke: var(--accent); stroke-width: 2; }
            g:focus-visible .c-dot { stroke: var(--focus); stroke-width: 2; }
            g:focus { outline: none; }
            .c-x { display: flex; padding-top: 6px; }
-           .c-xl { flex: 1 1 0; min-width: 0; text-align: center; font-size: 12px; color: var(--text-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding: 0 2px; }`,
+           .c-xl { flex: 1 1 0; min-width: 0; text-align: center; font-size: 12px; color: var(--text-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding: 0 2px; }
+           .c-xl-active { color: var(--accent-strong); font-weight: 600; }`,
 })
 export class Line {
   private host = inject(ElementRef<HTMLElement>);
   private destroyRef = inject(DestroyRef);
   rows = input.required<BarRow[]>();
   series = input.required<ChartSeries[]>();
+  /** Row key for the currently selected period — drawn with a band, guide, and stronger dots. */
+  activeKey = input<string | null>(null);
   format = input<(v: number) => string>(sar);
   tickFormat = input<(v: number) => string>(tickLabel);
   tip = signal<Tip | null>(null);
@@ -505,6 +516,19 @@ export class Line {
     const n = this.rows().length;
     const w = this.size().w;
     return n <= 1 ? [w / 2] : this.rows().map((_, i) => (i / (n - 1)) * w);
+  });
+  active = computed(() => {
+    const key = this.activeKey();
+    if (!key) return null;
+    const i = this.rows().findIndex(r => r.key === key);
+    if (i < 0) return null;
+    const n = this.rows().length;
+    const w = this.size().w;
+    const x = this.xs()[i];
+    const half = n <= 1 ? w / 2 : w / (2 * Math.max(n - 1, 1));
+    const bandX = Math.max(0, x - half);
+    const bandW = Math.min(w, x + half) - bandX;
+    return { x, bandX, bandW };
   });
   laid = computed(() => this.rows().map((r, i) => ({
     key: r.key, x: this.xs()[i],
