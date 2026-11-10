@@ -12,6 +12,7 @@ const num = (v: unknown): number => Number(v ?? 0) || 0;
 const REVENUE: ChartSeries = { name: 'Revenue', color: 'var(--chart-revenue)' };
 const COST: ChartSeries = { name: 'Total cost', color: 'var(--chart-cost)' };
 const MARGIN: ChartSeries = { name: 'Margin', color: 'var(--chart-3)' };
+const ENCOUNTERS: ChartSeries = { name: 'Encounters', color: 'var(--chart-1)' };
 const shortPeriod = (code: string) => code.replace(/^20\d\d\s+/, '');
 
 /** Multi-period Summary trend — OpenAPI types catch up on the next api:types run. */
@@ -417,17 +418,11 @@ function dashboardPending(ctx: RunContext): string {
                     <p class="faint sub">{{ canRevenue() ? 'Revenue, total cost and margin' : 'Total cost' }} for the last 6 costed periods, including the current one.</p>
                     <v-line [rows]="last6Bars()" [series]="moneySeries()" [format]="sar" [activeKey]="period()" />
                   </section>
-                  @if (canRevenue()) {
-                    <section class="card chart">
-                      <h2>Margin share by month</h2>
-                      <p class="faint sub">Each month's share of operating margin over the same six periods.</p>
-                      @if (marginShare().length) {
-                        <v-pie [slices]="marginShare()" caption="Margin share by month" centreLabel="margin" />
-                      } @else {
-                        <p class="faint">No positive margin in these periods to share.</p>
-                      }
-                    </section>
-                  }
+                  <section class="card chart">
+                    <h2>6 month encounter trend</h2>
+                    <p class="faint sub">Encounter count for the last 6 costed periods, including the current one.</p>
+                    <v-line [rows]="last6EncBars()" [series]="encSeries" [format]="count" [tickFormat]="countTick" [activeKey]="period()" />
+                  </section>
                 </div>
               }
             </v-state>
@@ -451,6 +446,9 @@ export class Dashboard {
   canRevenue = computed(() => this.auth.can('revenue.view'));
   period = computed(() => this.ctx.periodParam());
   sar = sar;
+  count = count;
+  countTick = countTick;
+  encSeries = [ENCOUNTERS];
   private months = computed(() => this.trend.value()?.data.months ?? []);
   moneySeries = computed(() => this.canRevenue() ? [REVENUE, COST, MARGIN] : [COST]);
   private toBars = (rows: TrendPoint[]): BarRow[] => rows.map(m => ({
@@ -460,18 +458,11 @@ export class Dashboard {
     note: `${num(m.encounters).toLocaleString('en-US')} enc.`,
   }));
   last6Bars = computed(() => this.toBars(this.months().slice(-6)));
-  marginShare = computed<PieSlice[]>(() => {
-    const colours = ['var(--chart-1)', 'var(--chart-2)', 'var(--chart-3)', 'var(--chart-4)', 'var(--chart-5)', 'var(--chart-6)'];
-    return this.months().slice(-6)
-      .filter(m => num(m.margin) > 0)
-      .map((m, i) => ({
-        key: m.period,
-        label: shortPeriod(m.period),
-        value: num(m.margin),
-        color: colours[i % colours.length],
-        note: `${num(m.encounters).toLocaleString('en-US')} encounters`,
-      }));
-  });
+  last6EncBars = computed<BarRow[]>(() => this.months().slice(-6).map(m => ({
+    key: m.period,
+    label: shortPeriod(m.period),
+    values: [num(m.encounters)],
+  })));
 }
 
 /** IP / OP / ER only — separate from Summary so that screen can evolve independently. */
