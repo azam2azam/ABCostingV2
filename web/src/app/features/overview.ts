@@ -413,7 +413,7 @@ function dashboardPending(ctx: RunContext): string {
               @if (last6Bars().length) {
                 <div class="grid two charts" style="margin-top:14px">
                   <section class="card chart">
-                    <h2>Last 6 month trend</h2>
+                    <h2>6 month trend</h2>
                     <p class="faint sub">{{ canRevenue() ? 'Revenue, total cost and margin' : 'Total cost' }} for the last 6 costed periods, including the current one.</p>
                     <v-line [rows]="last6Bars()" [series]="moneySeries()" [format]="sar" />
                   </section>
