@@ -21,6 +21,11 @@ public sealed class CostingController : VeritaController
     public async Task<Envelope<DashboardDto>> Dashboard([FromQuery] string? encType = null, CancellationToken ct = default)
     { var (p, s) = await Scoped(); return Wrap(s, await Q.DashboardAsync(s, p, ct, encType)); }
 
+    [HttpGet("dashboard/trend")]
+    [Authorize(Policy = "dashboard.view")]
+    public async Task<Envelope<DashboardTrendDto>> DashboardTrend([FromQuery] string? encType = null, CancellationToken ct = default)
+    { var (p, s) = await Scoped(); return Wrap(s, await Q.DashboardTrendAsync(s, p, ct, encType)); }
+
     [HttpGet("profitability")]
     [Authorize(Policy = "profitability.view")]
     public async Task<Envelope<ProfitDto>> Profitability([FromQuery] string dimension = "serviceLine", [FromQuery] string? encType = null, CancellationToken ct = default)

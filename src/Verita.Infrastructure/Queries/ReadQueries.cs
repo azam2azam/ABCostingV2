@@ -139,6 +139,37 @@ public sealed partial class ReadQueries(VeritaDbContext db, IAuditWriter audit)
             [new("DIRECT", "Direct cost", direct, Share(direct, cost), "procedure-costing", null), new("INDIRECT", "Indirect cost", indirect, Share(indirect, cost), "indirect-costing", null), new("OVERHEAD", "Overheads", overhead, Share(overhead, cost), "indirect-costing", null)]);
     }
 
+    /// <summary>One point per costed period for the hospital — Summary month-by-month charts.</summary>
+    public sealed record TrendPoint(string Period, DateOnly StartDate, DateOnly EndDate, int Encounters,
+        decimal Revenue, decimal TotalCost, decimal Margin, decimal MarginPct);
+    public sealed record DashboardTrendDto(TrendPoint[] Months);
+
+    public async Task<DashboardTrendDto> DashboardTrendAsync(ScopedRun s, Principal p, CancellationToken ct, string? encType = null)
+    {
+        var showRevenue = p.Can("revenue.view");
+        var periods = await db.Periods.AsNoTracking().Where(x => x.HospitalId == s.Hospital.Id).OrderBy(x => x.StartDate).ToListAsync(ct);
+        var runs = await db.CalculationRuns.AsNoTracking()
+            .Where(r => r.HospitalId == s.Hospital.Id && r.RunType != "SIMULATION"
+                        && (r.Status == "RECONCILED" || r.Status == "PUBLISHED"))
+            .ToListAsync(ct);
+        var best = runs.GroupBy(r => r.PeriodId)
+            .ToDictionary(g => g.Key, g => g.OrderByDescending(r => r.FinishedAt ?? r.StartedAt ?? DateTime.MinValue).First());
+        var months = new List<TrendPoint>();
+        foreach (var period in periods)
+        {
+            if (!best.TryGetValue(period.Id, out var run)) continue;
+            var (direct, indirect, overhead, revenue, encounters) = string.IsNullOrWhiteSpace(encType)
+                ? await RunTotalsAsync(run, ct)
+                : await RunTotalsForEncTypeAsync(run.Id, encType, ct);
+            var cost = Money.R4(direct + indirect + overhead);
+            revenue = showRevenue ? Money.R4(revenue) : 0m;
+            var margin = showRevenue ? Money.R4(revenue - cost) : 0m;
+            var marginPct = showRevenue && revenue != 0m ? Money.R4(margin / revenue * 100m) : 0m;
+            months.Add(new TrendPoint(period.Code, period.StartDate, period.EndDate, encounters, revenue, cost, margin, marginPct));
+        }
+        return new DashboardTrendDto(months.ToArray());
+    }
+
     private async Task<(decimal Direct, decimal Indirect, decimal Overhead, decimal Revenue, int Encounters)> RunTotalsForEncTypeAsync(
         Guid runId, string encType, CancellationToken ct)
     {

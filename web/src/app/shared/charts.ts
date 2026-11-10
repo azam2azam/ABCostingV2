@@ -421,4 +421,81 @@ export class Columns {
   }
 }
 
-export const CHARTS = [HBars, DivBars, Pie, Columns] as const;
+/** A single-series line across categories — used for margin % and similar trends. */
+export interface LinePoint { key: string; label: string; value: number; note?: string | null; }
+
+@Component({
+  selector: 'v-line',
+  imports: [ChartTip],
+  template: `
+    @if (!points().length) { <p class="faint">Nothing to show.</p> }
+    @else {
+      <div class="c-line">
+        <div class="c-y" aria-hidden="true">
+          @for (t of grid(); track $index) { <span class="c-ytick" [style.bottom.%]="pos(t)">{{ tickFormat()(t) }}</span> }
+        </div>
+        <svg class="c-svg" viewBox="0 0 100 100" preserveAspectRatio="none" role="img" [attr.aria-label]="aria()">
+          @for (t of grid(); track $index) {
+            <line class="c-hline" [attr.y1]="100 - pos(t)" [attr.y2]="100 - pos(t)" x1="0" x2="100"
+                  [class.c-zero]="t === 0" />
+          }
+          <polyline class="c-poly" [attr.points]="poly()" [attr.stroke]="color()" fill="none" vector-effect="non-scaling-stroke" />
+          @for (p of laid(); track p.key; let i = $index) {
+            <circle class="c-dot" [attr.cx]="p.x" [attr.cy]="p.y" r="1.6" [attr.fill]="color()"
+                    tabindex="0" [attr.aria-label]="p.label + ': ' + format()(p.value)"
+                    (pointermove)="show($event, points()[i])" (pointerleave)="tip.set(null)"
+                    (focus)="show($event, points()[i])" (blur)="tip.set(null)" />
+          }
+        </svg>
+        <div></div>
+        <div class="c-x">
+          @for (p of points(); track p.key) {
+            <span class="c-xl" [title]="p.label">{{ p.label }}</span>
+          }
+        </div>
+      </div>
+      <v-chart-tip [tip]="tip()" />
+    }
+  `,
+  styles: `:host { display: block; position: relative; }
+           .c-line { display: grid; grid-template-columns: 44px 1fr; grid-template-rows: 200px auto; column-gap: 8px; }
+           .c-y { position: relative; }
+           .c-ytick { position: absolute; right: 0; transform: translateY(50%); font-size: 11px; color: var(--text-3); font-variant-numeric: tabular-nums; white-space: nowrap; }
+           .c-svg { width: 100%; height: 100%; overflow: visible; }
+           .c-hline { stroke: var(--border); stroke-width: 1; vector-effect: non-scaling-stroke; }
+           .c-hline.c-zero { stroke: var(--border-strong); }
+           .c-poly { stroke-width: 2.5; }
+           .c-dot { stroke: var(--surface-solid); stroke-width: 0.6; outline: none; cursor: default; }
+           .c-dot:focus-visible { stroke: var(--focus); stroke-width: 1.2; }
+           .c-x { display: flex; padding-top: 6px; }
+           .c-xl { flex: 1 1 0; min-width: 0; text-align: center; font-size: 12px; color: var(--text-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding: 0 2px; }`,
+})
+export class Line {
+  private host = inject(ElementRef<HTMLElement>);
+  points = input.required<LinePoint[]>();
+  color = input('var(--chart-3)');
+  seriesName = input('Value');
+  format = input<(v: number) => string>(pct);
+  tickFormat = input<(v: number) => string>((v) => pct(v));
+  tip = signal<Tip | null>(null);
+  private values = computed(() => this.points().map(p => p.value));
+  private up = computed(() => ticks(Math.max(0, ...this.values())));
+  private down = computed(() => Math.min(0, ...this.values()) < 0 ? ticks(-Math.min(0, ...this.values())).map(t => -t).filter(t => t !== 0).reverse() : []);
+  grid = computed(() => [...this.down(), ...this.up()]);
+  private hi = computed(() => this.up()[this.up().length - 1] || 1);
+  private lo = computed(() => this.down()[0] ?? 0);
+  pos(v: number): number { return (v - this.lo()) / (this.hi() - this.lo()) * 100; }
+  laid = computed(() => {
+    const pts = this.points();
+    const n = Math.max(pts.length - 1, 1);
+    return pts.map((p, i) => ({ ...p, x: pts.length === 1 ? 50 : (i / n) * 100, y: 100 - this.pos(p.value) }));
+  });
+  poly = computed(() => this.laid().map(p => `${p.x},${p.y}`).join(' '));
+  aria = computed(() => this.points().map(p => `${p.label} ${this.format()(p.value)}`).join(', '));
+  show(e: Event, p: LinePoint): void {
+    this.tip.set({ ...tipAt(this.host.nativeElement, e), title: p.note ? `${p.label} · ${p.note}` : p.label,
+      rows: [{ name: this.seriesName(), value: this.format()(p.value), color: this.color() }] });
+  }
+}
+
+export const CHARTS = [HBars, DivBars, Pie, Columns, Line] as const;

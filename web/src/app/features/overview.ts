@@ -5,12 +5,21 @@ import { DashboardDto, ProfitDto } from '../core/api';
 import { Auth } from '../core/auth';
 import { RunContext, runInFlight } from '../core/context';
 import { runResource } from '../core/resource';
-import { BarRow, CHARTS, ChartSeries, DivergingRow, PieSlice, count, countTick } from '../shared/charts';
+import { BarRow, CHARTS, ChartSeries, DivergingRow, LinePoint, PieSlice, count, countTick, pct, sar } from '../shared/charts';
 import { Col, UI } from '../shared/ui';
 
 const num = (v: unknown): number => Number(v ?? 0) || 0;
 const REVENUE: ChartSeries = { name: 'Revenue', color: 'var(--chart-revenue)' };
 const COST: ChartSeries = { name: 'Total cost', color: 'var(--chart-cost)' };
+const MARGIN: ChartSeries = { name: 'Margin', color: 'var(--chart-3)' };
+const shortPeriod = (code: string) => code.replace(/^20\d\d\s+/, '');
+
+/** Multi-period Summary trend — OpenAPI types catch up on the next api:types run. */
+interface TrendPoint {
+  period: string; startDate: string; endDate: string; encounters: number;
+  revenue: number; totalCost: number; margin: number; marginPct: number;
+}
+interface DashboardTrendDto { months: TrendPoint[]; }
 
 /** The Patient Encounters filter behind a Dashboard tab, where its name differs. */
 const ENCOUNTER_FILTER: Record<string, string> = { encounterType: 'encType', noBillable: 'noBillableType' };
@@ -219,7 +228,7 @@ export class ProfitTables {
 
 @Component({
   selector: 'v-run-summary',
-  imports: [RouterLink, ProfitTables, ...UI],
+  imports: [RouterLink, ProfitTables, ...CHARTS, ...UI],
   template: `
     <v-page [title]="title()" [purpose]="purpose()">
       @if (!calculated()) {
@@ -237,6 +246,29 @@ export class ProfitTables {
                   [linkParams]="encType() && t.link === 'patient-encounters' ? { encType: encType()! } : null" />
               }
             </div>
+            <v-state [loading]="trend.isLoading()" [error]="trend.error()">
+              @if (monthBars().length) {
+                <div class="grid two charts" style="margin-top:14px">
+                  <section class="card chart">
+                    <h2>Month by month</h2>
+                    <p class="faint sub">{{ canRevenue() ? 'Revenue, total cost and margin' : 'Total cost' }} across every costed period.</p>
+                    <v-columns [rows]="monthBars()" [series]="moneySeries()" [format]="sar" />
+                  </section>
+                  <section class="card chart">
+                    <h2>Last 3 months</h2>
+                    <p class="faint sub">The same series, recent lens only.</p>
+                    <v-columns [rows]="last3Bars()" [series]="moneySeries()" [format]="sar" />
+                  </section>
+                  @if (canRevenue() && marginLine().length) {
+                    <section class="card chart" style="grid-column: 1 / -1">
+                      <h2>Margin % trend</h2>
+                      <p class="faint sub">Operating margin as a share of revenue, period by period.</p>
+                      <v-line [points]="marginLine()" seriesName="Margin %" color="var(--chart-3)" [format]="pct" [tickFormat]="pct" />
+                    </section>
+                  }
+                </div>
+              }
+            </v-state>
             @if (canProfitability()) {
               <div style="margin-top:14px"><v-profit-tables [encType]="encType()" [omitDims]="omitDims()" /></div>
             }
@@ -266,7 +298,25 @@ export class RunSummary {
       : `The calculation has not been run for ${period}.`;
   });
   res = runResource<DashboardDto>(() => this.calculated() ? 'dashboard' : null, () => ({ encType: this.encType() }));
+  trend = runResource<DashboardTrendDto>(() => this.calculated() ? 'dashboard/trend' : null, () => ({ encType: this.encType() }));
   canProfitability = computed(() => this.auth.can('profitability.view'));
+  canRevenue = computed(() => this.auth.can('revenue.view'));
+  sar = sar;
+  pct = pct;
+  private months = computed(() => this.trend.value()?.data.months ?? []);
+  moneySeries = computed(() => this.canRevenue() ? [REVENUE, COST, MARGIN] : [COST]);
+  private toBars = (rows: TrendPoint[]): BarRow[] => rows.map(m => ({
+    key: m.period,
+    label: shortPeriod(m.period),
+    values: this.canRevenue() ? [num(m.revenue), num(m.totalCost), num(m.margin)] : [num(m.totalCost)],
+    note: `${num(m.encounters).toLocaleString('en-US')} enc.`,
+  }));
+  monthBars = computed(() => this.toBars(this.months()));
+  last3Bars = computed(() => this.toBars(this.months().slice(-3)));
+  marginLine = computed<LinePoint[]>(() => this.months().map(m => ({
+    key: m.period, label: shortPeriod(m.period), value: num(m.marginPct),
+    note: `${num(m.encounters).toLocaleString('en-US')} encounters`,
+  })));
 }
 
 @Component({
