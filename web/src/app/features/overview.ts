@@ -395,7 +395,7 @@ function dashboardPending(ctx: RunContext): string {
   selector: 'v-dashboard',
   imports: [RouterLink, SummaryProfitCharts, ...CHARTS, ...UI],
   template: `
-    <v-page title="Summary" purpose="Direct cost, indirect cost, overheads, revenue and margin for one costed run. Every figure opens the screen that explains it.">
+    <v-page title="Summary" purpose="Direct cost, indirect cost, overheads, revenue and margin for one costed run — each figure opens the screen that explains it.">
       @if (!calculated()) {
         <p class="notice warn">
           {{ pending() }}
