@@ -1580,6 +1580,8 @@ interface PatientEncounterPage { rows: PatientEncounterRow[]; total: number; pag
 interface PatientEncounterLine {
   procedure?: string | null; procedureId?: string | null; quantity?: string | number | null; costCentre?: string | null; physician?: string | null;
   payer?: string | null; performedAt?: string | null; gross?: string | number | null; discount?: string | number | null; net?: string | number | null; sourceRef: string; cost?: string | number | null; procedureCode?: string | null; isPackage?: boolean;
+  /** When the line billed a package header, open Packages (same HIS code is excluded from Procedure/Activity). */
+  packageId?: string | null;
   /** Refunded on this invoice line, already taken off its net. */
   refunded?: string | number | null;
 }
@@ -1604,7 +1606,7 @@ function hisCols(spec: string[]): Col<any>[] {
 }
 
 interface PatientEncounterDetailDto { encounter: PatientEncounterRow; lines: PatientEncounterLine[]; }
-interface InvoiceGroup { key: string; procedure: string; procedureCode: string | null; isPackage: boolean; procedureId: string | null; quantity: number; gross: number; discount: number; refunds: number; net: number; cost: number; }
+interface InvoiceGroup { key: string; procedure: string; procedureCode: string | null; isPackage: boolean; procedureId: string | null; packageId: string | null; quantity: number; gross: number; discount: number; refunds: number; net: number; cost: number; }
 
 interface HisInvoiceTypeCount { invoiceType: number | null; name: string; invoices: number; encounters: number; patients: number; refunded: number; revenue: number }
 
@@ -1862,8 +1864,9 @@ export class EncounterDetail {
     { key: 'refunds', label: 'Refund', type: 'money', blankZero: true }, { key: 'net', label: 'Net Invoiced', type: 'money', blankZero: true },
   ] : [];
   groupCols = computed<Col<InvoiceGroup>[]>(() => [
-    { key: 'procedureCode', label: 'Procedure code', value: r => r.procedureCode ? hisProcedureId(r.procedureCode) : '—' },
-    { key: 'procedure', label: 'Procedure', link: r => r.procedureId ? `/procedures/${r.procedureId}` : null },
+    { key: 'procedureCode', label: 'Procedure code', value: r => r.procedureCode ? hisProcedureId(r.procedureCode) : '—',
+      link: r => r.packageId ? `/packages/${r.packageId}` : r.procedureId ? `/procedures/${r.procedureId}` : null },
+    { key: 'procedure', label: 'Procedure', link: r => r.packageId ? `/packages/${r.packageId}` : r.procedureId ? `/procedures/${r.procedureId}` : null },
     { key: 'isPackage', label: 'Package', value: r => r.isPackage ? '✓' : '' },
     { key: 'quantity', label: 'Qty', type: 'num', dp: 0, blankZero: true },
     ...this.moneyCols(),
@@ -1886,9 +1889,10 @@ export class EncounterDetail {
     const map = new Map<string, InvoiceGroup>();
     for (const l of lines) {
       const key = l.procedureId ?? l.procedure ?? l.sourceRef;
-      const g = map.get(key) ?? { key, procedure: l.procedure ?? 'Not linked to a procedure', procedureCode: l.procedureCode ?? null, isPackage: false, procedureId: l.procedureId ?? null, quantity: 0, gross: 0, discount: 0, refunds: 0, net: 0, cost: 0 };
+      const g = map.get(key) ?? { key, procedure: l.procedure ?? 'Not linked to a procedure', procedureCode: l.procedureCode ?? null, isPackage: false, procedureId: l.procedureId ?? null, packageId: l.packageId ?? null, quantity: 0, gross: 0, discount: 0, refunds: 0, net: 0, cost: 0 };
       g.quantity += Number(l.quantity ?? 0);
       g.isPackage ||= !!l.isPackage;
+      if (l.packageId) g.packageId = l.packageId;
       // Refunds are negative rows of their own, shown apart from what was charged.
       if (l.sourceRef.toUpperCase().startsWith('REF-')) g.refunds += Number(l.gross ?? 0);
       else g.gross += Number(l.gross ?? 0);
