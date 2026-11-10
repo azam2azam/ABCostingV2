@@ -247,12 +247,12 @@ export class ProfitTables {
               }
             </div>
             <v-state [loading]="trend.isLoading()" [error]="trend.error()">
-              @if (monthBars().length) {
+              @if (last6Bars().length) {
                 <div class="grid two charts" style="margin-top:14px">
                   <section class="card chart">
-                    <h2>Month by month</h2>
-                    <p class="faint sub">{{ canRevenue() ? 'Revenue, total cost and margin' : 'Total cost' }} across every costed period.</p>
-                    <v-line [rows]="monthBars()" [series]="moneySeries()" [format]="sar" />
+                    <h2>Last 6 month trend</h2>
+                    <p class="faint sub">{{ canRevenue() ? 'Revenue, total cost and margin' : 'Total cost' }} for the last 6 costed periods, including the current one.</p>
+                    <v-line [rows]="last6Bars()" [series]="moneySeries()" [format]="sar" />
                   </section>
                   <section class="card chart">
                     <h2>Last 3 months</h2>
@@ -303,7 +303,7 @@ export class RunSummary {
     values: this.canRevenue() ? [num(m.revenue), num(m.totalCost), num(m.margin)] : [num(m.totalCost)],
     note: `${num(m.encounters).toLocaleString('en-US')} enc.`,
   }));
-  monthBars = computed(() => this.toBars(this.months()));
+  last6Bars = computed(() => this.toBars(this.months().slice(-6)));
   last3Bars = computed(() => this.toBars(this.months().slice(-3)));
 }
 
