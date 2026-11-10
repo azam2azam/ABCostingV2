@@ -18,12 +18,13 @@ public sealed class CostingController : VeritaController
 {
     [HttpGet("dashboard")]
     [Authorize(Policy = "dashboard.view")]
-    public async Task<Envelope<DashboardDto>> Dashboard(CancellationToken ct) { var (p, s) = await Scoped(); return Wrap(s, await Q.DashboardAsync(s, p, ct)); }
+    public async Task<Envelope<DashboardDto>> Dashboard([FromQuery] string? encType = null, CancellationToken ct = default)
+    { var (p, s) = await Scoped(); return Wrap(s, await Q.DashboardAsync(s, p, ct, encType)); }
 
     [HttpGet("profitability")]
     [Authorize(Policy = "profitability.view")]
-    public async Task<Envelope<ProfitDto>> Profitability([FromQuery] string dimension = "serviceLine", CancellationToken ct = default)
-    { var (p, s) = await Scoped(); return Wrap(s, await Q.ProfitabilityAsync(s, p, dimension, ct)); }
+    public async Task<Envelope<ProfitDto>> Profitability([FromQuery] string dimension = "serviceLine", [FromQuery] string? encType = null, CancellationToken ct = default)
+    { var (p, s) = await Scoped(); return Wrap(s, await Q.ProfitabilityAsync(s, p, dimension, ct, encType)); }
 
     [HttpGet("variance")]
     [Authorize(Policy = "variance.view")]

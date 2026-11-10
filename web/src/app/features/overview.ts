@@ -86,13 +86,17 @@ export class ProfitTables {
   lockedDim = input<string | null>(null);
   /** Departments catalogue shows the table only. */
   hideCharts = input(false);
+  /** IP/OP dashboards restrict profitability to one encounter type. */
+  encType = input<string | null>(null);
   canRevenue = computed(() => this.auth.can('revenue.view'));
   dims = computed(() => {
+    const scoped = !!this.encType();
     const all = [
-      { key: 'encounterType', label: 'Encounter type' }, { key: 'department', label: 'Department' },
+      ...(scoped ? [] : [{ key: 'encounterType', label: 'Encounter type' }]),
+      { key: 'department', label: 'Department' },
       { key: 'resource', label: 'Resources' }, { key: 'physician', label: 'Physician' }, { key: 'insurer', label: 'Insurer' },
       { key: 'segment', label: 'Patient segment' },
-      { key: 'noBillable', label: 'Non-billable' },
+      ...(scoped ? [] : [{ key: 'noBillable', label: 'Non-billable' }]),
     ];
     const lock = this.lockedDim();
     return lock ? all.filter(d => d.key === lock) : all;
@@ -103,6 +107,7 @@ export class ProfitTables {
     effect(() => {
       const lock = this.lockedDim();
       if (lock) this.dim.set(lock);
+      else if (this.encType()) this.dim.set('department');
     });
     // ?tab=noBillable opens a tab directly, e.g. from the assistant's links.
     inject(ActivatedRoute).queryParamMap.pipe(takeUntilDestroyed()).subscribe(m => {
@@ -112,9 +117,9 @@ export class ProfitTables {
     });
   }
 
-  res = runResource<ProfitDto>(() => 'profitability', () => ({ dimension: this.dim() }));
+  res = runResource<ProfitDto>(() => 'profitability', () => ({ dimension: this.dim(), encType: this.encType() }));
   /** Lines invoiced at a price, by the same procedure types, for the comparison on the Non-billable tab. */
-  billable = runResource<ProfitDto>(() => this.dim() === 'noBillable' ? 'profitability' : null, () => ({ dimension: 'billable' }));
+  billable = runResource<ProfitDto>(() => this.dim() === 'noBillable' ? 'profitability' : null, () => ({ dimension: 'billable', encType: this.encType() }));
   count = count;
   countTick = countTick;
   compareSeries: ChartSeries[] = [{ name: 'Billable', color: 'var(--chart-billable)' }, { name: 'Non-billable', color: 'var(--chart-nonbillable)' }];
@@ -177,8 +182,12 @@ export class ProfitTables {
       { key: 'label', label: this.dim() === 'noBillable' ? 'Procedure type' : this.dims().find(d => d.key === this.dim())?.label ?? 'Item', link: r => r.link ? '/' + r.link : null },
       {
         key: 'volume', label: 'Encounters', type: 'num', dp: 0, link: () => '/patient-encounters', totalLink: '/patient-encounters',
-        linkParams: r => ({ [ENCOUNTER_FILTER[this.dim()] ?? this.dim()]: r.key || 'none' }),
-        totalLinkParams: () => this.dim() === 'noBillable' ? { noBillableType: 'ALL' } : null,
+        linkParams: r => ({
+          ...(this.encType() ? { encType: this.encType()! } : {}),
+          [ENCOUNTER_FILTER[this.dim()] ?? this.dim()]: r.key || 'none',
+        }),
+        totalLinkParams: () => this.dim() === 'noBillable' ? { noBillableType: 'ALL' }
+          : this.encType() ? { encType: this.encType()! } : null,
       },
       { key: 'direct', label: 'Direct', type: 'money', dp: 0 },
       { key: 'indirect', label: 'Indirect', type: 'money', dp: 0 },
@@ -203,10 +212,10 @@ export class ProfitTables {
 }
 
 @Component({
-  selector: 'v-dashboard',
+  selector: 'v-run-summary',
   imports: [RouterLink, ProfitTables, ...UI],
   template: `
-    <v-page title="Summary" purpose="Direct cost, indirect cost, overheads, revenue and margin for one costed run. Every figure opens the screen that explains it.">
+    <v-page [title]="title()" [purpose]="purpose()">
       @if (!calculated()) {
         <p class="notice warn">
           {{ pending() }}
@@ -217,17 +226,22 @@ export class ProfitTables {
           @if (res.value(); as r) {
             <div class="grid tiles">
               @for (t of r.data.headline; track t.key) {
-                <v-tile [label]="t.label" [value]="t.value" [unit]="t.unit" [direction]="t.direction" [note]="t.note" [link]="t.link ? '/' + t.link : null" />
+                <v-tile [label]="t.label" [value]="t.value" [unit]="t.unit" [direction]="t.direction" [note]="t.note"
+                  [link]="t.link ? '/' + t.link : null"
+                  [linkParams]="encType() && t.link === 'patient-encounters' ? { encType: encType()! } : null" />
               }
             </div>
-            @if (canProfitability()) { <div style="margin-top:14px"><v-profit-tables /></div> }
+            @if (canProfitability()) { <div style="margin-top:14px"><v-profit-tables [encType]="encType()" /></div> }
           }
         </v-state>
       }
     </v-page>
   `,
 })
-export class Dashboard {
+export class RunSummary {
+  title = input('Summary');
+  purpose = input('Direct cost, indirect cost, overheads, revenue and margin for one costed run. Every figure opens the screen that explains it.');
+  encType = input<string | null>(null);
   private auth = inject(Auth);
   private ctx = inject(RunContext);
   calculated = computed(() => ['RECONCILED', 'PUBLISHED'].includes(this.ctx.run()?.status ?? ''));
@@ -242,9 +256,30 @@ export class Dashboard {
       ? `The calculation for ${period} failed, so there are no figures to show.`
       : `The calculation has not been run for ${period}.`;
   });
-  res = runResource<DashboardDto>(() => this.calculated() ? 'dashboard' : null);
+  res = runResource<DashboardDto>(() => this.calculated() ? 'dashboard' : null, () => ({ encType: this.encType() }));
   canProfitability = computed(() => this.auth.can('profitability.view'));
 }
+
+@Component({
+  selector: 'v-dashboard',
+  imports: [RunSummary],
+  template: `<v-run-summary />`,
+})
+export class Dashboard {}
+
+@Component({
+  selector: 'v-ip-dashboard',
+  imports: [RunSummary],
+  template: `<v-run-summary title="IP Dashboard" purpose="Inpatient (IP) cost, revenue and margin for one costed run — the same Summary layout, limited to IP encounters." encType="IP" />`,
+})
+export class IpDashboard {}
+
+@Component({
+  selector: 'v-op-dashboard',
+  imports: [RunSummary],
+  template: `<v-run-summary title="OP Dashboard" purpose="Outpatient (OP) cost, revenue and margin for one costed run — the same Summary layout, limited to OP encounters." encType="OP" />`,
+})
+export class OpDashboard {}
 
 /** Catalogue screen: the Dashboard department tab as its own module. */
 @Component({

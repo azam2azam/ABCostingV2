@@ -112,20 +112,23 @@ public sealed partial class ReadQueries(VeritaDbContext db, IAuditWriter audit)
     public sealed record Bar(string Key, string Label, decimal Value, decimal Share, string? Link, string? Note);
     public sealed record DashboardDto(Tile[] Headline, Bar[] CostNature);
 
-    public async Task<DashboardDto> DashboardAsync(ScopedRun s, Principal p, CancellationToken ct)
+    public async Task<DashboardDto> DashboardAsync(ScopedRun s, Principal p, CancellationToken ct, string? encType = null)
     {
-        var (direct, indirect, overhead, revenue, encounters) = await RunTotalsAsync(s.Run, ct);
+        var (direct, indirect, overhead, revenue, encounters) = string.IsNullOrWhiteSpace(encType)
+            ? await RunTotalsAsync(s.Run, ct)
+            : await RunTotalsForEncTypeAsync(s.Run.Id, encType, ct);
         var cost = Money.R4(direct + indirect + overhead);
+        var scope = string.IsNullOrWhiteSpace(encType) ? "encounters" : $"{encType} encounters";
         var tiles = new List<Tile>
         {
-            new("encounters", "Encounters", encounters, "count", "neutral", "patient-encounters", "Total no. of encounters"),
+            new("encounters", "Encounters", encounters, "count", "neutral", "patient-encounters", $"Total no. of {scope}"),
             new("direct", "Direct cost", direct, "SAR", "lower-better", "procedure-costing", "Contracted price × Margin Cost %"),
             new("indirect", "Indirect cost", indirect, "SAR", "lower-better", "indirect-costing", "Contracted price × Overhead %"),
             new("overheads", "Overheads", overhead, "SAR", "lower-better", "indirect-costing", "Encounter level overheads"),
         };
         if (p.Can("revenue.view"))
         {
-            tiles.Add(new("revenue", "Revenue", revenue, "SAR", "higher-better", null, $"{encounters:N0} encounters"));
+            tiles.Add(new("revenue", "Revenue", revenue, "SAR", "higher-better", null, $"{encounters:N0} {scope}"));
         }
         tiles.Add(new("total", "Total cost", cost, "SAR", "lower-better", null, "Direct + Indirect + Overheads"));
         if (p.Can("revenue.view"))
@@ -134,6 +137,14 @@ public sealed partial class ReadQueries(VeritaDbContext db, IAuditWriter audit)
         }
         return new DashboardDto(tiles.ToArray(),
             [new("DIRECT", "Direct cost", direct, Share(direct, cost), "procedure-costing", null), new("INDIRECT", "Indirect cost", indirect, Share(indirect, cost), "indirect-costing", null), new("OVERHEAD", "Overheads", overhead, Share(overhead, cost), "indirect-costing", null)]);
+    }
+
+    private async Task<(decimal Direct, decimal Indirect, decimal Overhead, decimal Revenue, int Encounters)> RunTotalsForEncTypeAsync(
+        Guid runId, string encType, CancellationToken ct)
+    {
+        var facts = (await EncounterFacts(runId, ct)).Where(f => f.EncType == encType).ToList();
+        return (Money.R4(facts.Sum(f => f.Direct)), Money.R4(facts.Sum(f => f.Indirect)), Money.R4(facts.Sum(f => f.Overhead)),
+            Money.R4(facts.Sum(f => f.Revenue)), facts.Count);
     }
 
     /// <summary>A run's whole totals: what a costing-model run stored, or the sum of an engine run's encounters.</summary>

@@ -25,6 +25,8 @@ export const routes: Routes = [
     children: [
       { path: '', pathMatch: 'full', redirectTo: 'dashboard' },
       r('dashboard', overview, 'Dashboard'),
+      r('ip-dashboard', overview, 'IpDashboard'),
+      r('op-dashboard', overview, 'OpDashboard'),
       r('assistant', assistant, 'AssistantPage'),
       { path: 'profitability', redirectTo: 'dashboard' },
       r('cost-centres', model, 'CostCentres'), r('cost-centres/:id', model, 'CostCentreDetail'),

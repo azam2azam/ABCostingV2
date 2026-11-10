@@ -97,7 +97,9 @@ export class Page {
     <div class="tile">
       <div class="label">{{ label() }}</div>
       <div class="value num" [class]="'value num ' + cls()">
-        @if (link()) { <a [routerLink]="link()" queryParamsHandling="preserve">{{ text() }}</a> } @else { {{ text() }} }
+        @if (link()) {
+          <a [routerLink]="link()" [queryParams]="linkParams()" [queryParamsHandling]="linkParams() ? 'merge' : 'preserve'">{{ text() }}</a>
+        } @else { {{ text() }} }
       </div>
       @if (note()) { <div class="note">{{ note() }}</div> }
     </div>
@@ -118,6 +120,7 @@ export class Tile {
   direction = input<string>('neutral');
   note = input<string | null>(null);
   link = input<string | null>(null);
+  linkParams = input<Record<string, string> | null>(null);
   /** Shows nothing when the value is zero. */
   blankZero = input(false, { transform: booleanAttribute });
   text = computed(() => {

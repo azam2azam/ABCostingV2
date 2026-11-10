@@ -83,6 +83,8 @@ public static class Security
     [
         new("Dashboard", [
             new("dashboard", "Summary", "dashboard.view", "Direct cost, indirect cost, overheads, revenue and margin of one run, by hospital, service line, department, physician, payer, DRG, encounter type and segment."),
+            new("ip-dashboard", "IP Dashboard", "dashboard.view", "The Summary view limited to inpatient (IP) encounters for the selected hospital and period."),
+            new("op-dashboard", "OP Dashboard", "dashboard.view", "The Summary view limited to outpatient (OP) encounters for the selected hospital and period."),
         ]),
         new("Catalogue", [
             new("departments", "Departments", "costing.view", "Cost, revenue and margin by department for the selected hospital and period — the same view as the Summary department tab."),
