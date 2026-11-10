@@ -186,8 +186,11 @@ export class ProfitTables {
           ...(this.encType() ? { encType: this.encType()! } : {}),
           [ENCOUNTER_FILTER[this.dim()] ?? this.dim()]: r.key || 'none',
         }),
-        totalLinkParams: () => this.dim() === 'noBillable' ? { noBillableType: 'ALL' }
-          : this.encType() ? { encType: this.encType()! } : null,
+        totalLinkParams: () => {
+          if (this.dim() === 'noBillable') return { noBillableType: 'ALL' };
+          const enc = this.encType();
+          return enc ? { encType: enc } : null;
+        },
       },
       { key: 'direct', label: 'Direct', type: 'money', dp: 0 },
       { key: 'indirect', label: 'Indirect', type: 'money', dp: 0 },
