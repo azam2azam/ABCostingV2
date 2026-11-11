@@ -42,6 +42,10 @@ services:
       Jwt__Key: local-development-signing-key-change-me-0123456789abcdef
       Cors__Origins__0: http://localhost:4230
       Cors__Origins__1: http://127.0.0.1:4230
+      # Claude intent router (off unless enabled). Set these in an untracked .env file next to this one.
+      IntentRouter__Enabled: ${IntentRouter__Enabled:-false}
+      IntentRouter__ApiKey: ${IntentRouter__ApiKey:-}
+      IntentRouter__Model: ${IntentRouter__Model:-claude-haiku-5-5}
 
   web:
     build:

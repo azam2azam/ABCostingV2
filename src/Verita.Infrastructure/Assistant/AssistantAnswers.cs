@@ -54,7 +54,71 @@ public sealed class AssistantAnswers(ReadQueries q, DataHubService hub)
             default: a.Text = "I can't answer that yet."; break;
         }
         if (it.View == "explain") Explain(a, it, s);
+        if (it.View == "chart") Chartify(a);
         return a;
+    }
+
+    // ── Charts ───────────────────────────────────────────────────────────────────────
+
+    private static readonly string[] NotChartable = ["#", "Code", "Qty", "Std qty", "Actual qty", "Std rate", "Actual rate", "Unit cost", "Price", "Cost per case", "Share", "Used %", "Issues"];
+
+    /// <summary>
+    /// "Show chart": puts a chart block (type "chart": Columns = label header then series names, Rows = label then raw numbers,
+    /// Note = money, pct or count) in front of each table that has something to plot. The tables stay; nothing new is queried.
+    /// </summary>
+    private static void Chartify(Answer a)
+    {
+        var blocks = new List<ReplyBlock>();
+        var charts = 0;
+        foreach (var b in a.Blocks)
+        {
+            if (b.Type == "table" && charts < 2 && ChartFrom(b) is { } chart) { blocks.Add(chart); charts++; }
+            blocks.Add(b);
+        }
+        if (charts == 0)
+        {
+            a.Text = "That answer has no figures to chart. Ask for a breakdown first, for example 'margin by department', then ask for a chart.";
+            a.Blocks.Clear();
+            return;
+        }
+        a.Blocks.Clear();
+        a.Blocks.AddRange(blocks);
+        a.Text = $"Here {(charts == 1 ? "is the chart" : "are the charts")} for that answer. " + a.Text;
+    }
+
+    private static decimal? Num(string? cell)
+    {
+        if (string.IsNullOrWhiteSpace(cell)) return null;
+        var t = cell.Replace("SAR", "").Replace(",", "").Replace("%", "").Replace("−", "-").Replace("+", "").Trim();
+        return decimal.TryParse(t, System.Globalization.NumberStyles.Number, System.Globalization.CultureInfo.InvariantCulture, out var v) ? v : null;
+    }
+
+    private static ReplyBlock? ChartFrom(ReplyBlock t)
+    {
+        if (t.Rows.Length < 2 || t.Columns.Length < 2) return null;
+        // The bars are labelled by the first column that names the row, not by its rank or its code.
+        var label = Array.FindIndex(t.Columns, c => c is not ("#" or "Code"));
+        if (label < 0) return null;
+        var rows = t.Rows.Take(12).ToArray();
+        bool Numeric(int c) => c != label && c < t.Columns.Length && !NotChartable.Contains(t.Columns[c]) && rows.All(r => c < r.Length && Num(r[c]) is not null);
+        var numeric = Enumerable.Range(0, t.Columns.Length).Where(Numeric).ToList();
+        if (numeric.Count == 0) return null;
+        int Col(string name) => Array.IndexOf(t.Columns, name);
+        List<int> pick;
+        var rankedBy = System.Text.RegularExpressions.Regex.Match(t.Note ?? "", @"Ranked by ([A-Za-z %]+)\.");
+        var rankedCol = rankedBy.Success ? Array.FindIndex(t.Columns, c => string.Equals(c, rankedBy.Groups[1].Value, StringComparison.OrdinalIgnoreCase)) : -1;
+        if (rankedCol > 0 && numeric.Contains(rankedCol)) pick = [rankedCol];
+        else if (Col("Revenue") > 0 && Col("Total cost") > 0 && numeric.Contains(Col("Revenue")) && numeric.Contains(Col("Total cost"))) pick = [Col("Revenue"), Col("Total cost")];
+        else if (Col("Billable") > 0 && Col("Non-billable") > 0 && numeric.Contains(Col("Billable")) && numeric.Contains(Col("Non-billable"))) pick = [Col("Billable"), Col("Non-billable")];
+        else
+        {
+            var first = new[] { "Total cost", "Cost", "Margin", "Unused cost", "Variance", "Amount" }.Select(Col).FirstOrDefault(c => c > 0 && numeric.Contains(c));
+            pick = [first > 0 ? first : numeric[0]];
+        }
+        var head = t.Columns[pick[0]];
+        var format = head.Contains('%') ? "pct" : head is "Encounters" or "Cases" or "Volume" or "Billable" or "Non-billable" or "Issues" ? "count" : "money";
+        return new("chart", t.Title, [t.Columns[label], .. pick.Select(c => t.Columns[c])],
+            rows.Select(r => new[] { r[label] }.Concat(pick.Select(c => Num(r[c])!.Value.ToString(System.Globalization.CultureInfo.InvariantCulture))).ToArray()).ToArray(), format);
     }
 
     private static int Limit(Interpretation it) => Math.Clamp(int.TryParse(it["limit"]?.Key, out var n) ? n : DefaultLimit, 1, MaxLimit);
@@ -92,13 +156,15 @@ public sealed class AssistantAnswers(ReadQueries q, DataHubService hub)
         else text += " Revenue and margin need revenue.view, which your role does not hold.";
         a.Text = text;
         a.Blocks.Add(new("figures", null, ["Measure", "Value"], d.Headline.Select(x => new[] { x.Label, x.Unit == "count" ? Number(x.Value) : $"{x.Unit} {Money(x.Value)}" }).ToArray()));
-        if (it.View == "detail")
+        if (it.View is "detail" or "chart")
         {
             a.Blocks.Add(new("table", "Cost by nature", ["Nature", Cur(s), "Share"], d.CostNature.Select(b => new[] { b.Label, Money(b.Value), Pct(b.Share) }).ToArray()));
             if (p.Can("profitability.view"))
             {
-                var pr = await q.ProfitabilityAsync(s, p, "serviceLine", ct, enc);
-                a.Blocks.Add(new("table", "By service line (highest cost first)", ["Service line", "Encounters", "Total cost", "Margin %"],
+                // The same breakdown the dashboard opens with: encounter type on Summary, department on IP/OP, patient segment on ER.
+                var (dimKey, dimLabel) = enc is null ? ("encounterType", "Encounter type") : enc == "ER" ? ("segment", "Patient segment") : ("department", "Department");
+                var pr = await q.ProfitabilityAsync(s, p, dimKey, ct, enc);
+                a.Blocks.Add(new("table", $"By {dimLabel.ToLowerInvariant()} (highest cost first)", [dimLabel, "Encounters", "Total cost", "Margin %"],
                     pr.Rows.OrderByDescending(r => r.Total).Take(8).Select(r => new[] { r.Label, Number(r.Encounters), Money(r.Total), Pct(r.MarginPct) }).ToArray()));
             }
             a.Text += " The breakdown by cost nature is below.";
@@ -170,21 +236,60 @@ public sealed class AssistantAnswers(ReadQueries q, DataHubService hub)
     private async Task ProcedureTop(Answer a, Principal p, Interpretation it, ScopedRun s, CancellationToken ct)
     {
         var rows = await q.ProcedureListAsync(s, p, ct);
-        var byVolume = it["metric"]?.Key == "volume";
+        // "by encounters" counts the encounters a procedure was done in, "by volume" the services performed, "by revenue" and
+        // "by total cost" the run's totals, anything else the unit cost.
+        var measure = it["measure"]?.Key;
+        var rank = it["metric"]?.Key == "volume" ? "volume" : measure switch { "encounters" => "encounters", "total" => "total", "revenue" => "revenue", _ => "unit" };
+        if (rank == "revenue" && !p.Can("revenue.view"))
+        {
+            a.Notes.Add("Revenue needs revenue.view, which your role does not hold; ranked by unit cost instead.");
+            rank = "unit";
+        }
+        var enc = rank == "encounters" ? await q.ProcedureEncounterCountsAsync(s, ct) : [];
+        decimal Encounters(ReadQueries.ProcedureRow r) => enc.GetValueOrDefault(r.Id);
+        Func<ReadQueries.ProcedureRow, decimal> key = rank switch
+        {
+            "volume" => r => r.Volume, "encounters" => Encounters, "total" => r => r.TotalCost, "revenue" => r => r.Revenue, _ => r => r.UnitCost,
+        };
         var n = Limit(it);
         var bottom = Bottom(it);
-        var pool = rows.Where(r => r.Volume > 0 && (byVolume || r.UnitCost > 0));
-        var picked = (byVolume
-            ? bottom ? pool.OrderBy(r => r.Volume) : pool.OrderByDescending(r => r.Volume)
-            : bottom ? pool.OrderBy(r => r.UnitCost) : pool.OrderByDescending(r => r.UnitCost)).Take(n).ToList();
+        var pool = rows.Where(r => r.Volume > 0 && key(r) > 0);
+        var picked = (bottom ? pool.OrderBy(key) : pool.OrderByDescending(key)).Take(n).ToList();
         if (picked.Count == 0) { a.Text = $"No procedures were costed in {Where(s)}."; return; }
-        var what = byVolume ? (bottom ? "least performed" : "most performed") : (bottom ? "cheapest" : "most expensive");
+        var what = rank switch
+        {
+            "volume" => bottom ? "least performed" : "most performed",
+            "encounters" => bottom ? "fewest encounters" : "most encounters",
+            "total" => bottom ? "lowest total cost" : "highest total cost",
+            "revenue" => bottom ? "lowest revenue" : "highest revenue",
+            _ => bottom ? "cheapest" : "most expensive",
+        };
         var f = picked[0];
-        a.Text = $"The {picked.Count} {what} procedures in {Where(s)}. First is {f.Name} ({f.Code}) at " +
-                 (byVolume ? $"{Number(f.Volume)} performed" : $"{Cur(s)} {Money(f.UnitCost)} per unit") + ".";
-        a.Blocks.Add(new("table", null, ["#", "Procedure", "Code", "Volume", "Unit cost", "Total cost"],
-            picked.Select((r, i) => new[] { (i + 1).ToString(), r.Name, r.Code, Number(r.Volume), Money(r.UnitCost), Money(r.TotalCost) }).ToArray(),
-            $"{Number(rows.Length)} procedures in this run. Ranked by {(byVolume ? "volume" : "unit cost")}."));
+        a.Text = rank == "encounters" || rank == "revenue"
+            ? $"The {picked.Count} procedures with the {what} in {Where(s)}. " +
+              $"First is {f.Name} ({f.Code}) with " + (rank == "encounters" ? $"{Number(Encounters(f))} encounters" : $"{Cur(s)} {Money(f.Revenue)} revenue") + "."
+            : $"The {picked.Count} {what} procedures in {Where(s)}. First is {f.Name} ({f.Code}) at " + rank switch
+            {
+                "volume" => $"{Number(f.Volume)} performed",
+                "total" => $"{Cur(s)} {Money(f.TotalCost)} in total",
+                _ => $"{Cur(s)} {Money(f.UnitCost)} per unit",
+            } + ".";
+        var cols = new List<string> { "#", "Code", "Procedure" };
+        if (rank == "encounters") cols.Add("Encounters");
+        cols.Add("Volume");
+        cols.Add("Unit cost");
+        cols.Add("Total cost");
+        if (rank == "revenue") cols.Add("Revenue");
+        a.Blocks.Add(new("table", null, cols.ToArray(),
+            picked.Select((r, i) =>
+            {
+                var row = new List<string> { (i + 1).ToString(), r.Code, r.Name };
+                if (rank == "encounters") row.Add(Number(Encounters(r)));
+                row.AddRange([Number(r.Volume), Money(r.UnitCost), Money(r.TotalCost)]);
+                if (rank == "revenue") row.Add(Money(r.Revenue));
+                return row.ToArray();
+            }).ToArray(),
+            $"{Number(rows.Length)} procedures in this run. Ranked by {rank switch { "volume" => "volume", "encounters" => "encounters", "total" => "total cost", "revenue" => "revenue", _ => "unit cost" }}."));
         a.Links.Add(Screen("Open Procedure/Activity", "procedures", s));
     }
 
@@ -214,8 +319,8 @@ public sealed class AssistantAnswers(ReadQueries q, DataHubService hub)
         a.Blocks.Add(new("figures", null, ["Measure", "Value"], rows.ToArray()));
         if (it.View is "detail" or "explain")
         {
-            a.Blocks.Add(new("table", "Components", ["Procedure", "Code", "Qty", "Price", "Cost"],
-                d.Components.OrderByDescending(c => c.Cost).Take(12).Select(c => new[] { c.Procedure, c.Code, Number(c.Quantity), Money(c.Price), Money(c.Cost) }).ToArray(),
+            a.Blocks.Add(new("table", "Components", ["Code", "Procedure", "Qty", "Price", "Cost"],
+                d.Components.OrderByDescending(c => c.Cost).Take(12).Select(c => new[] { c.Code, c.Procedure, Number(c.Quantity), Money(c.Price), Money(c.Cost) }).ToArray(),
                 d.Components.Length > 12 ? $"Top 12 of {d.Components.Length} components by cost." : null));
             if (!string.IsNullOrWhiteSpace(d.Explanation)) a.Text += " " + d.Explanation;
         }

@@ -251,6 +251,247 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/assistant/threads": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: {
+            parameters: {
+                query?: {
+                    archived?: boolean;
+                };
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["AssistantAssistantThreadDto"][];
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/assistant/threads/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["AssistantAssistantThreadDetail"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+            };
+        };
+        options?: never;
+        head?: never;
+        patch: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: {
+                content: {
+                    "application/json": components["schemas"]["AssistantThreadPatch"];
+                    "text/json": components["schemas"]["AssistantThreadPatch"];
+                    "application/*+json": components["schemas"]["AssistantThreadPatch"];
+                };
+            };
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["AssistantAssistantThreadDto"];
+                    };
+                };
+            };
+        };
+        trace?: never;
+    };
+    "/api/v1/assistant/ask": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: {
+                content: {
+                    "application/json": components["schemas"]["AssistantAskBody"];
+                    "text/json": components["schemas"]["AssistantAskBody"];
+                    "application/*+json": components["schemas"]["AssistantAskBody"];
+                };
+            };
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["AssistantAskResult"];
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/assistant/messages/{id}/feedback": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: {
+                content: {
+                    "application/json": components["schemas"]["AssistantFeedbackBody"];
+                    "text/json": components["schemas"]["AssistantFeedbackBody"];
+                    "application/*+json": components["schemas"]["AssistantFeedbackBody"];
+                };
+            };
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["AssistantAssistantMessageDto"];
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/assistant/messages/{id}/refresh": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["AssistantAskResult"];
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/auth/login": {
         parameters: {
             query?: never;
@@ -369,7 +610,9 @@ export interface paths {
         };
         get: {
             parameters: {
-                query?: never;
+                query?: {
+                    encType?: string;
+                };
                 header?: never;
                 path?: never;
                 cookie?: never;
@@ -395,6 +638,43 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/dashboard/trend": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: {
+            parameters: {
+                query?: {
+                    encType?: string;
+                };
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Envelope`1[[ReadQueriesDashboardTrendDto, Verita.Infrastructure, Version=1.0.0.0, Culture=neutral, PublicKeyToken=null]]"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/profitability": {
         parameters: {
             query?: never;
@@ -406,6 +686,7 @@ export interface paths {
             parameters: {
                 query?: {
                     dimension?: string;
+                    encType?: string;
                 };
                 header?: never;
                 path?: never;
@@ -527,6 +808,41 @@ export interface paths {
                     };
                     content: {
                         "application/json": components["schemas"]["Envelope`1[[ReadQueriesCapacityDto, Verita.Infrastructure, Version=1.0.0.0, Culture=neutral, PublicKeyToken=null]]"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/departments": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Envelope`1[[ReadQueriesDepartmentRow[], Verita.Infrastructure, Version=1.0.0.0, Culture=neutral, PublicKeyToken=null]]"];
                     };
                 };
             };
@@ -971,6 +1287,87 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/procedures/{id}/recipe": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: {
+                content: {
+                    "application/json": components["schemas"]["CostingControllerRecipeLineBody"];
+                    "text/json": components["schemas"]["CostingControllerRecipeLineBody"];
+                    "application/*+json": components["schemas"]["CostingControllerRecipeLineBody"];
+                };
+            };
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Envelope`1[[ReadQueriesRecipeLineDto[], Verita.Infrastructure, Version=1.0.0.0, Culture=neutral, PublicKeyToken=null]]"];
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/procedures/{id}/recipe/{resourceId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                    resourceId: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Envelope`1[[ReadQueriesRecipeLineDto[], Verita.Infrastructure, Version=1.0.0.0, Culture=neutral, PublicKeyToken=null]]"];
+                    };
+                };
+            };
+        };
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/packages": {
         parameters: {
             query?: never;
@@ -1124,7 +1521,9 @@ export interface paths {
         };
         get: {
             parameters: {
-                query?: never;
+                query?: {
+                    hospital?: string;
+                };
                 header?: never;
                 path?: never;
                 cookie?: never;
@@ -1138,6 +1537,190 @@ export interface paths {
                     };
                     content: {
                         "application/json": components["schemas"]["ReadQueriesCostingModelsDto"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: {
+                content: {
+                    "application/json": components["schemas"]["ReadQueriesNewVersionBody"];
+                    "text/json": components["schemas"]["ReadQueriesNewVersionBody"];
+                    "application/*+json": components["schemas"]["ReadQueriesNewVersionBody"];
+                };
+            };
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ReadQueriesCostingModelsDto"];
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/costing-models/versions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ReadQueriesConfigVersions"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/costing-models/compare/encounter-overheads": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: {
+            parameters: {
+                query?: {
+                    from?: string;
+                    to?: string;
+                };
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Envelope`1[[ReadQueriesCompareOverheadRow[], Verita.Infrastructure, Version=1.0.0.0, Culture=neutral, PublicKeyToken=null]]"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/costing-models/compare/{stream}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: {
+            parameters: {
+                query?: {
+                    from?: string;
+                    to?: string;
+                    search?: string;
+                };
+                header?: never;
+                path: {
+                    stream: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Envelope`1[[ReadQueriesCompareTypeRow[], Verita.Infrastructure, Version=1.0.0.0, Culture=neutral, PublicKeyToken=null]]"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/costing-models/compare/{stream}/{typeCode}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: {
+            parameters: {
+                query?: {
+                    from?: string;
+                    to?: string;
+                    skip?: number;
+                    take?: number;
+                    search?: string;
+                    changedOnly?: boolean;
+                };
+                header?: never;
+                path: {
+                    stream: string;
+                    typeCode: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Envelope`1[[ReadQueriesCompareItemsPage, Verita.Infrastructure, Version=1.0.0.0, Culture=neutral, PublicKeyToken=null]]"];
                     };
                 };
             };
@@ -1185,6 +1768,542 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/procedure-costing": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: {
+            parameters: {
+                query?: {
+                    search?: string;
+                };
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Envelope`1[[ReadQueriesProcedureTypeRow[], Verita.Infrastructure, Version=1.0.0.0, Culture=neutral, PublicKeyToken=null]]"];
+                    };
+                };
+            };
+        };
+        put: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: {
+                content: {
+                    "application/json": components["schemas"]["CostingControllerProcedureTypeMarginBody"];
+                    "text/json": components["schemas"]["CostingControllerProcedureTypeMarginBody"];
+                    "application/*+json": components["schemas"]["CostingControllerProcedureTypeMarginBody"];
+                };
+            };
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Envelope`1[[ReadQueriesProcedureTypeRow[], Verita.Infrastructure, Version=1.0.0.0, Culture=neutral, PublicKeyToken=null]]"];
+                    };
+                };
+            };
+        };
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/procedure-costing/{typeCode}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: {
+            parameters: {
+                query?: {
+                    skip?: number;
+                    take?: number;
+                    search?: string;
+                };
+                header?: never;
+                path: {
+                    typeCode: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Envelope`1[[ReadQueriesProcedureTypeItemsPage, Verita.Infrastructure, Version=1.0.0.0, Culture=neutral, PublicKeyToken=null]]"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/zero-price-costing": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: {
+            parameters: {
+                query?: {
+                    search?: string;
+                };
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Envelope`1[[ReadQueriesProcedureTypeRow[], Verita.Infrastructure, Version=1.0.0.0, Culture=neutral, PublicKeyToken=null]]"];
+                    };
+                };
+            };
+        };
+        put: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: {
+                content: {
+                    "application/json": components["schemas"]["CostingControllerProcedureTypeMarginBody"];
+                    "text/json": components["schemas"]["CostingControllerProcedureTypeMarginBody"];
+                    "application/*+json": components["schemas"]["CostingControllerProcedureTypeMarginBody"];
+                };
+            };
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Envelope`1[[ReadQueriesProcedureTypeRow[], Verita.Infrastructure, Version=1.0.0.0, Culture=neutral, PublicKeyToken=null]]"];
+                    };
+                };
+            };
+        };
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/zero-price-costing/{typeCode}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: {
+            parameters: {
+                query?: {
+                    skip?: number;
+                    take?: number;
+                    search?: string;
+                };
+                header?: never;
+                path: {
+                    typeCode: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Envelope`1[[ReadQueriesProcedureTypeItemsPage, Verita.Infrastructure, Version=1.0.0.0, Culture=neutral, PublicKeyToken=null]]"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/package-costing": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: {
+            parameters: {
+                query?: {
+                    search?: string;
+                };
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Envelope`1[[ReadQueriesProcedureTypeRow[], Verita.Infrastructure, Version=1.0.0.0, Culture=neutral, PublicKeyToken=null]]"];
+                    };
+                };
+            };
+        };
+        put: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: {
+                content: {
+                    "application/json": components["schemas"]["CostingControllerProcedureTypeMarginBody"];
+                    "text/json": components["schemas"]["CostingControllerProcedureTypeMarginBody"];
+                    "application/*+json": components["schemas"]["CostingControllerProcedureTypeMarginBody"];
+                };
+            };
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Envelope`1[[ReadQueriesProcedureTypeRow[], Verita.Infrastructure, Version=1.0.0.0, Culture=neutral, PublicKeyToken=null]]"];
+                    };
+                };
+            };
+        };
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/package-costing/{typeCode}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: {
+            parameters: {
+                query?: {
+                    skip?: number;
+                    take?: number;
+                    search?: string;
+                };
+                header?: never;
+                path: {
+                    typeCode: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Envelope`1[[ReadQueriesProcedureTypeItemsPage, Verita.Infrastructure, Version=1.0.0.0, Culture=neutral, PublicKeyToken=null]]"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/indirect-costing": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: {
+            parameters: {
+                query?: {
+                    search?: string;
+                };
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Envelope`1[[ReadQueriesProcedureTypeRow[], Verita.Infrastructure, Version=1.0.0.0, Culture=neutral, PublicKeyToken=null]]"];
+                    };
+                };
+            };
+        };
+        put: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: {
+                content: {
+                    "application/json": components["schemas"]["CostingControllerProcedureTypeMarginBody"];
+                    "text/json": components["schemas"]["CostingControllerProcedureTypeMarginBody"];
+                    "application/*+json": components["schemas"]["CostingControllerProcedureTypeMarginBody"];
+                };
+            };
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Envelope`1[[ReadQueriesProcedureTypeRow[], Verita.Infrastructure, Version=1.0.0.0, Culture=neutral, PublicKeyToken=null]]"];
+                    };
+                };
+            };
+        };
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/indirect-costing/encounter-overheads": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Envelope`1[[ReadQueriesEncounterOverheadPage, Verita.Infrastructure, Version=1.0.0.0, Culture=neutral, PublicKeyToken=null]]"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: {
+                content: {
+                    "application/json": components["schemas"]["ReadQueriesEncounterOverheadBody"];
+                    "text/json": components["schemas"]["ReadQueriesEncounterOverheadBody"];
+                    "application/*+json": components["schemas"]["ReadQueriesEncounterOverheadBody"];
+                };
+            };
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Envelope`1[[ReadQueriesEncounterOverheadPage, Verita.Infrastructure, Version=1.0.0.0, Culture=neutral, PublicKeyToken=null]]"];
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/indirect-costing/encounter-overheads/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: {
+                content: {
+                    "application/json": components["schemas"]["ReadQueriesEncounterOverheadBody"];
+                    "text/json": components["schemas"]["ReadQueriesEncounterOverheadBody"];
+                    "application/*+json": components["schemas"]["ReadQueriesEncounterOverheadBody"];
+                };
+            };
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Envelope`1[[ReadQueriesEncounterOverheadPage, Verita.Infrastructure, Version=1.0.0.0, Culture=neutral, PublicKeyToken=null]]"];
+                    };
+                };
+            };
+        };
+        post?: never;
+        delete: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Envelope`1[[ReadQueriesEncounterOverheadPage, Verita.Infrastructure, Version=1.0.0.0, Culture=neutral, PublicKeyToken=null]]"];
+                    };
+                };
+            };
+        };
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/indirect-costing/{typeCode}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: {
+            parameters: {
+                query?: {
+                    skip?: number;
+                    take?: number;
+                    search?: string;
+                };
+                header?: never;
+                path: {
+                    typeCode: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Envelope`1[[ReadQueriesProcedureTypeItemsPage, Verita.Infrastructure, Version=1.0.0.0, Culture=neutral, PublicKeyToken=null]]"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/reconciliation": {
         parameters: {
             query?: never;
@@ -1208,6 +2327,202 @@ export interface paths {
                     };
                     content: {
                         "application/json": components["schemas"]["Envelope`1[[ReadQueriesReconDto, Verita.Infrastructure, Version=1.0.0.0, Culture=neutral, PublicKeyToken=null]]"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/his-invoicing": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Envelope`1[[ReadQueriesHisInvoicingDto, Verita.Infrastructure, Version=1.0.0.0, Culture=neutral, PublicKeyToken=null]]"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/patient-encounters": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: {
+            parameters: {
+                query?: {
+                    page?: number;
+                    pageSize?: number;
+                    sort?: string;
+                    desc?: boolean;
+                    search?: string;
+                    encType?: string;
+                    billedPackageId?: string;
+                    serviceLine?: string;
+                    department?: string;
+                    resource?: string;
+                    physician?: string;
+                    payer?: string;
+                    insurer?: string;
+                    noBillableType?: string;
+                    drg?: string;
+                    segment?: string;
+                };
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Envelope`1[[ReadQueriesPatientEncounterPage, Verita.Infrastructure, Version=1.0.0.0, Culture=neutral, PublicKeyToken=null]]"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/patient-encounters/filters": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Envelope`1[[ReadQueriesPatientEncounterFilters, Verita.Infrastructure, Version=1.0.0.0, Culture=neutral, PublicKeyToken=null]]"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/patient-encounters/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Envelope`1[[ReadQueriesPatientEncounterDetail, Verita.Infrastructure, Version=1.0.0.0, Culture=neutral, PublicKeyToken=null]]"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/patient-encounters/{id}/his-source": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Envelope`1[[ReadQueriesHisEncounterSource, Verita.Infrastructure, Version=1.0.0.0, Culture=neutral, PublicKeyToken=null]]"];
                     };
                 };
             };
@@ -1327,6 +2642,44 @@ export interface paths {
                     };
                     content: {
                         "application/json": components["schemas"]["Envelope`1[[ReadQueriesQualityDto, Verita.Infrastructure, Version=1.0.0.0, Culture=neutral, PublicKeyToken=null]]"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/data/recipe-suggestions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: {
+            parameters: {
+                query?: {
+                    hospital?: string;
+                    entity?: string;
+                };
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Verita.Infrastructure.CostingSeed.RecipeSuggestionList"];
                     };
                 };
             };
@@ -1555,6 +2908,49 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/data/import/preview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: {
+                content: {
+                    "multipart/form-data": {
+                        entity?: string;
+                        /** Format: binary */
+                        file?: string;
+                    };
+                };
+            };
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Verita.Infrastructure.DataHub.ImportPreview"];
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/data/import": {
         parameters: {
             query?: never;
@@ -1579,6 +2975,7 @@ export interface paths {
                         file?: string;
                         /** @default false */
                         dryRun?: boolean;
+                        hospital?: string;
                     };
                 };
             };
@@ -1944,6 +3341,63 @@ export interface paths {
         };
         put?: never;
         post?: never;
+        delete: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    run: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+            };
+        };
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/runs/applied-version": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: {
+            parameters: {
+                query?: {
+                    hospital?: string;
+                    period?: string;
+                };
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["RunsControllerAppliedVersion"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -1986,6 +3440,80 @@ export interface paths {
             };
         };
         delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/periods": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: {
+                content: {
+                    "application/json": components["schemas"]["RunsControllerNewPeriod"];
+                    "text/json": components["schemas"]["RunsControllerNewPeriod"];
+                    "application/*+json": components["schemas"]["RunsControllerNewPeriod"];
+                };
+            };
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/periods/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+            };
+        };
         options?: never;
         head?: never;
         patch?: never;
@@ -2084,6 +3612,132 @@ export interface components {
             description: string;
             levers: components["schemas"]["AnalysisControllerLeverBody"][];
         };
+        AssistantAskBody: {
+            /** Format: uuid */
+            threadId: string | null;
+            text: string;
+            hospital: string | null;
+            period: string | null;
+            intent: string | null;
+            pick: {
+                [key: string]: string;
+            } | null;
+            remove: string[] | null;
+        };
+        AssistantAskResult: {
+            thread: components["schemas"]["AssistantAssistantThreadDto"];
+            question: components["schemas"]["AssistantAssistantMessageDto"];
+            answer: components["schemas"]["AssistantAssistantMessageDto"];
+        };
+        AssistantAssistantMessageDto: {
+            /** Format: uuid */
+            id: string;
+            role: string;
+            text: string;
+            /** Format: date-time */
+            createdAt: string;
+            turnType: string | null;
+            reply: components["schemas"]["AssistantAssistantReply"];
+            /** Format: int32 */
+            feedback: number | null;
+            hidden: boolean;
+            stale: boolean;
+        };
+        AssistantAssistantReply: {
+            text: string;
+            band: string;
+            turnType: string | null;
+            intent: string | null;
+            intentLabel: string | null;
+            /** Format: double */
+            confidence: number;
+            score: components["schemas"]["AssistantScoreParts"];
+            assumptions: components["schemas"]["AssistantAssumptionDto"][];
+            blocks: components["schemas"]["AssistantReplyBlock"][];
+            links: components["schemas"]["AssistantReplyLink"][];
+            suggestions: components["schemas"]["AssistantOption"][];
+            options: components["schemas"]["AssistantOption"][];
+            notes: string[];
+            run: string | null;
+            runStatus: string | null;
+            hospital: string | null;
+            period: string | null;
+            navigate: components["schemas"]["AssistantReplyLink"];
+            source: string | null;
+        };
+        AssistantAssistantThreadDetail: {
+            thread: components["schemas"]["AssistantAssistantThreadDto"];
+            messages: components["schemas"]["AssistantAssistantMessageDto"][];
+        };
+        AssistantAssistantThreadDto: {
+            /** Format: uuid */
+            id: string;
+            title: string;
+            isPinned: boolean;
+            isArchived: boolean;
+            /** Format: date-time */
+            createdAt: string;
+            /** Format: date-time */
+            updatedAt: string;
+            /** Format: int32 */
+            messages: number;
+            lastText: string | null;
+        };
+        AssistantAssumptionDto: {
+            kind: string;
+            label: string;
+            value: string;
+            source: string;
+            changed: boolean;
+            removable: boolean;
+            note: string | null;
+        };
+        AssistantFeedbackBody: {
+            /** Format: int32 */
+            value: number;
+            reason: string | null;
+        };
+        AssistantOption: {
+            label: string;
+            text: string;
+            intent: string | null;
+            pick: {
+                [key: string]: string;
+            } | null;
+        };
+        AssistantReplyBlock: {
+            type: string;
+            title: string | null;
+            columns: string[];
+            rows: string[][];
+            note: string | null;
+        };
+        AssistantReplyLink: {
+            label: string;
+            path: string;
+            query: {
+                [key: string]: string;
+            };
+        };
+        AssistantScoreParts: {
+            /** Format: double */
+            intent: number;
+            /** Format: double */
+            entities: number;
+            /** Format: double */
+            coverage: number;
+            /** Format: double */
+            penalty: number;
+            /** Format: double */
+            confidence: number;
+            runnerUp: string | null;
+            reasons: string[];
+        };
+        AssistantThreadPatch: {
+            title: string | null;
+            pinned: boolean | null;
+            archived: boolean | null;
+        };
         AuthControllerLoginRequest: {
             email: string;
             password: string;
@@ -2106,6 +3760,19 @@ export interface components {
             deptScope: string[];
             permissions: string[];
         };
+        CostingControllerProcedureTypeMarginBody: {
+            items: components["schemas"]["ReadQueriesProcedureTypeMarginItem"][];
+            procedures: components["schemas"]["ReadQueriesProcedureMarginItem"][] | null;
+        };
+        CostingControllerRecipeLineBody: {
+            /** Format: uuid */
+            resourceId: string;
+            /** Format: decimal */
+            quantity: string;
+            uom: string | null;
+            /** Format: decimal */
+            rate: string | null;
+        };
         "Envelope`1[[ReadQueriesActivityDetail, Verita.Infrastructure, Version=1.0.0.0, Culture=neutral, PublicKeyToken=null]]": {
             meta: components["schemas"]["Meta"];
             data: components["schemas"]["ReadQueriesActivityDetail"];
@@ -2118,6 +3785,18 @@ export interface components {
             meta: components["schemas"]["Meta"];
             data: components["schemas"]["ReadQueriesCapacityDto"];
         };
+        "Envelope`1[[ReadQueriesCompareItemsPage, Verita.Infrastructure, Version=1.0.0.0, Culture=neutral, PublicKeyToken=null]]": {
+            meta: components["schemas"]["Meta"];
+            data: components["schemas"]["ReadQueriesCompareItemsPage"];
+        };
+        "Envelope`1[[ReadQueriesCompareOverheadRow[], Verita.Infrastructure, Version=1.0.0.0, Culture=neutral, PublicKeyToken=null]]": {
+            meta: components["schemas"]["Meta"];
+            data: components["schemas"]["ReadQueriesCompareOverheadRow"][];
+        };
+        "Envelope`1[[ReadQueriesCompareTypeRow[], Verita.Infrastructure, Version=1.0.0.0, Culture=neutral, PublicKeyToken=null]]": {
+            meta: components["schemas"]["Meta"];
+            data: components["schemas"]["ReadQueriesCompareTypeRow"][];
+        };
         "Envelope`1[[ReadQueriesCostCentreDetail, Verita.Infrastructure, Version=1.0.0.0, Culture=neutral, PublicKeyToken=null]]": {
             meta: components["schemas"]["Meta"];
             data: components["schemas"]["ReadQueriesCostCentreDetail"];
@@ -2129,6 +3808,14 @@ export interface components {
         "Envelope`1[[ReadQueriesDashboardDto, Verita.Infrastructure, Version=1.0.0.0, Culture=neutral, PublicKeyToken=null]]": {
             meta: components["schemas"]["Meta"];
             data: components["schemas"]["ReadQueriesDashboardDto"];
+        };
+        "Envelope`1[[ReadQueriesDashboardTrendDto, Verita.Infrastructure, Version=1.0.0.0, Culture=neutral, PublicKeyToken=null]]": {
+            meta: components["schemas"]["Meta"];
+            data: components["schemas"]["ReadQueriesDashboardTrendDto"];
+        };
+        "Envelope`1[[ReadQueriesDepartmentRow[], Verita.Infrastructure, Version=1.0.0.0, Culture=neutral, PublicKeyToken=null]]": {
+            meta: components["schemas"]["Meta"];
+            data: components["schemas"]["ReadQueriesDepartmentRow"][];
         };
         "Envelope`1[[ReadQueriesDrgDetail, Verita.Infrastructure, Version=1.0.0.0, Culture=neutral, PublicKeyToken=null]]": {
             meta: components["schemas"]["Meta"];
@@ -2150,9 +3837,21 @@ export interface components {
             meta: components["schemas"]["Meta"];
             data: components["schemas"]["ReadQueriesEncounterDetail"];
         };
+        "Envelope`1[[ReadQueriesEncounterOverheadPage, Verita.Infrastructure, Version=1.0.0.0, Culture=neutral, PublicKeyToken=null]]": {
+            meta: components["schemas"]["Meta"];
+            data: components["schemas"]["ReadQueriesEncounterOverheadPage"];
+        };
         "Envelope`1[[ReadQueriesEncounterPage, Verita.Infrastructure, Version=1.0.0.0, Culture=neutral, PublicKeyToken=null]]": {
             meta: components["schemas"]["Meta"];
             data: components["schemas"]["ReadQueriesEncounterPage"];
+        };
+        "Envelope`1[[ReadQueriesHisEncounterSource, Verita.Infrastructure, Version=1.0.0.0, Culture=neutral, PublicKeyToken=null]]": {
+            meta: components["schemas"]["Meta"];
+            data: components["schemas"]["ReadQueriesHisEncounterSource"];
+        };
+        "Envelope`1[[ReadQueriesHisInvoicingDto, Verita.Infrastructure, Version=1.0.0.0, Culture=neutral, PublicKeyToken=null]]": {
+            meta: components["schemas"]["Meta"];
+            data: components["schemas"]["ReadQueriesHisInvoicingDto"];
         };
         "Envelope`1[[ReadQueriesPackageDetail, Verita.Infrastructure, Version=1.0.0.0, Culture=neutral, PublicKeyToken=null]]": {
             meta: components["schemas"]["Meta"];
@@ -2161,6 +3860,18 @@ export interface components {
         "Envelope`1[[ReadQueriesPackageRow[], Verita.Infrastructure, Version=1.0.0.0, Culture=neutral, PublicKeyToken=null]]": {
             meta: components["schemas"]["Meta"];
             data: components["schemas"]["ReadQueriesPackageRow"][];
+        };
+        "Envelope`1[[ReadQueriesPatientEncounterDetail, Verita.Infrastructure, Version=1.0.0.0, Culture=neutral, PublicKeyToken=null]]": {
+            meta: components["schemas"]["Meta"];
+            data: components["schemas"]["ReadQueriesPatientEncounterDetail"];
+        };
+        "Envelope`1[[ReadQueriesPatientEncounterFilters, Verita.Infrastructure, Version=1.0.0.0, Culture=neutral, PublicKeyToken=null]]": {
+            meta: components["schemas"]["Meta"];
+            data: components["schemas"]["ReadQueriesPatientEncounterFilters"];
+        };
+        "Envelope`1[[ReadQueriesPatientEncounterPage, Verita.Infrastructure, Version=1.0.0.0, Culture=neutral, PublicKeyToken=null]]": {
+            meta: components["schemas"]["Meta"];
+            data: components["schemas"]["ReadQueriesPatientEncounterPage"];
         };
         "Envelope`1[[ReadQueriesPoolDetail, Verita.Infrastructure, Version=1.0.0.0, Culture=neutral, PublicKeyToken=null]]": {
             meta: components["schemas"]["Meta"];
@@ -2178,6 +3889,14 @@ export interface components {
             meta: components["schemas"]["Meta"];
             data: components["schemas"]["ReadQueriesProcedureRow"][];
         };
+        "Envelope`1[[ReadQueriesProcedureTypeItemsPage, Verita.Infrastructure, Version=1.0.0.0, Culture=neutral, PublicKeyToken=null]]": {
+            meta: components["schemas"]["Meta"];
+            data: components["schemas"]["ReadQueriesProcedureTypeItemsPage"];
+        };
+        "Envelope`1[[ReadQueriesProcedureTypeRow[], Verita.Infrastructure, Version=1.0.0.0, Culture=neutral, PublicKeyToken=null]]": {
+            meta: components["schemas"]["Meta"];
+            data: components["schemas"]["ReadQueriesProcedureTypeRow"][];
+        };
         "Envelope`1[[ReadQueriesProfitDto, Verita.Infrastructure, Version=1.0.0.0, Culture=neutral, PublicKeyToken=null]]": {
             meta: components["schemas"]["Meta"];
             data: components["schemas"]["ReadQueriesProfitDto"];
@@ -2185,6 +3904,10 @@ export interface components {
         "Envelope`1[[ReadQueriesQualityDto, Verita.Infrastructure, Version=1.0.0.0, Culture=neutral, PublicKeyToken=null]]": {
             meta: components["schemas"]["Meta"];
             data: components["schemas"]["ReadQueriesQualityDto"];
+        };
+        "Envelope`1[[ReadQueriesRecipeLineDto[], Verita.Infrastructure, Version=1.0.0.0, Culture=neutral, PublicKeyToken=null]]": {
+            meta: components["schemas"]["Meta"];
+            data: components["schemas"]["ReadQueriesRecipeLineDto"][];
         };
         "Envelope`1[[ReadQueriesReconDto, Verita.Infrastructure, Version=1.0.0.0, Culture=neutral, PublicKeyToken=null]]": {
             meta: components["schemas"]["Meta"];
@@ -2439,6 +4162,48 @@ export interface components {
             issues: number;
             result: string;
         };
+        ReadQueriesCompareItem: {
+            /** Format: uuid */
+            id: string;
+            code: string;
+            name: string;
+            /** Format: decimal */
+            listPrice: string;
+            /** Format: decimal */
+            fromPct: string | null;
+            /** Format: decimal */
+            toPct: string | null;
+        };
+        ReadQueriesCompareItemsPage: {
+            items: components["schemas"]["ReadQueriesCompareItem"][];
+            /** Format: int32 */
+            total: number;
+        };
+        ReadQueriesCompareOverheadRow: {
+            costCenterCode: string;
+            costCenterName: string;
+            description: string;
+            /** Format: decimal */
+            fromPct: string | null;
+            /** Format: decimal */
+            toPct: string | null;
+            /** Format: decimal */
+            fromAmount: string | null;
+            /** Format: decimal */
+            toAmount: string | null;
+        };
+        ReadQueriesCompareTypeRow: {
+            code: string;
+            name: string;
+            /** Format: int32 */
+            procedures: number;
+            /** Format: decimal */
+            fromPct: string | null;
+            /** Format: decimal */
+            toPct: string | null;
+            /** Format: int32 */
+            changed: number;
+        };
         ReadQueriesComponentDto: {
             /** Format: uuid */
             id: string;
@@ -2473,6 +4238,22 @@ export interface components {
             /** Format: decimal */
             shareOfGap: string;
         };
+        ReadQueriesConfigVersions: {
+            current: string;
+            options: components["schemas"]["ReadQueriesVersionOption"][];
+        };
+        ReadQueriesContainingPackage: {
+            /** Format: uuid */
+            id: string;
+            code: string;
+            name: string;
+            /** Format: decimal */
+            quantity: string;
+            /** Format: decimal */
+            price: string;
+            /** Format: int32 */
+            cases: number;
+        };
         ReadQueriesContextDto: {
             hospitals: components["schemas"]["ReadQueriesHospitalDto"][];
             periods: components["schemas"]["ReadQueriesPeriodDto"][];
@@ -2498,6 +4279,12 @@ export interface components {
             costCentre: components["schemas"]["ReadQueriesCostCentreRow"];
             packages: components["schemas"]["ReadQueriesCostCentreBilledRow"][];
             procedures: components["schemas"]["ReadQueriesCostCentreBilledRow"][];
+        };
+        ReadQueriesCostCentrePick: {
+            /** Format: uuid */
+            id: string;
+            code: string;
+            name: string;
         };
         ReadQueriesCostCentreRow: {
             /** Format: uuid */
@@ -2550,6 +4337,26 @@ export interface components {
         ReadQueriesDashboardDto: {
             headline: components["schemas"]["ReadQueriesTile"][];
             costNature: components["schemas"]["ReadQueriesBar"][];
+        };
+        ReadQueriesDashboardTrendDto: {
+            months: components["schemas"]["ReadQueriesTrendPoint"][];
+        };
+        ReadQueriesDepartmentRow: {
+            /** Format: uuid */
+            id: string;
+            code: string;
+            name: string;
+            deptType: string;
+            specialty: string | null;
+            serviceLine: string | null;
+            /** Format: int32 */
+            costCentres: number;
+            /** Format: int32 */
+            cases: number;
+            /** Format: decimal */
+            revenue: string;
+            /** Format: decimal */
+            cost: string;
         };
         ReadQueriesDiffLine: {
             procedure: string;
@@ -2658,6 +4465,32 @@ export interface components {
             weightedActivityUnits: string;
             provenance: components["schemas"]["ReadQueriesProvenance"];
         };
+        ReadQueriesEncounterOverheadBody: {
+            /** Format: uuid */
+            costCenterId: string;
+            description: string | null;
+            /** Format: decimal */
+            overheadPct: string | null;
+            /** Format: decimal */
+            overheadAmount: string | null;
+        };
+        ReadQueriesEncounterOverheadPage: {
+            items: components["schemas"]["ReadQueriesEncounterOverheadRow"][];
+            costCentres: components["schemas"]["ReadQueriesCostCentrePick"][];
+        };
+        ReadQueriesEncounterOverheadRow: {
+            /** Format: uuid */
+            id: string;
+            /** Format: uuid */
+            costCenterId: string;
+            costCenterCode: string;
+            costCenterName: string;
+            description: string;
+            /** Format: decimal */
+            overheadPct: string | null;
+            /** Format: decimal */
+            overheadAmount: string | null;
+        };
         ReadQueriesEncounterPage: {
             rows: components["schemas"]["ReadQueriesEncounterRow"][];
             /** Format: int32 */
@@ -2708,10 +4541,147 @@ export interface components {
             /** Format: decimal */
             costPerDay: string;
         };
+        ReadQueriesFilterOption: {
+            value: string;
+            label: string;
+        };
         ReadQueriesGovernanceDto: {
             requests: components["schemas"]["ReadQueriesApprovalDto"][];
             controlFailures: components["schemas"]["ReadQueriesApprovalDto"][];
             flows: unknown;
+        };
+        ReadQueriesHisEncounterSource: {
+            fields: components["schemas"]["ReadQueriesHisField"][];
+            services: components["schemas"]["ReadQueriesHisServiceLine"][];
+            refunds: components["schemas"]["ReadQueriesHisRefundLine"][];
+            packageItems: components["schemas"]["ReadQueriesHisPackageLine"][];
+        };
+        ReadQueriesHisField: {
+            label: string;
+            hisColumn: string;
+            value: string | null;
+        };
+        ReadQueriesHisInvoiceTypeCount: {
+            /** Format: int32 */
+            invoiceType: number | null;
+            name: string;
+            /** Format: int32 */
+            invoices: number;
+            /** Format: int32 */
+            encounters: number;
+            /** Format: int32 */
+            patients: number;
+            /** Format: decimal */
+            refunded: string;
+            /** Format: decimal */
+            revenue: string;
+        };
+        ReadQueriesHisInvoicingDto: {
+            /** Format: int64 */
+            minInvoiceNo: number | null;
+            /** Format: int64 */
+            maxInvoiceNo: number | null;
+            types: components["schemas"]["ReadQueriesHisInvoiceTypeCount"][];
+            total: components["schemas"]["ReadQueriesHisInvoiceTypeCount"];
+        };
+        ReadQueriesHisPackageLine: {
+            /** Format: int32 */
+            transactionType: number;
+            invoiceNo: string;
+            /** Format: int32 */
+            lineItemNo: number;
+            procedureId: string | null;
+            procedurePackageId: string | null;
+            /** Format: int32 */
+            packageLineItemNo: number | null;
+            /** Format: int32 */
+            packageSequence: number | null;
+            /** Format: date-time */
+            invoiceDate: string;
+            /** Format: decimal */
+            price: string;
+            /** Format: decimal */
+            discountedCharge: string;
+            /** Format: decimal */
+            patientShare: string;
+            /** Format: decimal */
+            patientPaid: string;
+            /** Format: decimal */
+            companyShare: string;
+            /** Format: decimal */
+            companyPaid: string;
+            childInvoiceNo: string | null;
+            /** Format: int32 */
+            childInvoiceLineItemNo: number | null;
+            isCompleted: boolean | null;
+            isRefunded: boolean | null;
+            sourceRef: string;
+        };
+        ReadQueriesHisRefundLine: {
+            refundNo: string;
+            /** Format: int32 */
+            invoiceLineItemNo: number;
+            /** Format: int32 */
+            refundType: number;
+            /** Format: date-time */
+            refundDate: string;
+            /** Format: int32 */
+            originalTransactionType: number;
+            originalTransactionRef: string;
+            /** Format: date-time */
+            originalTransactionDate: string | null;
+            /** Format: date-time */
+            invoiceCancelledOn: string | null;
+            procedureId: string | null;
+            /** Format: decimal */
+            refundAmount: string;
+            /** Format: decimal */
+            patientShare: string;
+            /** Format: decimal */
+            companyShare: string;
+            /** Format: decimal */
+            patientPaid: string;
+            /** Format: decimal */
+            taxAmount: string;
+            /** Format: decimal */
+            headerRefundAmount: string;
+            /** Format: decimal */
+            headerAmountPaid: string;
+            /** Format: int32 */
+            status: number;
+            /** Format: int32 */
+            approvalStatus: number | null;
+            /** Format: date-time */
+            approvedDate: string | null;
+            /** Format: date-time */
+            cancelledOn: string | null;
+            /** Format: int32 */
+            reasonId: number | null;
+            sourceRef: string;
+        };
+        ReadQueriesHisServiceLine: {
+            /** Format: int32 */
+            transactionType: number | null;
+            invoiceNo: string | null;
+            /** Format: int32 */
+            lineItemNo: number | null;
+            procedureId: string | null;
+            costCenterId: string | null;
+            primaryDoctorId: string | null;
+            /** Format: decimal */
+            quantity: string;
+            /** Format: date-time */
+            performDate: string;
+            /** Format: decimal */
+            price: string | null;
+            /** Format: decimal */
+            discountAmount: string | null;
+            /** Format: decimal */
+            patientShare: string | null;
+            /** Format: decimal */
+            companyShare: string | null;
+            sourceRef: string;
+            isChildInvoice: boolean;
         };
         ReadQueriesHospitalDto: {
             /** Format: uuid */
@@ -2722,9 +4692,9 @@ export interface components {
             currency: string;
             /** Format: int32 */
             bedCount: number;
-            hisSetupId?: string | null;
+            hisSetupId: string | null;
             /** Format: int32 */
-            hisProjectId?: number | null;
+            hisProjectId: number | null;
             hasDrgs: boolean;
             usesCostingModel: boolean;
         };
@@ -2771,6 +4741,18 @@ export interface components {
             /** Format: date */
             effectiveTo: string | null;
         };
+        ReadQueriesNewVersionBody: {
+            /** Format: uuid */
+            fromVersionId: string | null;
+            code: string;
+            name: string;
+            description: string | null;
+            /** Format: date */
+            effectiveFrom: string;
+            /** Format: date */
+            effectiveTo: string | null;
+            hospital: string | null;
+        };
         ReadQueriesPackageComponentDto: {
             /** Format: uuid */
             procedureId: string;
@@ -2786,7 +4768,6 @@ export interface components {
             procType: string;
             /** Format: decimal */
             price: string;
-            /** True when the procedure category is MEDICINE (HIS IsMedicine). */
             isMedicine: boolean;
             /** Format: decimal */
             cost: string;
@@ -2839,6 +4820,87 @@ export interface components {
             /** Format: decimal */
             totalCost: string;
         };
+        ReadQueriesPatientEncounterDetail: {
+            encounter: components["schemas"]["ReadQueriesPatientEncounterRow"];
+            lines: components["schemas"]["ReadQueriesPatientEncounterLine"][];
+        };
+        ReadQueriesPatientEncounterFilters: {
+            serviceLines: components["schemas"]["ReadQueriesFilterOption"][];
+            departments: components["schemas"]["ReadQueriesFilterOption"][];
+            resources: components["schemas"]["ReadQueriesFilterOption"][];
+            physicians: components["schemas"]["ReadQueriesFilterOption"][];
+            payers: components["schemas"]["ReadQueriesFilterOption"][];
+            insurers: components["schemas"]["ReadQueriesFilterOption"][];
+            drgs: components["schemas"]["ReadQueriesFilterOption"][];
+            encounterTypes: components["schemas"]["ReadQueriesFilterOption"][];
+            segments: components["schemas"]["ReadQueriesFilterOption"][];
+        };
+        ReadQueriesPatientEncounterLine: {
+            procedure: string | null;
+            /** Format: uuid */
+            procedureId: string | null;
+            /** Format: decimal */
+            quantity: string | null;
+            costCentre: string | null;
+            physician: string | null;
+            payer: string | null;
+            /** Format: date-time */
+            performedAt: string | null;
+            /** Format: decimal */
+            gross: string | null;
+            /** Format: decimal */
+            discount: string | null;
+            /** Format: decimal */
+            net: string | null;
+            sourceRef: string;
+            /** Format: decimal */
+            cost: string | null;
+            procedureCode: string | null;
+            isPackage: boolean;
+            /** Format: decimal */
+            refunded: string | null;
+            /** Format: uuid */
+            packageId: string | null;
+        };
+        ReadQueriesPatientEncounterPage: {
+            rows: components["schemas"]["ReadQueriesPatientEncounterRow"][];
+            /** Format: int32 */
+            total: number;
+            /** Format: int32 */
+            page: number;
+            /** Format: int32 */
+            pageSize: number;
+            phiMasked: boolean;
+        };
+        ReadQueriesPatientEncounterRow: {
+            /** Format: uuid */
+            id: string;
+            encounterNo: string;
+            mrn: string;
+            patient: string;
+            segment: string;
+            encType: string;
+            department: string;
+            payer: string;
+            insurer: string | null;
+            physician: string | null;
+            /** Format: date-time */
+            admitAt: string;
+            /** Format: date-time */
+            dischargeAt: string | null;
+            /** Format: int32 */
+            lengthOfStay: number;
+            /** Format: int32 */
+            services: number;
+            /** Format: decimal */
+            gross: string;
+            /** Format: decimal */
+            discount: string;
+            /** Format: decimal */
+            net: string;
+            /** Format: decimal */
+            cost: string | null;
+        };
         ReadQueriesPeriodDto: {
             /** Format: uuid */
             id: string;
@@ -2850,7 +4912,7 @@ export interface components {
             /** Format: int32 */
             days: number;
             status: string;
-            hospital?: string | null;
+            hospital: string | null;
         };
         ReadQueriesPoolDetail: {
             pool: components["schemas"]["ReadQueriesPoolRow"];
@@ -2884,17 +4946,19 @@ export interface components {
             /** Format: int32 */
             resources: number;
         };
-        ReadQueriesContainingPackage: {
+        ReadQueriesProcedureCostingItem: {
             /** Format: uuid */
             id: string;
             code: string;
             name: string;
             /** Format: decimal */
-            quantity: string;
+            marginPct: string | null;
             /** Format: decimal */
-            price: string;
-            /** Format: int32 */
-            cases: number;
+            listPrice: string;
+            /** Format: uuid */
+            packageId: string | null;
+            /** Format: decimal */
+            compositionCost: string | null;
         };
         ReadQueriesProcedureDetail: {
             procedure: components["schemas"]["ReadQueriesProcedureRow"];
@@ -2909,6 +4973,12 @@ export interface components {
             provenance: components["schemas"]["ReadQueriesProvenance"];
             packages: components["schemas"]["ReadQueriesContainingPackage"][];
             recipe: components["schemas"]["ReadQueriesRecipeLineDto"][];
+        };
+        ReadQueriesProcedureMarginItem: {
+            /** Format: uuid */
+            id: string;
+            /** Format: decimal */
+            marginPct: string | null;
         };
         ReadQueriesProcedureRecipe: {
             /** Format: uuid */
@@ -2946,6 +5016,25 @@ export interface components {
             /** Format: decimal */
             totalCost: string;
             state: string;
+        };
+        ReadQueriesProcedureTypeItemsPage: {
+            items: components["schemas"]["ReadQueriesProcedureCostingItem"][];
+            /** Format: int32 */
+            total: number;
+        };
+        ReadQueriesProcedureTypeMarginItem: {
+            code: string;
+            /** Format: decimal */
+            marginPct: string | null;
+        };
+        ReadQueriesProcedureTypeRow: {
+            code: string;
+            name: string;
+            /** Format: int32 */
+            procedures: number;
+            /** Format: decimal */
+            marginPct: string | null;
+            items: components["schemas"]["ReadQueriesProcedureCostingItem"][];
         };
         ReadQueriesProcedureUse: {
             /** Format: uuid */
@@ -2987,6 +5076,8 @@ export interface components {
             /** Format: decimal */
             marginPct: string;
             link: string | null;
+            /** Format: int32 */
+            services: number | null;
         };
         ReadQueriesProvenance: {
             run: string;
@@ -3000,6 +5091,17 @@ export interface components {
             publishedAt: string | null;
             /** Format: date-time */
             calculatedAt: string | null;
+        };
+        ReadQueriesProviderShare: {
+            /** Format: uuid */
+            id: string;
+            code: string;
+            name: string;
+            department: string;
+            specialty: string;
+            grade: string;
+            /** Format: int32 */
+            billedLines: number;
         };
         ReadQueriesQualityDto: {
             register: components["schemas"]["ReadQueriesCheckDto"][];
@@ -3085,17 +5187,6 @@ export interface components {
             explanation: string;
             detail: unknown;
         };
-        ReadQueriesProviderShare: {
-            /** Format: uuid */
-            id: string;
-            code: string;
-            name: string;
-            department: string;
-            specialty: string;
-            grade: string;
-            /** Format: int32 */
-            billedLines: number;
-        };
         ReadQueriesResourceDetail: {
             resource: components["schemas"]["ReadQueriesResourceRow"];
             rates: components["schemas"]["ReadQueriesRateDto"][];
@@ -3107,10 +5198,6 @@ export interface components {
         ReadQueriesResourceRow: {
             /** Format: uuid */
             id: string;
-            /** Format: int32 */
-            cases: number;
-            /** Format: decimal */
-            revenue: string;
             code: string;
             name: string;
             resourceType: string;
@@ -3132,6 +5219,10 @@ export interface components {
             usedQuantity: string;
             /** Format: int32 */
             physicians: number;
+            /** Format: int32 */
+            cases: number;
+            /** Format: decimal */
+            revenue: string;
         };
         ReadQueriesRevenueDto: {
             procedure: string | null;
@@ -3329,6 +5420,29 @@ export interface components {
             link: string | null;
             note: string | null;
         };
+        ReadQueriesTrendPoint: {
+            period: string;
+            /** Format: date */
+            startDate: string;
+            /** Format: date */
+            endDate: string;
+            /** Format: int32 */
+            encounters: number;
+            /** Format: decimal */
+            revenue: string;
+            /** Format: decimal */
+            totalCost: string;
+            /** Format: decimal */
+            margin: string;
+            /** Format: decimal */
+            marginPct: string;
+            /** Format: int32 */
+            ipEncounters: number;
+            /** Format: int32 */
+            opEncounters: number;
+            /** Format: int32 */
+            erEncounters: number;
+        };
         ReadQueriesUserDto: {
             /** Format: uuid */
             id: string;
@@ -3420,6 +5534,16 @@ export interface components {
             runs: number;
             hospital: string;
         };
+        ReadQueriesVersionOption: {
+            code: string;
+            status: string;
+        };
+        RunsControllerAppliedVersion: {
+            code: string | null;
+            name: string | null;
+            status: string | null;
+            existingRun: string | null;
+        };
         RunsControllerCreateRunRequest: {
             hospital: string;
             period: string;
@@ -3427,6 +5551,14 @@ export interface components {
         };
         RunsControllerExecuteRequest: {
             force: boolean;
+        };
+        RunsControllerNewPeriod: {
+            hospital: string;
+            code: string | null;
+            /** Format: date */
+            startDate: string;
+            /** Format: date */
+            endDate: string;
         };
         RunsControllerTransitionRequest: {
             to: string;
@@ -3458,6 +5590,25 @@ export interface components {
             /** Format: decimal */
             operatingMargin: string;
         };
+        "Verita.Infrastructure.CostingSeed.RecipeSuggestion": {
+            entity: string;
+            key: string;
+            title: string;
+            reason: string;
+            fields: {
+                [key: string]: string;
+            };
+            missing: string[];
+            alreadyExists: boolean;
+            /** Format: int32 */
+            billedCount: number;
+        };
+        "Verita.Infrastructure.CostingSeed.RecipeSuggestionList": {
+            hospital: string;
+            costingVersionCode: string | null;
+            items: components["schemas"]["Verita.Infrastructure.CostingSeed.RecipeSuggestion"][];
+            notices: string[];
+        };
         "Verita.Infrastructure.DataHub.ColumnSpec": {
             name: string;
             kind: string;
@@ -3466,7 +5617,7 @@ export interface components {
             options: string[] | null;
             refEntity: string | null;
             description: string | null;
-            label?: string | null;
+            label: string | null;
         };
         "Verita.Infrastructure.DataHub.EntityDescription": {
             name: string;
@@ -3491,6 +5642,38 @@ export interface components {
             loadedAt: string;
             loadedBy: string;
             hasRejects: boolean;
+        };
+        "Verita.Infrastructure.DataHub.ImportPreview": {
+            hisPack: boolean;
+            fileName: string;
+            setupId: string | null;
+            /** Format: int32 */
+            projectId: number | null;
+            pack: string | null;
+            from: string | null;
+            toInclusive: string | null;
+            extractedAtUtc: string | null;
+            tables: components["schemas"]["Verita.Infrastructure.DataHub.ImportPreviewTable"][];
+            skipped: string[];
+            hospitals: components["schemas"]["Verita.Infrastructure.DataHub.ImportPreviewHospital"][];
+            suggestedHospital: string | null;
+            notices: string[];
+            warnings: string[];
+        };
+        "Verita.Infrastructure.DataHub.ImportPreviewHospital": {
+            code: string;
+            name: string;
+            hisSetupId: string | null;
+            /** Format: int32 */
+            hisProjectId: number | null;
+            match: boolean;
+            inScope: boolean;
+        };
+        "Verita.Infrastructure.DataHub.ImportPreviewTable": {
+            entity: string;
+            fileName: string;
+            /** Format: int32 */
+            rows: number;
         };
         "Verita.Infrastructure.DataHub.ImportResult": {
             entity: string;
@@ -3530,131 +5713,6 @@ export interface components {
             page: number;
             /** Format: int32 */
             pageSize: number;
-        };
-        AssistantAskBody: {
-            /** Format: uuid */
-            threadId: string | null;
-            text: string;
-            hospital: string | null;
-            period: string | null;
-            intent: string | null;
-            pick: {
-                [key: string]: string;
-            } | null;
-            remove: string[] | null;
-        };
-        AssistantAskResult: {
-            thread: components["schemas"]["AssistantAssistantThreadDto"];
-            question: components["schemas"]["AssistantAssistantMessageDto"];
-            answer: components["schemas"]["AssistantAssistantMessageDto"];
-        };
-        AssistantAssistantMessageDto: {
-            /** Format: uuid */
-            id: string;
-            role: string;
-            text: string;
-            /** Format: date-time */
-            createdAt: string;
-            turnType: string | null;
-            reply: components["schemas"]["AssistantAssistantReply"];
-            /** Format: int32 */
-            feedback: number | null;
-            hidden: boolean;
-            stale: boolean;
-        };
-        AssistantAssistantReply: {
-            text: string;
-            band: string;
-            turnType: string | null;
-            intent: string | null;
-            intentLabel: string | null;
-            /** Format: double */
-            confidence: number;
-            score: components["schemas"]["AssistantScoreParts"];
-            assumptions: components["schemas"]["AssistantAssumptionDto"][];
-            blocks: components["schemas"]["AssistantReplyBlock"][];
-            links: components["schemas"]["AssistantReplyLink"][];
-            suggestions: components["schemas"]["AssistantOption"][];
-            options: components["schemas"]["AssistantOption"][];
-            notes: string[];
-            run: string | null;
-            runStatus: string | null;
-            hospital: string | null;
-            period: string | null;
-            navigate: components["schemas"]["AssistantReplyLink"];
-        };
-        AssistantAssistantThreadDetail: {
-            thread: components["schemas"]["AssistantAssistantThreadDto"];
-            messages: components["schemas"]["AssistantAssistantMessageDto"][];
-        };
-        AssistantAssistantThreadDto: {
-            /** Format: uuid */
-            id: string;
-            title: string;
-            isPinned: boolean;
-            isArchived: boolean;
-            /** Format: date-time */
-            createdAt: string;
-            /** Format: date-time */
-            updatedAt: string;
-            /** Format: int32 */
-            messages: number;
-            lastText: string | null;
-        };
-        AssistantAssumptionDto: {
-            kind: string;
-            label: string;
-            value: string;
-            source: string;
-            changed: boolean;
-            removable: boolean;
-            note: string | null;
-        };
-        AssistantFeedbackBody: {
-            /** Format: int32 */
-            value: number;
-            reason: string | null;
-        };
-        AssistantOption: {
-            label: string;
-            text: string;
-            intent: string | null;
-            pick: {
-                [key: string]: string;
-            } | null;
-        };
-        AssistantReplyBlock: {
-            type: string;
-            title: string | null;
-            columns: string[];
-            rows: string[][];
-            note: string | null;
-        };
-        AssistantReplyLink: {
-            label: string;
-            path: string;
-            query: {
-                [key: string]: string;
-            };
-        };
-        AssistantScoreParts: {
-            /** Format: double */
-            intent: number;
-            /** Format: double */
-            entities: number;
-            /** Format: double */
-            coverage: number;
-            /** Format: double */
-            penalty: number;
-            /** Format: double */
-            confidence: number;
-            runnerUp: string | null;
-            reasons: string[];
-        };
-        AssistantThreadPatch: {
-            title: string | null;
-            pinned: boolean | null;
-            archived: boolean | null;
         };
     };
     responses: never;

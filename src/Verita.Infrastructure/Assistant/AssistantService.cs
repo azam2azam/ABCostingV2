@@ -14,7 +14,7 @@ public sealed record AssumptionDto(string Kind, string Label, string Value, stri
 public sealed record AssistantReply(
     string Text, string Band, string? TurnType, string? Intent, string? IntentLabel, double Confidence, ScoreParts Score,
     AssumptionDto[] Assumptions, ReplyBlock[] Blocks, ReplyLink[] Links, Option[] Suggestions, Option[] Options, string[] Notes,
-    string? Run, string? RunStatus, string? Hospital, string? Period, ReplyLink? Navigate);
+    string? Run, string? RunStatus, string? Hospital, string? Period, ReplyLink? Navigate, string? Source = null);
 
 public sealed record AssistantMessageDto(Guid Id, string Role, string Text, DateTime CreatedAt, string? TurnType, AssistantReply? Reply,
     int? Feedback, bool Hidden, bool Stale);
@@ -30,7 +30,7 @@ public sealed record FeedbackBody(int Value, string? Reason);
 /// <see cref="Interpreter"/>, answers it with <see cref="AssistantAnswers"/> through the same read
 /// queries as the screens, and stores both turns so a thread can be reopened as it was.
 /// </summary>
-public sealed class AssistantService(IDbContextFactory<VeritaDbContext> factory, ReadQueries q, AssistantAnswers answers)
+public sealed class AssistantService(IDbContextFactory<VeritaDbContext> factory, ReadQueries q, AssistantAnswers answers, IIntentRouter router)
 {
     private static readonly JsonSerializerOptions J = new(JsonSerializerDefaults.Web);
     private static readonly Interpreter Interpreter = new(IntentCatalogue.Default);
@@ -98,6 +98,8 @@ public sealed class AssistantService(IDbContextFactory<VeritaDbContext> factory,
         await using var db = await factory.CreateDbContextAsync(ct);
         var m = await db.AssistantMessages.FirstOrDefaultAsync(x => x.Id == messageId && x.Role == "assistant", ct) ?? throw AppError.NotFound("Message");
         await Owned(db, p, m.ThreadId, ct);
+        if (body.Value == -1 && m.ParentMessageId is { } qid && await db.AssistantMessages.AsNoTracking().FirstOrDefaultAsync(x => x.Id == qid, ct) is { } asked)
+            await ForgetRoutedAsync(db, asked.Text, ct);
         m.Feedback = body.Value == 0 ? null : body.Value;
         m.FeedbackReason = body.Value == 0 ? null : body.Reason?.Trim() is { Length: > 0 } r ? r[..Math.Min(200, r.Length)] : null;
         await db.SaveChangesAsync(ct);
@@ -126,6 +128,21 @@ public sealed class AssistantService(IDbContextFactory<VeritaDbContext> factory,
         var it = Interpreter.Interpret(text, ctx, new ScreenScope(body.Hospital, body.Period), vocab, now,
             new AskOverrides(body.Intent, body.Pick, body.Remove));
 
+        string? aiSource = null;
+        // The rules were not sure: reuse an earlier routing of this wording, or ask the model once and remember it.
+        if (router.IsEnabled && it.Band != Bands.Answer && it.TurnType is TurnTypes.New or TurnTypes.Clarify && body.Intent is null && ctx?.Pending is null && text.Length > 0)
+        {
+            var (routed, how) = await RoutedIntentAsync(db, p, text, shareable: ctx?.Intent is null, ct);
+            if (routed is not null)
+            {
+                aiSource = how;
+                var again = Interpreter.Interpret(text, ctx, new ScreenScope(body.Hospital, body.Period), vocab, now, new AskOverrides(routed, body.Pick, body.Remove));
+                it = again;
+            }
+        }
+        // "No, <other reading>" says the remembered routing for this wording was wrong.
+        else if (router.IsEnabled && body.Intent is not null && text.Length > 0) await ForgetRoutedAsync(db, text, ct);
+
         // Clicking "No, <other reading>" resends the question with that reading forced: show the click, not the question again.
         if (display is null && body.Intent is not null && body.Pick is not { Count: > 0 } && text.Length > 0 && IntentCatalogue.Default.Get(body.Intent) is { } forced)
             display = $"No, {forced.Label.ToLowerInvariant()}";
@@ -145,7 +162,7 @@ public sealed class AssistantService(IDbContextFactory<VeritaDbContext> factory,
             if (prev is { Feedback: null }) { prev.Feedback = -1; prev.FeedbackReason = it.TurnType == TurnTypes.Correction ? "corrected" : "rephrased"; }
         }
 
-        var (reply, run, permission) = await ReplyAsync(p, it, text, vocab, ct);
+        var (reply, run, permission) = await ReplyAsync(p, it, text, vocab, aiSource, ct);
         var answer = new AssistantMessage
         {
             Id = Guid.NewGuid(), ThreadId = thread.Id, ParentMessageId = question.Id, Role = "assistant", Text = reply.Text, Intent = it.Intent,
@@ -165,6 +182,39 @@ public sealed class AssistantService(IDbContextFactory<VeritaDbContext> factory,
         return new(Dto(thread, count, displayText), Message(p, question, []), Message(p, answer, []));
     }
 
+    /// <summary>The intent for this wording and how it was found: "ai-cache" (saved from an earlier call) or "ai" (the model was called now).</summary>
+    private async Task<(string? Intent, string? How)> RoutedIntentAsync(VeritaDbContext db, Principal p, string text, bool shareable, CancellationToken ct)
+    {
+        // A question asked inside a conversation may lean on it ("by encounters"), so it is routed fresh and never saved or reused.
+        if (!shareable)
+        {
+            var only = await router.RouteAsync(text, IntentCatalogue.Default.Intents, p.Id, ct);
+            return only is null ? (null, null) : (only, "ai");
+        }
+        var key = AssistantText.Normalise(text);
+        if (key.Length is 0 or > 450) return (null, null);
+        var now = DateTime.UtcNow;
+        var known = await db.AssistantRoutedPhrases.FirstOrDefaultAsync(x => x.TextKey == key, ct);
+        if (known is not null && IntentCatalogue.Default.Get(known.Intent) is not null)
+        {
+            known.Hits++; known.LastUsedAt = now;
+            return (known.Intent, "ai-cache");
+        }
+        var intent = await router.RouteAsync(text, IntentCatalogue.Default.Intents, p.Id, ct);
+        if (intent is null) return (null, null);
+        if (known is not null) { known.Intent = intent; known.Hits = 1; known.LastUsedAt = now; }
+        else db.AssistantRoutedPhrases.Add(new AssistantRoutedPhrase { Id = Guid.NewGuid(), TextKey = key, Intent = intent, Hits = 1, CreatedAt = now, LastUsedAt = now });
+        return (intent, "ai");
+    }
+
+    private async Task ForgetRoutedAsync(VeritaDbContext db, string text, CancellationToken ct)
+    {
+        if (!router.IsEnabled) return;
+        var key = AssistantText.Normalise(text);
+        var known = await db.AssistantRoutedPhrases.FirstOrDefaultAsync(x => x.TextKey == key, ct);
+        if (known is not null) db.AssistantRoutedPhrases.Remove(known);
+    }
+
     /// <summary>Re-ask a stored answer against the current run for the same hospital and period.</summary>
     public async Task<AskResult> RefreshAsync(Principal p, Guid messageId, CancellationToken ct)
     {
@@ -181,13 +231,13 @@ public sealed class AssistantService(IDbContextFactory<VeritaDbContext> factory,
     }
 
     private async Task<(AssistantReply Reply, ScopedRun? Run, string? Permission)> ReplyAsync(Principal p, Interpretation it, string question,
-        IAssistantVocabulary vocab, CancellationToken ct)
+        IAssistantVocabulary vocab, string? aiSource, CancellationToken ct)
     {
         var def = IntentCatalogue.Default.Get(it.Intent);
         var assumptions = Assumptions(it, def);
         AssistantReply Plain(string text, Option[]? options = null, Option[]? suggestions = null, string[]? notes = null, ScopedRun? s = null) =>
             new(text, it.Band, it.TurnType, it.Intent, def?.Label, it.Score.Confidence, it.Score, assumptions, [], [], suggestions ?? [], options ?? [],
-                notes ?? it.Notes, s?.Run.Code, s?.Run.Status, s?.Hospital.Code, s?.Period.Code, null);
+                notes ?? it.Notes, s?.Run.Code, s?.Run.Status, s?.Hospital.Code, s?.Period.Code, null, aiSource ?? "rules");
 
         if (it.TurnType == TurnTypes.Meta)
         {
@@ -216,12 +266,12 @@ public sealed class AssistantService(IDbContextFactory<VeritaDbContext> factory,
         if (needsRun)
         {
             try { s = await q.Scope(p, null, it["hospital"]?.Key, it["period"]?.Key, ct); }
-            catch (AppError e) { return (Plain(e.Message, suggestions: Suggestions(def)), null, def.Permission); }
+            catch (AppError e) { return (Plain(e.Message, suggestions: Suggestions(def, it, p)), null, def.Permission); }
         }
 
         Answer a;
         try { a = await answers.AnswerAsync(p, it, s, ct); }
-        catch (AppError e) { return (Plain(e.Message, suggestions: Suggestions(def), s: s), s, def.Permission); }
+        catch (AppError e) { return (Plain(e.Message, suggestions: Suggestions(def, it, p), s: s), s, def.Permission); }
 
         var blocks = a.Blocks;
         var text = a.Text;
@@ -245,8 +295,8 @@ public sealed class AssistantService(IDbContextFactory<VeritaDbContext> factory,
         }
 
         var reply2 = new AssistantReply(text, it.Band, it.TurnType, it.Intent, def.Label, it.Score.Confidence, it.Score, assumptions, blocks.ToArray(),
-            a.Links.ToArray(), Suggestions(def), options, notes.Distinct().ToArray(), s?.Run.Code, s?.Run.Status, s?.Hospital.Code, s?.Period.Code,
-            it.Band == Bands.Answer ? a.Navigate : null);
+            a.Links.ToArray(), Suggestions(def, it, p), options, notes.Distinct().ToArray(), s?.Run.Code, s?.Run.Status, s?.Hospital.Code, s?.Period.Code,
+            it.Band == Bands.Answer ? a.Navigate : null, aiSource ?? "rules");
         return (reply2, s, def.Permission.Length > 0 ? def.Permission : null);
     }
 
@@ -330,6 +380,41 @@ public sealed class AssistantService(IDbContextFactory<VeritaDbContext> factory,
         def.Required.All(it.Slots.ContainsKey) && (def.RequiresAny is not { Length: > 0 } any || any.Any(it.Slots.ContainsKey));
 
     private static Option[] Suggestions(IntentDef? def) => def is null ? [] : def.Suggestions.Select(x => new Option(x, x)).ToArray();
+
+    /// <summary>The breakdowns the dashboards offer, in the order of their tabs: dimension key and how a question names it.</summary>
+    private static readonly (string Key, string Phrase)[] DashboardDims =
+        [("department", "department"), ("encounterType", "encounter type"), ("segment", "patient segment"), ("insurer", "insurer"), ("physician", "physician"), ("resource", "resource")];
+
+    /// <summary>
+    /// Follow-up buttons. On the dashboard intents they are the breakdowns the matching dashboard
+    /// really shows (IP/OP drop encounter type; ER also drops department and resource) and the
+    /// dashboards themselves, so every button leads to something that exists on screen.
+    /// </summary>
+    private static Option[] Suggestions(IntentDef? def, Interpretation it, Principal p)
+    {
+        if (def is null || def.Id is not ("dashboard.summary" or "profitability.by")) return Suggestions(def);
+        var enc = it["encType"]?.Key is { Length: > 0 } e ? e : null;
+        var current = def.Id == "profitability.by" ? it["dimension"]?.Key : null;
+        var list = new List<Option>();
+        if (def.Id == "dashboard.summary") list.Add(new("Break it down", "Break it down"));
+        if (p.Can("profitability.view"))
+        {
+            var prefix = enc is null ? "" : enc + " ";
+            var dims = DashboardDims.Where(d => d.Key != current && (enc is null || d.Key != "encounterType") && (enc != "ER" || d.Key is not ("department" or "resource")));
+            foreach (var d in dims.Take(def.Id == "dashboard.summary" ? 3 : 4))
+                list.Add(new(Cap($"{prefix}margin by {d.Phrase}"), $"{prefix}margin by {d.Phrase}"));
+        }
+        if (def.Id == "dashboard.summary") list.Add(new("Compare with the previous period", "Compare with the previous period"));
+        if (enc is null)
+        {
+            if (def.Id == "profitability.by") list.Add(new("Open Summary", "open summary"));
+            list.AddRange(new[] { "IP", "OP", "ER" }.Select(x => new Option($"{x} summary", $"{x} summary for this period")));
+        }
+        else list.Add(new("Open Summary", "open summary"));
+        return list.Take(6).ToArray();
+    }
+
+    private static string Cap(string s) => s.Length == 0 ? s : char.ToUpperInvariant(s[0]) + s[1..];
 
     // ── Plumbing ─────────────────────────────────────────────────────────────────────
 

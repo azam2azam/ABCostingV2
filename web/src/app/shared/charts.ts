@@ -16,7 +16,7 @@ export interface BarRow { key: string; label: string; values: (number | null)[];
 export const sar = (v: number | null | undefined): string => v === null || v === undefined ? '—' : formatMoney(String(v), { dp: 0 });
 export const sarShort = (v: number): string => formatMoney(String(v), { compact: true });
 /** An axis tick: compact and without trailing zeros, e.g. 2.5M, 10M, 750K. */
-const tickLabel = (v: number): string => v === 0 ? '0' : sarShort(v).replace(/^SAR /, '').replace(/\.0+(?=[KMB])/, '').replace(/(\.\d*?)0+(?=[KMB])/, '$1');
+export const tickLabel = (v: number): string => v === 0 ? '0' : sarShort(v).replace(/^SAR /, '').replace(/\.0+(?=[KMB])/, '').replace(/(\.\d*?)0+(?=[KMB])/, '$1');
 export const pct = (v: number): string => `${formatDec(String(v), 1)}%`;
 
 /** Round axis ticks: 0, step, 2·step… covering max, with a 1/2/2.5/5 × 10ⁿ step. */

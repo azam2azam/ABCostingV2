@@ -29,6 +29,9 @@ public static class DependencyInjection
         services.AddScoped<DataHub.HisImportService>();
         services.AddScoped<CostingSeed.RecipeSuggestionService>();
         services.AddScoped<Assistant.AssistantAnswers>();
+        services.AddMemoryCache();
+        services.AddOptions<Assistant.IntentRouterOptions>().BindConfiguration("IntentRouter");
+        services.AddHttpClient<Application.Assistant.IIntentRouter, Assistant.ClaudeIntentRouter>();
         services.AddScoped<Assistant.AssistantService>();
         return services;
     }

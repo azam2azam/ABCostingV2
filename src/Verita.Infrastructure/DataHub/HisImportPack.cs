@@ -22,13 +22,17 @@ public static class HisImportPack
     };
 
     /// <summary>
-    /// References to these are written hospital-local. Only a cost centre's own code is stored that
-    /// way: facilities and departments are unique across hospitals, so theirs keep `{hospital}.{code}`.
+    /// References to these are written hospital-local. A cost centre's, procedure's and package's own code is stored that
+    /// way (a code is unique within its hospital, so 01002003 is 01002003 in every hospital); facilities and departments
+    /// are unique across hospitals, so theirs keep `{hospital}.{code}`.
     /// </summary>
     private static readonly HashSet<string> OrgCodeColumns = new(StringComparer.OrdinalIgnoreCase)
     {
-        "departmentCode", "costCentreCode", "facilityCode",
+        "departmentCode", "costCentreCode", "facilityCode", "procedureCode", "packageCode",
     };
+
+    /// <summary>Entities whose own code column is hospital-local.</summary>
+    private static readonly HashSet<string> LocalCodeEntities = new(StringComparer.OrdinalIgnoreCase) { "CostCenter", "Procedure", "Package" };
 
     /// <summary>
     /// A HIS row whose org code is missing from the catalogue still happened: it loads against the
@@ -168,7 +172,8 @@ public static class HisImportPack
             if (key is "__row") continue;
             if (ExtraColumns.Contains(key) && !CodeColumns.Contains(key)) continue;
             if (OrgCodeColumns.Contains(key)
-                || (entity == "CostCenter" && key.Equals("code", StringComparison.OrdinalIgnoreCase)))
+                || (LocalCodeEntities.Contains(entity) && (key.Equals("code", StringComparison.OrdinalIgnoreCase)
+                    || entity != "CostCenter" && key.Equals("catalogCode", StringComparison.OrdinalIgnoreCase))))
                 row[key] = RemapOrgCode(row[key], token, hospitalCode);
             else if (CodeColumns.Contains(key) || (entity == "Hospital" && key.Equals("code", StringComparison.OrdinalIgnoreCase)))
                 row[key] = RemapValue(row[key], token, hospitalCode);

@@ -14,7 +14,7 @@
       "drilldown": true,
       "compare": true,
       "examples": ["Give me the summary for this period", "What is the total cost at Northgate in October?", "How are we doing?", "IP summary for this period"],
-      "suggestions": ["Break it down", "Compare with the previous period", "Open IP Dashboard", "Profitability by service line"]
+      "suggestions": ["Break it down", "Compare with the previous period", "Margin by department", "Open IP Dashboard"]
     },
     {
       "id": "procedure.cost",
@@ -37,13 +37,13 @@
       "permission": "costing.view",
       "path": "procedures",
       "keywords": { "expensive": 0.9, "costliest": 1.0, "top": 0.4, "highest": 0.4, "biggest": 0.4, "largest": 0.4, "procedure": 0.5, "activity": 0.3, "cheapest": 0.9, "lowest": 0.3, "volume": 0.4, "busiest": 0.8, "common": 0.5 },
-      "phrases": { "most expensive": 1.0, "highest cost": 0.9, "top procedure": 0.9, "most common": 0.9, "highest volume": 0.9, "most performed": 0.9 },
+      "phrases": { "most expensive": 1.0, "highest cost": 0.9, "top procedure": 0.9, "most common": 0.9, "highest volume": 0.9, "most performed": 0.9, "procedures by encounters": 1.0, "procedures by volume": 1.0, "procedures by total cost": 1.0, "procedures by cost": 1.0, "procedures by count": 1.0 },
       "entities": {},
       "required": [],
-      "uses": ["hospital", "period", "limit", "order", "metric"],
+      "uses": ["hospital", "period", "limit", "order", "metric", "measure"],
       "drilldown": false,
       "compare": false,
-      "examples": ["Most expensive procedures", "Top 10 procedures by volume", "Cheapest procedures this month"],
+      "examples": ["Most expensive procedures", "Top 10 procedures by volume", "Top 10 procedures by encounters", "Top 10 procedures by total cost", "Cheapest procedures this month"],
       "suggestions": ["Top 20", "By volume", "Which packages lose money?"]
     },
     {
@@ -90,8 +90,8 @@
       "uses": ["hospital", "period", "dimension", "order", "limit", "measure", "encType"],
       "drilldown": true,
       "compare": false,
-      "examples": ["Profitability by payer", "Which DRGs lose money?", "Margin by department", "IP margin by department"],
-      "suggestions": ["By payer", "By department", "Open IP Dashboard"]
+      "examples": ["Profitability by insurer", "Which DRGs lose money?", "Margin by department", "IP margin by department"],
+      "suggestions": ["Margin by department", "Margin by insurer", "Open Summary"]
     },
     {
       "id": "billing.nonbillable",

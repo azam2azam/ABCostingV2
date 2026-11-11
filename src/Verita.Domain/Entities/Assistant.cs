@@ -48,3 +48,18 @@ public class AssistantMessage
     public string? FeedbackReason { get; set; }
     public DateTime CreatedAt { get; set; }
 }
+
+/// <summary>
+/// A question wording an AI model once routed to an intent. Looked up before the model is called
+/// again, so the same wording never costs a second call. Holds the question text only, never answers or data.
+/// </summary>
+public class AssistantRoutedPhrase
+{
+    public Guid Id { get; set; }
+    /// <summary>The question after normalising (lower case, punctuation removed).</summary>
+    public string TextKey { get; set; } = "";
+    public string Intent { get; set; } = "";
+    public int Hits { get; set; }
+    public DateTime CreatedAt { get; set; }
+    public DateTime LastUsedAt { get; set; }
+}

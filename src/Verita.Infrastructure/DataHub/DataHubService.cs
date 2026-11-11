@@ -150,8 +150,9 @@ public sealed class DataHubService(IDbContextFactory<VeritaDbContext> factory, I
             if (!r.K.StartsWith(hc + ".", StringComparison.OrdinalIgnoreCase))
                 dict.TryAdd($"{hc}.{r.K}", target);
         }
-        // Encounter numbers, MRNs, costing version and period codes repeat across hospitals, so a bare one only resolves within a hospital.
-        if (typeof(T) == typeof(Encounter) || typeof(T) == typeof(Patient) || typeof(T) == typeof(CostingVersion) || typeof(T) == typeof(Period))
+        // Encounter numbers, MRNs, costing version, period, procedure and package codes repeat across hospitals, so a bare one only resolves within a hospital.
+        if (typeof(T) == typeof(Encounter) || typeof(T) == typeof(Patient) || typeof(T) == typeof(CostingVersion) || typeof(T) == typeof(Period)
+            || typeof(T) == typeof(Procedure) || typeof(T) == typeof(Package))
             foreach (var repeated in rows.GroupBy(r => r.K, StringComparer.OrdinalIgnoreCase).Where(g => g.Count() > 1))
                 dict.Remove(repeated.Key);
         return dict;
