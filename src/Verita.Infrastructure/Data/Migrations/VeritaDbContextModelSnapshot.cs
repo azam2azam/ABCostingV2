@@ -723,6 +723,38 @@ namespace Verita.Infrastructure.Data.Migrations
                         });
                 });
 
+            modelBuilder.Entity("Verita.Domain.Entities.AssistantRoutedPhrase", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("datetime2(3)");
+
+                    b.Property<int>("Hits")
+                        .HasColumnType("int");
+
+                    b.Property<string>("Intent")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("nvarchar(64)");
+
+                    b.Property<DateTime>("LastUsedAt")
+                        .HasColumnType("datetime2(3)");
+
+                    b.Property<string>("TextKey")
+                        .IsRequired()
+                        .HasMaxLength(450)
+                        .HasColumnType("nvarchar(450)");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("TextKey")
+                        .IsUnique();
+
+                    b.ToTable("AssistantRoutedPhrase", (string)null);
+                });
+
             modelBuilder.Entity("Verita.Domain.Entities.AssistantThread", b =>
                 {
                     b.Property<Guid>("Id")
@@ -2644,10 +2676,8 @@ namespace Verita.Infrastructure.Data.Migrations
 
                     b.HasKey("Id");
 
-                    b.HasIndex("Code")
+                    b.HasIndex("HospitalId", "Code")
                         .IsUnique();
-
-                    b.HasIndex("HospitalId");
 
                     b.ToTable("Package", (string)null);
 
@@ -3028,14 +3058,12 @@ namespace Verita.Infrastructure.Data.Migrations
 
                     b.HasKey("Id");
 
-                    b.HasIndex("Code")
-                        .IsUnique();
-
                     b.HasIndex("DepartmentId");
 
-                    b.HasIndex("HospitalId");
-
                     b.HasIndex("ServiceLineId");
+
+                    b.HasIndex("HospitalId", "Code")
+                        .IsUnique();
 
                     b.ToTable("Procedure", null, t =>
                         {
@@ -4154,6 +4182,10 @@ namespace Verita.Infrastructure.Data.Migrations
 
                     b.HasIndex("PayerId");
 
+                    b.HasIndex("PostedAt");
+
+                    SqlServerIndexBuilderExtensions.IncludeProperties(b.HasIndex("PostedAt"), new[] { "EncounterId", "ProcedureId", "SourceRef", "HisLineStatus", "HisInvoiceType", "NetAmount", "RefundedAmount", "HisUnitPrice", "IsChildInvoice" });
+
                     b.HasIndex("ProcedureId");
 
                     b.ToTable("RevenueTransaction", (string)null);
@@ -4225,6 +4257,48 @@ namespace Verita.Infrastructure.Data.Migrations
                     b.HasIndex("RunId", "Dimension");
 
                     b.ToTable("RunDimensionCost", (string)null);
+                });
+
+            modelBuilder.Entity("Verita.Domain.Entities.RunHisInvoicing", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<int>("Encounters")
+                        .HasColumnType("int");
+
+                    b.Property<int>("InvoiceType")
+                        .HasColumnType("int");
+
+                    b.Property<int>("Invoices")
+                        .HasColumnType("int");
+
+                    b.Property<long?>("MaxInvoiceNo")
+                        .HasColumnType("bigint");
+
+                    b.Property<long?>("MinInvoiceNo")
+                        .HasColumnType("bigint");
+
+                    b.Property<int>("Patients")
+                        .HasColumnType("int");
+
+                    b.Property<decimal>("Refunded")
+                        .HasPrecision(19, 4)
+                        .HasColumnType("decimal(19,4)");
+
+                    b.Property<decimal>("Revenue")
+                        .HasPrecision(19, 4)
+                        .HasColumnType("decimal(19,4)");
+
+                    b.Property<Guid>("RunId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("RunId", "InvoiceType")
+                        .IsUnique();
+
+                    b.ToTable("RunHisInvoicing", (string)null);
                 });
 
             modelBuilder.Entity("Verita.Domain.Entities.RunStep", b =>
@@ -5594,6 +5668,15 @@ namespace Verita.Infrastructure.Data.Migrations
                 });
 
             modelBuilder.Entity("Verita.Domain.Entities.RunDimensionCost", b =>
+                {
+                    b.HasOne("Verita.Domain.Entities.CalculationRun", null)
+                        .WithMany()
+                        .HasForeignKey("RunId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+                });
+
+            modelBuilder.Entity("Verita.Domain.Entities.RunHisInvoicing", b =>
                 {
                     b.HasOne("Verita.Domain.Entities.CalculationRun", null)
                         .WithMany()

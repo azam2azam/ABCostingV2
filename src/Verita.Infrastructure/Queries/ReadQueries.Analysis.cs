@@ -47,11 +47,13 @@ public sealed partial class ReadQueries
 
         if (dimension == "procedure")
         {
+            // Encounters per procedure: the distinct encounters it was performed in. They do not add up (one encounter holds many procedures).
+            var encounters = await ProcedureEncounterCountsAsync(s, ct);
             rows = (await (from pc in db.ProcedureCosts.AsNoTracking()
                            join pr in db.Procedures on pc.ProcedureId equals pr.Id
                            where pc.RunId == rid && pc.CostType == "ACTUAL"
                            select new { pr.Id, pr.Name, pc.Volume, pc.Revenue, pc.DirectCost, pc.IndirectCost, pc.OverheadCost }).ToListAsync(ct))
-                .Select(x => Make(x.Id.ToString(), x.Name, 0, x.Volume, x.Revenue, x.DirectCost, x.IndirectCost, x.OverheadCost, $"procedures/{x.Id}")).ToList();
+                .Select(x => Make(x.Id.ToString(), x.Name, encounters.GetValueOrDefault(x.Id), x.Volume, x.Revenue, x.DirectCost, x.IndirectCost, x.OverheadCost, $"procedures/{x.Id}")).ToList();
         }
         else if (!filterEnc && s.Run.CostingMethod == CostingModelPipeline.Method)
         {
@@ -120,7 +122,7 @@ public sealed partial class ReadQueries
         }
 
         rows = rows.OrderByDescending(r => showRevenue ? r.Operating : r.Total).ToList();
-        var total = wholeRun ?? Make("total", "Total", rows.Sum(r => r.Encounters), rows.Sum(r => r.Volume), rows.Sum(r => r.Revenue), rows.Sum(r => r.Direct),
+        var total = wholeRun ?? Make("total", "Total", dimension == "procedure" ? 0 : rows.Sum(r => r.Encounters), rows.Sum(r => r.Volume), rows.Sum(r => r.Revenue), rows.Sum(r => r.Direct),
             rows.Sum(r => r.Indirect), rows.Sum(r => r.Overhead), null);
         return new ProfitDto(dimension, rows.ToArray(), total, idle, showRevenue ? Money.R4(total.Operating - idle) : 0m);
     }

@@ -75,6 +75,7 @@ public sealed class VeritaDbContext(DbContextOptions<VeritaDbContext> options) :
     public DbSet<ProcedureCost> ProcedureCosts => Set<ProcedureCost>();
     public DbSet<EncounterCost> EncounterCosts => Set<EncounterCost>();
     public DbSet<RunDimensionCost> RunDimensionCosts => Set<RunDimensionCost>();
+    public DbSet<RunHisInvoicing> RunHisInvoicings => Set<RunHisInvoicing>();
     public DbSet<PackageCost> PackageCosts => Set<PackageCost>();
     public DbSet<DrgCostSummary> DrgCostSummaries => Set<DrgCostSummary>();
     public DbSet<CostComponent> CostComponents => Set<CostComponent>();
@@ -96,6 +97,7 @@ public sealed class VeritaDbContext(DbContextOptions<VeritaDbContext> options) :
     // Assistant
     public DbSet<AssistantThread> AssistantThreads => Set<AssistantThread>();
     public DbSet<AssistantMessage> AssistantMessages => Set<AssistantMessage>();
+    public DbSet<AssistantRoutedPhrase> AssistantRoutedPhrases => Set<AssistantRoutedPhrase>();
 
     /// <summary>Master-data tables get SQL Server system versioning as an audit mechanism —
     /// never used to serve effective-dated costing (BRD section 18).</summary>
@@ -183,6 +185,7 @@ public sealed class VeritaDbContext(DbContextOptions<VeritaDbContext> options) :
         mb.Entity<EncounterCost>().HasKey(x => x.Id).IsClustered(false);
         mb.Entity<RunDimensionCost>().Property(x => x.Dimension).HasMaxLength(32);
         mb.Entity<RunDimensionCost>().HasIndex(x => new { x.RunId, x.Dimension });
+        mb.Entity<RunHisInvoicing>().HasIndex(x => new { x.RunId, x.InvoiceType }).IsUnique();
         mb.Entity<EncounterCost>().HasIndex(x => new { x.RunId, x.EncounterId }).IsUnique().IsClustered();
         mb.Entity<GLPosting>().HasKey(x => x.Id).IsClustered(false);
         // Clustered, so the index covers Amount, GLAccountId and CostCenterId without an INCLUDE.
@@ -300,7 +303,7 @@ public sealed class VeritaDbContext(DbContextOptions<VeritaDbContext> options) :
         void RunFk<T>() where T : class =>
             mb.Entity<T>().HasOne<CalculationRun>().WithMany().HasForeignKey("RunId").OnDelete(DeleteBehavior.Cascade);
         RunFk<RunStep>(); RunFk<ResourceUnitCost>(); RunFk<CostPoolBalance>(); RunFk<CostCenterBalance>(); RunFk<AllocationResult>();
-        RunFk<ActivityCost>(); RunFk<ProcedureCost>(); RunFk<EncounterCost>(); RunFk<RunDimensionCost>(); RunFk<PackageCost>(); RunFk<DrgCostSummary>();
+        RunFk<ActivityCost>(); RunFk<ProcedureCost>(); RunFk<EncounterCost>(); RunFk<RunDimensionCost>(); RunFk<RunHisInvoicing>(); RunFk<PackageCost>(); RunFk<DrgCostSummary>();
         RunFk<CostComponent>(); RunFk<ResidualBucket>(); RunFk<Variance>(); RunFk<Reconciliation>();
         mb.Entity<DataQualityIssue>().HasOne<CalculationRun>().WithMany().HasForeignKey(x => x.RunId).OnDelete(DeleteBehavior.Cascade);
         mb.Entity<VarianceComponent>().HasOne<Variance>().WithMany().HasForeignKey(x => x.VarianceId).OnDelete(DeleteBehavior.Cascade);
@@ -326,7 +329,7 @@ public sealed class VeritaDbContext(DbContextOptions<VeritaDbContext> options) :
         Unique<CostCenter>(x => new { x.HospitalId, x.Code }); Unique<GLAccount>(x => x.Code); mb.Entity<Period>().HasIndex(x => new { x.HospitalId, x.Code }).IsUnique(); Unique<CostPool>(x => x.Code);
         Unique<CostDriver>(x => x.Code); Unique<Resource>(x => x.Code); Unique<Provider>(x => x.Code); Unique<Activity>(x => x.Code);
         Unique<ProviderClinic>(x => new { x.ProviderId, x.HisClinicId });
-        Unique<Procedure>(x => x.Code); Unique<Package>(x => x.Code); Unique<Drg>(x => x.Code); Unique<Payer>(x => x.Code);
+        Unique<Procedure>(x => new { x.HospitalId, x.Code }); Unique<Package>(x => new { x.HospitalId, x.Code }); Unique<Drg>(x => x.Code); Unique<Payer>(x => x.Code);
         Unique<Patient>(x => new { x.HospitalId, x.Mrn }); Unique<Encounter>(x => new { x.HospitalId, x.EncounterNo }); Unique<AllocationRule>(x => x.Code);
         Unique<CostingVersion>(x => new { x.HospitalId, x.Code }); Unique<CalculationRun>(x => x.Code); Unique<Scenario>(x => x.Code); Unique<User>(x => x.Email);
         Unique<ActivityResource>(x => new { x.ActivityId, x.ResourceId });
@@ -364,6 +367,8 @@ public sealed class VeritaDbContext(DbContextOptions<VeritaDbContext> options) :
         mb.Entity<Encounter>().HasIndex(x => new { x.HospitalId, x.AdmitAt });
         mb.Entity<EncounterService>().HasIndex(x => x.EncounterId);
         mb.Entity<RevenueTransaction>().HasIndex(x => x.EncounterId);
+        // Period screens read a month of counted lines; this covers them without a scan of the whole table.
+        mb.Entity<RevenueTransaction>().HasIndex(x => x.PostedAt).IncludeProperties(x => new { x.EncounterId, x.ProcedureId, x.SourceRef, x.HisLineStatus, x.HisInvoiceType, x.NetAmount, x.RefundedAmount, x.HisUnitPrice, x.IsChildInvoice });
         // A package is billed and costed on its parent invoice. Child invoice lines stay stored for checking against HIS, and only IgnoreQueryFilters sees them.
         mb.Entity<EncounterService>().HasQueryFilter(x => !x.IsChildInvoice);
         mb.Entity<RevenueTransaction>().HasQueryFilter(x => !x.IsChildInvoice);
@@ -387,6 +392,9 @@ public sealed class VeritaDbContext(DbContextOptions<VeritaDbContext> options) :
         mb.Entity<AssistantThread>().HasIndex(x => new { x.UserId, x.IsDeleted, x.UpdatedAt });
         mb.Entity<AssistantMessage>().HasIndex(x => new { x.ThreadId, x.CreatedAt });
         mb.Entity<AssistantMessage>().HasIndex(x => new { x.Matched, x.CreatedAt });
+        mb.Entity<AssistantRoutedPhrase>().HasIndex(x => x.TextKey).IsUnique();
+        mb.Entity<AssistantRoutedPhrase>().Property(x => x.TextKey).HasMaxLength(450);
+        mb.Entity<AssistantRoutedPhrase>().Property(x => x.Intent).HasMaxLength(64);
         mb.Entity<AssistantMessage>().Property(x => x.Role).HasMaxLength(16);
         mb.Entity<AssistantMessage>().Property(x => x.TurnType).HasMaxLength(16);
         mb.Entity<AssistantMessage>().Property(x => x.Intent).HasMaxLength(64);

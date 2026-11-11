@@ -109,6 +109,42 @@ public class HisImportPackTests
     }
 
     [Fact]
+    public void BindHospital_stores_procedure_and_package_codes_without_the_hospital_prefix()
+    {
+        var procedure = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["hospitalCode"] = "010266-15", ["code"] = "010266-15.01002003", ["catalogCode"] = "010266-15.01002003", ["departmentCode"] = "010266-15.OPD",
+        };
+        HisImportPack.BindHospital(procedure, "Procedure", "SWD-AGL", "010266", "15");
+        Assert.Equal("01002003", procedure["code"]);
+        Assert.Equal("01002003", procedure["catalogCode"]);
+        Assert.Equal("SWD-AGL", procedure["hospitalCode"]);
+
+        // A pack already bound to the hospital, and one already bare, load the same.
+        var bound = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase) { ["hospitalCode"] = "SWD-AGL", ["code"] = "SWD-AGL.PKG-7" };
+        HisImportPack.BindHospital(bound, "Package", "SWD-AGL", "010266", "15");
+        Assert.Equal("PKG-7", bound["code"]);
+        var bare = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase) { ["hospitalCode"] = "SWD-AGL", ["code"] = "PKG-7" };
+        HisImportPack.BindHospital(bare, "Package", "SWD-AGL", "010266", "15");
+        Assert.Equal("PKG-7", bare["code"]);
+
+        // References to a procedure or package are hospital-local too, so they match the stored code.
+        var rate = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["hospitalCode"] = "010266-15", ["procedureCode"] = "010266-15.01002003",
+        };
+        HisImportPack.BindHospital(rate, "ProcedureRate", "SWD-AGL", "010266", "15");
+        Assert.Equal("01002003", rate["procedureCode"]);
+        var component = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["packageCode"] = "SWD-AGL.PKG-7", ["procedureCode"] = "SWD-AGL.01002003",
+        };
+        HisImportPack.BindHospital(component, "PackageComponent", "SWD-AGL", "010266", "15");
+        Assert.Equal("PKG-7", component["packageCode"]);
+        Assert.Equal("01002003", component["procedureCode"]);
+    }
+
+    [Fact]
     public void BindHospital_does_not_rewrite_his_mrn()
     {
         var patient = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)

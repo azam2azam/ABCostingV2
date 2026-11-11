@@ -2,6 +2,9 @@
   "_comment": "Golden questions for the rule-based assistant, run against FakeVocabulary. intent null = must not answer. band: answer | confirm | clarify | answerable (answer or confirm). slots: expected keys; a value of '*' means present, '-' means absent. sources: where a slot's value must come from.",
   "screen": { "hospital": "NSH-RYD", "period": "2026-10" },
   "single": [
+    { "q": "top 10 departments that lose money", "intent": "profitability.by", "band": "answer", "slots": { "limit": "10", "order": "bottom" } },
+    { "q": "top 10 procedures by encounters", "intent": "procedure.top", "band": "answer", "slots": { "limit": "10", "measure": "encounters" } },
+    { "q": "top 10 procedures by total cost", "intent": "procedure.top", "band": "answer", "slots": { "limit": "10", "measure": "total" } },
         { "q": "Top 10 department by encounter count", "intent": "profitability.by", "turn": "NEW", "band": "answerable", "slots": { "dimension": "department", "limit": "10", "procedure": "-" } },
     { "q": "Give me the summary for this period", "intent": "dashboard.summary", "band": "answer", "slots": { "hospital": "NSH-RYD", "period": "2026-10" } },
     { "q": "how are we doing", "intent": "dashboard.summary", "band": "answer" },
@@ -104,6 +107,22 @@
     { "q": "who won the football match yesterday", "intent": null }
   ],
   "conversations": [
+    {
+      "name": "a ranking measure in a follow-up keeps the breakdown",
+      "turns": [
+        { "q": "which departments lose money", "intent": "profitability.by", "turn": "NEW", "band": "answer", "slots": { "dimension": "department", "order": "bottom" } },
+        { "q": "by encounter count", "intent": "profitability.by", "turn": "REFINE", "slots": { "dimension": "department", "measure": "encounters", "order": "-" }, "sources": { "dimension": "carried" } },
+        { "q": "by revenue", "intent": "profitability.by", "turn": "REFINE", "slots": { "dimension": "department", "measure": "revenue" } }
+      ]
+    },
+    {
+      "name": "show chart keeps the last answer, even when a procedure is called chart",
+      "turns": [
+        { "q": "margin by patient segment", "intent": "profitability.by", "turn": "NEW", "band": "answer", "slots": { "dimension": "segment" } },
+        { "q": "show chart", "intent": "profitability.by", "turn": "DRILLDOWN", "view": "chart", "band": "answer", "slots": { "dimension": "segment" }, "sources": { "dimension": "carried" } },
+        { "q": "can I see the graph too?", "intent": "profitability.by", "turn": "DRILLDOWN", "view": "chart", "band": "answer" }
+      ]
+    },
     {
       "name": "summary, drill down, change hospital, compare",
       "turns": [

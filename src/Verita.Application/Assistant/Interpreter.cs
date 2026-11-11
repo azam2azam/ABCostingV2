@@ -116,6 +116,12 @@ public sealed class Interpreter(IntentCatalogue catalogue)
         ["start over"] = "reset", ["reset"] = "reset", ["new question"] = "reset", ["clear"] = "reset", ["new topic"] = "reset",
     };
 
+    private static readonly HashSet<string> ChartWords =
+        ["chart", "charts", "graph", "graphs", "plot", "plots", "visual", "visuals", "visualise", "visualize", "visualisation", "visualization", "diagram", "pie", "bar", "bars"];
+    private static readonly HashSet<string> ChartFiller =
+        ["show", "me", "give", "display", "see", "draw", "the", "a", "an", "some", "it", "that", "this", "these", "those", "them", "of", "for", "as", "in", "can", "could", "i", "you", "please",
+         "also", "now", "and", "too", "with", "same", "view", "want", "to", "like", "would", "lets", "let", "us", "its", "their", "answer", "result", "results", "data", "numbers"];
+
     public static readonly TimeSpan Stale = TimeSpan.FromMinutes(30);
     public static readonly TimeSpan RephraseWindow = TimeSpan.FromSeconds(90);
 
@@ -148,6 +154,17 @@ public sealed class Interpreter(IntentCatalogue catalogue)
             return new(TurnTypes.Meta, ctx?.Intent, ctx?.View ?? "summary", [], new(1, 1, 1, 0, 1, null, []), Bands.Answer, null, [], meta, [], []);
         if (tokens.Length == 0)
             return new(TurnTypes.Clarify, null, "summary", [], new(0, 0, 0, 0, 0, null, ["Empty message"]), Bands.Clarify, "What would you like to know?", Starters(), null, [], []);
+
+        // ── "Show chart": a bare request to see the last answer as a chart, never a procedure called "chart" ──
+        if (hasCtx && !stale && ctx!.Pending is not ("procedure" or "package") && tokens.Any(ChartWords.Contains) && tokens.All(t => ChartWords.Contains(t) || ChartFiller.Contains(t)))
+        {
+            var kept = ctx.Params.ToDictionary(p => p.Key, p => p.Value with { Source = "carried" });
+            var defC = catalogue.Get(ctx.Intent)!;
+            var slotsC = Fill(defC, TurnTypes.Drilldown, kept, [], screen, vocab, ctx, notes);
+            var missingC = defC.Required.FirstOrDefault(r => !slotsC.ContainsKey(r));
+            var partsC = new ScoreParts(1, 1, 1, 0, 1, null, ["Asked to see the last answer as a chart"]);
+            return Build(TurnTypes.Drilldown, defC, "chart", slotsC, partsC, ctx, missingC, notes, text);
+        }
 
         // ── Markers ──
         var first = tokens[0];
@@ -276,7 +293,8 @@ public sealed class Interpreter(IntentCatalogue catalogue)
             : padded.Contains(" indirect cost ") || padded.Contains(" indirect ") ? ("indirect", "Indirect cost", ["indirect", "cost"])
             : padded.Contains(" overhead") ? ("overhead", "Overheads", ["overhead", "overheads"])
             : tokens.Any(t => t is "revenue" or "revenues" or "income" or "sales") ? ("revenue", "Revenue", ["revenue", "revenues", "income", "sales"])
-            : tokens.Any(t => t is "encounters" or "encounter" or "visits" or "cases" or "patients") && (padded.Contains(" by ") || padded.Contains(" most ") || padded.Contains(" top ")) ? ("encounters", "Encounters", ["encounters", "encounter", "visits", "cases", "patients"])
+            : tokens.Any(t => t is "encounters" or "encounter" or "visits" or "cases" or "patients") && (padded.Contains(" by ") || padded.Contains(" most ") || padded.Contains(" top "))
+              && !padded.Contains(" encounter type") && !padded.Contains(" visit type") ? ("encounters", "Encounters", ["encounters", "encounter", "visits", "cases", "patients", "count", "counts", "number"])
             : padded.Contains(" total cost ") || padded.Contains(" by cost ") || padded.Contains(" highest cost ") || padded.Contains(" most cost") ? ("total", "Total cost", ["total", "cost"])
             : padded.Contains(" by margin ") || padded.Contains(" by profit ") || padded.Contains(" highest margin ") || padded.Contains(" lowest margin ") ? ("operating", "Margin", ["margin", "profit"])
             : null;
@@ -284,6 +302,8 @@ public sealed class Interpreter(IntentCatalogue catalogue)
         {
             explicitSlots["measure"] = new("measure", ms.Key, ms.Label, "explicit", 1);
             entityPositions["measure"] = Enumerable.Range(0, tokens.Length).Where(i => ms.Words.Contains(tokens[i])).ToArray();
+            // "by encounter count" ranks by encounters; the word is not also the Encounter type breakdown or part of a name.
+            if (ms.Key == "encounters") foreach (var pos in entityPositions["measure"]) used[pos] = true;
         }
         // IP / OP / ER scope for Summary answers — not "by inpatient" (that is the encounter-type dimension).
         (string Key, string Label, string[] Words)? encType =
@@ -303,7 +323,9 @@ public sealed class Interpreter(IntentCatalogue catalogue)
         }
         string[] bottomWords = ["cheapest", "lowest", "least", "worst", "bottom", "losing", "lose", "loss", "unprofitable", "negative", "smallest"];
         string[] topWords = ["top", "highest", "most", "biggest", "largest", "best", "costliest", "expensive"];
-        var orderAt = Enumerable.Range(0, tokens.Length).FirstOrDefault(i => bottomWords.Contains(tokens[i]) || topWords.Contains(tokens[i]), -1);
+        // "Top 10 that lose money" is the 10 worst: a word like lose, lowest or cheapest settles it even when "top" comes first.
+        var orderAt = Enumerable.Range(0, tokens.Length).FirstOrDefault(i => bottomWords.Contains(tokens[i]), -1);
+        if (orderAt < 0) orderAt = Enumerable.Range(0, tokens.Length).FirstOrDefault(i => topWords.Contains(tokens[i]), -1);
         if (orderAt >= 0)
         {
             var bottom = bottomWords.Contains(tokens[orderAt]) || padded.Contains(" least profitable ");
@@ -419,6 +441,14 @@ public sealed class Interpreter(IntentCatalogue catalogue)
             view = simpler || !def1.Drilldown ? "explain" : "detail";
         }
         else if (hasCtx && ctx!.Pending is { } pending && (explicitSlots.ContainsKey(pending) || staticFound.ContainsKey(pending)) && (!strong || top.Def.Id == ctxDef!.Id))
+        {
+            turn = TurnTypes.Refine;
+            def1 = ctxDef!;
+        }
+        // "by revenue", "by encounter count": a short follow-up that only names how to rank keeps the breakdown, even though
+        // a word like "revenue" also scores another intent (the Summary) on its own.
+        else if (hasCtx && ctxDef!.Uses.Contains("measure") && explicitSlots.ContainsKey("measure") && content.Count <= 3
+                 && (first is "by" or "and" or "now" or "sort" or "rank" or "order" || padded.StartsWith(" what about ")))
         {
             turn = TurnTypes.Refine;
             def1 = ctxDef!;
@@ -636,6 +666,8 @@ public sealed class Interpreter(IntentCatalogue catalogue)
         foreach (var k in kinds)
         {
             if (explicitSlots.TryGetValue(k, out var e)) { slots[k] = e; continue; }
+            // A follow-up that names a new ranking ("by encounter count") starts a new ranking: the earlier "lowest first" does not carry over.
+            if (continues && k == "order" && explicitSlots.ContainsKey("measure")) continue;
             if (continues && carried.TryGetValue(k, out var c)) { slots[k] = c with { Source = "carried" }; continue; }
             if (k == "hospital")
             {
@@ -681,7 +713,7 @@ public sealed class Interpreter(IntentCatalogue catalogue)
         }
 
         foreach (var (k, v) in explicitSlots) if (!slots.ContainsKey(k) && (ScalarKinds.Contains(k) || def.Uses.Contains(k))) slots[k] = v;
-        if (continues) foreach (var k in ScalarKinds) if (!slots.ContainsKey(k) && carried.TryGetValue(k, out var c) && def.Uses.Contains(k)) slots[k] = c with { Source = "carried" };
+        if (continues) foreach (var k in ScalarKinds) if (!slots.ContainsKey(k) && !(k == "order" && explicitSlots.ContainsKey("measure")) && carried.TryGetValue(k, out var c) && def.Uses.Contains(k)) slots[k] = c with { Source = "carried" };
         return slots;
     }
 

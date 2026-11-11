@@ -13,40 +13,31 @@ public sealed partial class ReadQueries
 
     public sealed record HisInvoiceTypeCount(int? InvoiceType, string Name, int Invoices, int Encounters, int Patients, decimal Refunded, decimal Revenue);
     public sealed record HisInvoicingDto(long? MinInvoiceNo, long? MaxInvoiceNo, HisInvoiceTypeCount[] Types, HisInvoiceTypeCount? Total);
-    private sealed record HisInvoiceTypeRaw(int? InvoiceType, int Invoices, int Encounters, int Patients, decimal? Refunded, decimal? Revenue, long? MinInvoiceNo, long? MaxInvoiceNo);
 
     public async Task<HisInvoicingDto> HisInvoicingAsync(ScopedRun s, CancellationToken ct)
     {
-        var start = s.Period.StartDate.ToDateTime(TimeOnly.MinValue);
-        var end = s.Period.EndDate.AddDays(1).ToDateTime(TimeOnly.MinValue);
-        // SourceRef is REV-{transactionType}-{invoiceNo}-{line}; dropping the line leaves the invoice.
-        // The same lines a run counts: see HisInvoiceRules.
-        // ROLLUP adds the total as a row with no type. Its counts are distinct, not the sum of the
-        // rows, because a patient can have invoices of both types.
-        var rows = await db.Database.SqlQuery<HisInvoiceTypeRaw>($"""
-            SELECT t.HisInvoiceType AS InvoiceType,
-                   COUNT(DISTINCT LEFT(t.SourceRef, LEN(t.SourceRef) - CHARINDEX('-', REVERSE(t.SourceRef)))) AS Invoices,
-                   COUNT(DISTINCT t.EncounterId) AS Encounters,
-                   COUNT(DISTINCT e.PatientId) AS Patients,
-                   SUM(ISNULL(t.RefundedAmount, 0)) AS Refunded,
-                   SUM(t.NetAmount - ISNULL(t.RefundedAmount, 0)) AS Revenue,
-                   MIN(TRY_CAST(PARSENAME(REPLACE(t.SourceRef, '-', '.'), 2) AS bigint)) AS MinInvoiceNo,
-                   MAX(TRY_CAST(PARSENAME(REPLACE(t.SourceRef, '-', '.'), 2) AS bigint)) AS MaxInvoiceNo
-            FROM RevenueTransaction t
-            INNER JOIN Encounter e ON e.Id = t.EncounterId
-            WHERE e.HospitalId = {s.Hospital.Id} AND t.PostedAt >= {start} AND t.PostedAt < {end}
-              AND t.HisLineStatus = 2 AND t.HisInvoiceType IN (1, 75)
-            GROUP BY ROLLUP(t.HisInvoiceType)
-            """).ToListAsync(ct);
-        var types = rows.Where(x => x.InvoiceType is not null).OrderBy(x => x.InvoiceType)
+        // A run stores the counts (HisInvoicingSummary). A run from before that is filled the first time it is read;
+        // a period with no finished run counts live.
+        var finished = s.Run.Id != Guid.Empty && s.Run.FinishedAt is not null && s.Run.Status != "FAILED";
+        var rows = finished ? await db.RunHisInvoicings.AsNoTracking().Where(x => x.RunId == s.Run.Id).ToListAsync(ct) : [];
+        if (rows.Count == 0)
+        {
+            if (finished)
+            {
+                try { rows = await HisInvoicingSummary.StoreAsync(db, s.Run, ct); }
+                catch (DbUpdateException) { rows = await db.RunHisInvoicings.AsNoTracking().Where(x => x.RunId == s.Run.Id).ToListAsync(ct); }
+            }
+            else rows = await HisInvoicingSummary.CountAsync(db, s.Hospital.Id, s.Period.StartDate, s.Period.EndDate, Guid.Empty, ct);
+        }
+        var types = rows.Where(x => x.InvoiceType != HisInvoicingSummary.TotalType).OrderBy(x => x.InvoiceType)
             .Select(x => new HisInvoiceTypeCount(x.InvoiceType, x.InvoiceType switch
             {
                 1 => "Outpatient",
                 _ => "Inpatient",
-            }, x.Invoices, x.Encounters, x.Patients, x.Refunded ?? 0m, x.Revenue ?? 0m)).ToArray();
-        var whole = rows.FirstOrDefault(x => x.InvoiceType is null);
+            }, x.Invoices, x.Encounters, x.Patients, x.Refunded, x.Revenue)).ToArray();
+        var whole = rows.FirstOrDefault(x => x.InvoiceType == HisInvoicingSummary.TotalType);
         return new HisInvoicingDto(whole?.MinInvoiceNo, whole?.MaxInvoiceNo, types,
-            types.Length == 0 || whole is null ? null : new HisInvoiceTypeCount(null, "", whole.Invoices, whole.Encounters, whole.Patients, whole.Refunded ?? 0m, whole.Revenue ?? 0m));
+            types.Length == 0 || whole is null ? null : new HisInvoiceTypeCount(null, "", whole.Invoices, whole.Encounters, whole.Patients, whole.Refunded, whole.Revenue));
     }
 
     // ═══ No-billable: invoice lines the period counts that carry no price, by procedure type ═══
@@ -170,6 +161,14 @@ public sealed partial class ReadQueries
     }
 
     /// <summary>INV-2-7-1 and REV-2-7-1 are the same invoice line, so a service counts when its revenue line does.</summary>
+    /// <summary>How many distinct encounters each procedure was performed in, in this run (counted lines only, as the screens count them).</summary>
+    public async Task<Dictionary<Guid, int>> ProcedureEncounterCountsAsync(ScopedRun s, CancellationToken ct) =>
+        await (from es in CountedServices(s)
+               join ec in db.EncounterCosts.AsNoTracking() on es.EncounterId equals ec.EncounterId
+               where ec.RunId == s.Run.Id
+               group es.EncounterId by es.ProcedureId into g
+               select new { g.Key, N = g.Distinct().Count() }).ToDictionaryAsync(x => x.Key, x => x.N, ct);
+
     private IQueryable<EncounterService> CountedServices(ScopedRun s)
     {
         if (!FromHis(s)) return db.EncounterServices.AsNoTracking();
@@ -348,12 +347,37 @@ public sealed partial class ReadQueries
             if (notAssigned && rows.Any(x => string.IsNullOrEmpty(x.Value))) list.Insert(0, new FilterOption(NotAssigned, "Not assigned"));
             return list.ToArray();
         }
-        // One read instead of one per filter: this list is what a filtered link waits on.
-        var held = await q.Select(x => new
+        // One read instead of one per filter: this list is what a filtered link waits on. Only ids are made distinct
+        // in SQL, which is far cheaper than the names; the names come from the small lookup tables after.
+        var ids = await q.Select(x => new
         {
-            x.ServiceLineId, x.ServiceLine, x.DepartmentId, x.Department, x.ResourceId, x.Resource, x.ProviderId, x.Physician, x.PayerId, x.Payer,
-            x.InsurerId, x.InsurerName, x.DrgId, x.DrgCode, x.DrgName, x.EncType, x.Segment,
+            x.ServiceLineId, x.DepartmentId, x.ResourceId, x.ProviderId, x.PayerId, x.InsurerId, x.DrgId, x.EncType, x.Segment,
         }).Distinct().ToListAsync(ct);
+        var slIds = ids.Where(x => x.ServiceLineId != null).Select(x => x.ServiceLineId!.Value).Distinct().ToList();
+        var deptIds = ids.Select(x => x.DepartmentId).Distinct().ToList();
+        var resIds = ids.Where(x => x.ResourceId != null).Select(x => x.ResourceId!.Value).Distinct().ToList();
+        var provIds = ids.Where(x => x.ProviderId != null).Select(x => x.ProviderId!.Value).Distinct().ToList();
+        var payerIds = ids.Select(x => x.PayerId).Distinct().ToList();
+        var insIds = ids.Where(x => x.InsurerId != null).Select(x => x.InsurerId!.Value).Distinct().ToList();
+        var drgIds = ids.Where(x => x.DrgId != null).Select(x => x.DrgId!.Value).Distinct().ToList();
+        var slNames = await db.ServiceLines.AsNoTracking().Where(x => slIds.Contains(x.Id)).ToDictionaryAsync(x => x.Id, x => x.Name, ct);
+        var deptNames = await db.Departments.AsNoTracking().Where(x => deptIds.Contains(x.Id)).ToDictionaryAsync(x => x.Id, x => x.Name, ct);
+        var resNames = await db.Resources.AsNoTracking().Where(x => resIds.Contains(x.Id)).ToDictionaryAsync(x => x.Id, x => x.Name, ct);
+        var provNames = await db.Providers.AsNoTracking().Where(x => provIds.Contains(x.Id)).ToDictionaryAsync(x => x.Id, x => x.Name, ct);
+        var payerNames = await db.Payers.AsNoTracking().Where(x => payerIds.Contains(x.Id)).ToDictionaryAsync(x => x.Id, x => x.Name, ct);
+        var insNames = await db.Insurers.AsNoTracking().Where(x => insIds.Contains(x.Id)).ToDictionaryAsync(x => x.Id, x => x.Name, ct);
+        var drgNames = await db.Drgs.AsNoTracking().Where(x => drgIds.Contains(x.Id)).ToDictionaryAsync(x => x.Id, x => new { x.Code, x.Name }, ct);
+        var held = ids.Select(x => new
+        {
+            x.ServiceLineId, ServiceLine = x.ServiceLineId is { } sl ? slNames.GetValueOrDefault(sl) : null,
+            x.DepartmentId, Department = deptNames.GetValueOrDefault(x.DepartmentId) ?? "",
+            x.ResourceId, Resource = x.ResourceId is { } r ? resNames.GetValueOrDefault(r) : null,
+            x.ProviderId, Physician = x.ProviderId is { } pr ? provNames.GetValueOrDefault(pr) : null,
+            x.PayerId, Payer = payerNames.GetValueOrDefault(x.PayerId) ?? "",
+            x.InsurerId, InsurerName = x.InsurerId is { } i ? insNames.GetValueOrDefault(i) : null,
+            x.DrgId, DrgCode = x.DrgId is { } g ? drgNames.GetValueOrDefault(g)?.Code : null, DrgName = x.DrgId is { } g2 ? drgNames.GetValueOrDefault(g2)?.Name : null,
+            x.EncType, x.Segment,
+        }).ToList();
         var serviceLines = held.Select(x => new { x.ServiceLineId, x.ServiceLine }).Distinct().ToList();
         var departments = held.Select(x => new { x.DepartmentId, x.Department }).Distinct().ToList();
         // A costing-model run files encounters by each line's doctor, so its own rows are the choices.

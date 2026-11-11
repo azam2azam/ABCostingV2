@@ -164,6 +164,21 @@ public class EncounterCost
     [Precise] public decimal WeightedActivityUnits { get; set; }
 }
 
+/// <summary>The period's HIS invoice counts by invoice type, stored with the run so HIS Invoicing reads them instead of re-counting the month. InvoiceType 0 is the total.</summary>
+public class RunHisInvoicing
+{
+    public Guid Id { get; set; }
+    public Guid RunId { get; set; }
+    public int InvoiceType { get; set; }
+    public int Invoices { get; set; }
+    public int Encounters { get; set; }
+    public int Patients { get; set; }
+    public decimal Refunded { get; set; }
+    public decimal Revenue { get; set; }
+    public long? MinInvoiceNo { get; set; }
+    public long? MaxInvoiceNo { get; set; }
+}
+
 /// <summary>A costing-model run's totals by reporting dimension, prepared once so screens read them instead of re-adding the period.</summary>
 public class RunDimensionCost
 {

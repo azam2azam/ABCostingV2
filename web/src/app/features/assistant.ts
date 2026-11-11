@@ -8,6 +8,7 @@ import {
   AssistantThread, AssistantThreadDetail,
 } from '../core/api';
 import { RunContext } from '../core/context';
+import { BarRow, ChartSeries, HBars, count, countTick, sar, tickLabel } from '../shared/charts';
 import { Icon } from '../shared/icon';
 
 const LAST_THREAD = 'verita.assistant.thread';
@@ -33,7 +34,7 @@ function recall(): string | null {
  */
 @Component({
   selector: 'v-assistant',
-  imports: [FormsModule, RouterLink, Icon],
+  imports: [FormsModule, RouterLink, Icon, HBars],
   template: `
     <div class="screen" [class.list-open]="listOpen()" [class.collapsed]="collapsed()">
       <aside class="threads" aria-label="Conversations">
@@ -132,6 +133,14 @@ function recall(): string | null {
                                 <td class="num" [class.up]="(flip ? row[4] : row[3]).startsWith('+')" [class.down]="(flip ? row[4] : row[3]).startsWith('−')">{{ flip ? row[4] : row[3] }}</td></tr>
                             }</tbody>
                           </table></div>
+                        } @else if (b.type === 'chart') {
+                          @if (b.title) { <div class="btitle">{{ b.title }}</div> }
+                          <div class="chart">
+                            @if (b.columns.length > 2) {
+                              <div class="legend">@for (sr of chartSeries(b); track sr.name) { <span><i [style.background]="sr.color"></i>{{ sr.name }}</span> }</div>
+                            }
+                            <v-hbars [rows]="chartRows(b)" [series]="chartSeries(b)" [format]="chartFormat(b)" [tickFormat]="chartTick(b)" />
+                          </div>
                         } @else if (b.type === 'figures') {
                           <dl class="figs">@for (row of b.rows; track $index) { <div><dt>{{ row[0] }}</dt><dd>{{ row[1] }}</dd></div> }</dl>
                         } @else if (b.rows.length) {
@@ -139,10 +148,10 @@ function recall(): string | null {
                           <div class="tbl"><table>
                             @let nums = numericColumns(b.rows);
                             <thead><tr>@for (c of b.columns; track $index) { <th [class.num]="nums[$index]">{{ c }}</th> }</tr></thead>
-                            <tbody>@for (row of b.rows; track $index) { <tr>@for (cell of row; track $index) { <td [class.num]="nums[$index]">{{ cell }}</td> }</tr> }</tbody>
+                            <tbody>@for (row of b.rows; track $index) { <tr>@for (cell of row; track $index) { <td [class.num]="nums[$index]" [attr.data-label]="b.columns[$index]">{{ cell }}</td> }</tr> }</tbody>
                           </table></div>
                         }
-                        @if (b.note) { <div class="faint small">{{ b.note }}</div> }
+                        @if (b.note && b.type !== 'chart') { <div class="faint small">{{ b.note }}</div> }
                       }
                       @for (n of r.notes; track $index) { <div class="note">{{ n }}</div> }
                       @if (r.options.length) {
@@ -156,6 +165,14 @@ function recall(): string | null {
                       }
                       <div class="foot">
                         @if (r.run) { <span class="faint">{{ r.run }} · {{ r.runStatus }}</span> }
+                        @if (r.source) {
+                          <span class="src" [class.ai]="r.source !== 'rules'"
+                                [title]="r.source === 'ai' ? 'The rules were unsure, so the question was sent to the AI model to pick the intent. The figures come from VERITA data.'
+                                       : r.source === 'ai-cache' ? 'An earlier AI routing of this wording was reused. No API call was made.'
+                                       : 'Understood by the built-in rules. No API call was made.'">
+                            {{ r.source === 'ai' ? 'AI inference' : r.source === 'ai-cache' ? 'AI · cached' : 'Rules' }}
+                          </span>
+                        }
                         @if (m.stale) {
                           <span class="stale">A newer run exists</span>
                           <button type="button" class="mini" (click)="refresh(m)" title="Answer again from the current run" aria-label="Refresh this answer"><v-icon name="refresh" [size]="14" /></button>
@@ -253,6 +270,11 @@ function recall(): string | null {
     .as.changed { border-color: var(--accent); background: var(--accent-soft); }
     .as .x { border: 0; background: none; color: var(--text-3); cursor: pointer; padding: 0 0 0 2px; font-size: 14px; line-height: 1; }
     .as .x:hover { color: var(--bad); }
+    .chart { margin: 0 0 12px; padding: 8px 10px; background: var(--surface-2); border: 1px solid var(--border); border-radius: 10px; }
+    .src { white-space: nowrap; font-size: 11px; padding: 1px 8px; border-radius: 10px; border: 1px solid var(--border); color: var(--text-3); background: var(--surface-2); }
+    .src.ai { color: var(--accent); border-color: var(--accent); }
+    .legend { display: flex; gap: 14px; margin: 0 0 6px; font-size: 12px; color: var(--text-2); }
+    .legend i { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 5px; }
     .figs { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 8px; margin: 0 0 10px; }
     .figs div { background: var(--surface-2); border: 1px solid var(--border); border-radius: 10px; padding: 7px 10px; }
     .figs dt { font-size: 11.5px; color: var(--text-3); }
@@ -265,12 +287,23 @@ function recall(): string | null {
     .swap[aria-pressed="true"] { background: var(--accent-soft); color: var(--accent-strong); border-color: var(--accent); }
     th.num { text-align: right; }
     td.up { color: var(--text); } td.down { color: var(--text-2); }
-    .tbl { overflow-x: auto; margin: 0 0 10px; border: 1px solid var(--border); border-radius: 10px; }
-    table { border-collapse: collapse; width: 100%; font-size: 12.5px; }
-    th, td { padding: 6px 10px; border-bottom: 1px solid var(--border); text-align: left; white-space: nowrap; }
+    .tbl { container-type: inline-size; overflow: hidden; margin: 0 0 10px; border: 1px solid var(--border); border-radius: 10px; }
+    table { border-collapse: collapse; width: 100%; font-size: 12.5px; table-layout: auto; }
+    th, td { padding: 6px 8px; border-bottom: 1px solid var(--border); text-align: left; white-space: normal; overflow-wrap: break-word; vertical-align: top; }
     th { color: var(--text-3); font-weight: 600; background: var(--surface-2); }
-    td.num { text-align: right; font-variant-numeric: tabular-nums; }
+    td.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; overflow-wrap: normal; }
+    th.num { text-align: right; }
     tr:last-child td { border-bottom: 0; }
+    /* A narrow answer shows each row as a small card of label and value pairs, so nothing needs to scroll sideways. */
+    @container (max-width: 560px) {
+      table, tbody, tr, td { display: block; width: 100%; }
+      thead { display: none; }
+      tr { padding: 7px 10px; border-bottom: 1px solid var(--border); }
+      tr:last-child { border-bottom: 0; }
+      td { border: 0; padding: 1px 0; display: flex; justify-content: space-between; gap: 14px; text-align: right; }
+      td::before { content: attr(data-label); color: var(--text-3); text-align: left; flex: none; }
+      td:not([data-label])::before { content: none; }
+    }
     .steps { margin: 0 0 10px; padding-left: 22px; line-height: 1.55; }
     .steps li { margin: 3px 0; }
     .steps.check { list-style: none; padding-left: 4px; }
@@ -590,6 +623,21 @@ export class AssistantPage {
   }
   toggleWhy(id: string): void { this.why.set(this.why() === id ? null : id); }
   pct(v: number): string { return `${Math.round(v * 100)}%`; }
+
+  private static readonly COLOURS = ['var(--chart-1)', 'var(--chart-2)', 'var(--chart-3)', 'var(--chart-4)'];
+  /** A chart block's rows: label first, then one raw number per series. */
+  chartRows(b: any): BarRow[] {
+    return (b.rows as string[][]).map((r, i) => ({ key: `${i}`, label: r[0], values: r.slice(1).map(v => Number(v)) }));
+  }
+  chartSeries(b: any): ChartSeries[] {
+    return (b.columns as string[]).slice(1).map((name, i) => ({ name, color: AssistantPage.COLOURS[i % AssistantPage.COLOURS.length] }));
+  }
+  chartFormat(b: any): (v: number) => string {
+    return b.note === 'pct' ? (v: number) => `${v.toFixed(1)}%` : b.note === 'count' ? count : sar;
+  }
+  chartTick(b: any): (v: number) => string {
+    return b.note === 'pct' ? (v: number) => `${v}%` : b.note === 'count' ? countTick : tickLabel;
+  }
   /**
    * A column is numeric when its filled cells are numbers, money, percentages or signed changes
    * ("SAR 1,234.00", "−56,929 (−78.0%)", "14.3%"); its header and every cell then align right.

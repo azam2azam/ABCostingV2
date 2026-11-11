@@ -43,7 +43,7 @@ export interface DepartmentRow {
       <v-state [loading]="res.isLoading()" [error]="res.error()">
         @if (res.value()) {
           <v-list-search [(query)]="search" placeholder="Search by name or code" />
-          <v-table [rows]="filtered()" [columns]="cols()" sortBy="name" caption="Departments"
+          <v-table [rows]="filtered()" [columns]="cols()" sortBy="cases" caption="Departments"
             [empty]="search().trim() ? 'No departments match this search.' : 'No departments in the catalogue for this hospital.'" />
         }
       </v-state>
@@ -57,7 +57,7 @@ export class Departments {
   filtered = computed(() => (this.res.value()?.data ?? []).filter(r => matchesNameOrCode(this.search(), r.name, r.code)));
   cols = computed<Col<DepartmentRow>[]>(() => {
     const cols: Col<DepartmentRow>[] = [
-      { key: 'code', label: 'Code', value: r => localCode(r.code) },
+      { key: 'code', label: 'Code', value: r => localCode(r.code), minWidth: '9rem' },
       { key: 'name', label: 'Name' },
       { key: 'deptType', label: 'Type' },
       { key: 'specialty', label: 'Specialty' },
