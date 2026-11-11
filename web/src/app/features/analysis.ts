@@ -127,7 +127,7 @@ export class DataQuality {
           <div class="row" style="margin-top:10px">
             <button class="btn" type="button" [disabled]="page() <= 1" (click)="page.set(page() - 1)">Previous</button>
             <span class="muted">Page {{ r.page }} · {{ r.total }} entries</span>
-            <button class="btn" type="button" [disabled]="page() * 50 >= r.total" (click)="page.set(page() + 1)">Next</button>
+            <button class="btn" type="button" [disabled]="page() * 20 >= r.total" (click)="page.set(page() + 1)">Next</button>
           </div>
         }
       </v-state>
@@ -139,7 +139,7 @@ export class Audit {
   action = signal('');
   entityType = signal('');
   actor = signal('');
-  res = apiResource<AuditPage>(() => 'audit', () => ({ page: this.page(), pageSize: 50, action: this.action(), entityType: this.entityType(), actor: this.actor() }));
+  res = apiResource<AuditPage>(() => 'audit', () => ({ page: this.page(), pageSize: 20, action: this.action(), entityType: this.entityType(), actor: this.actor() }));
   cols: Col<AuditPage['rows'][number]>[] = [
     { key: 'at', label: 'When', value: r => String(r.at).replace('T', ' ').slice(0, 19), sortable: false },
     { key: 'actorEmail', label: 'Actor', sortable: false }, { key: 'action', label: 'Action', type: 'chip', sortable: false },

@@ -260,7 +260,7 @@ export class DataEntry {
   selected = signal<EntityDescription | null>(null);
   search = signal('');
   page = signal(1);
-  pageSize = 100;
+  pageSize = 20;
   rows = apiResource<RowPage>(() => this.selected() ? `data/${this.selected()!.name}` : null,
     () => ({ search: this.search(), page: this.page(), pageSize: this.pageSize }));
   editing = signal(false);

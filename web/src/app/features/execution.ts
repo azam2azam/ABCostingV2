@@ -1,5 +1,5 @@
 import { NgTemplateOutlet } from '@angular/common';
-import { Component, Injector, afterNextRender, computed, effect, inject, input, signal, untracked } from '@angular/core';
+import { Component, Injector, afterNextRender, computed, effect, inject, input, linkedSignal, signal, untracked } from '@angular/core';
 import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
 import { FormsModule } from '@angular/forms';
 import { ActivatedRoute, ParamMap, Params, Router, RouterLink } from '@angular/router';
@@ -2032,20 +2032,21 @@ export class HisInvoicing {
         }
         <button class="btn clear" type="button" (click)="clearFilters()" [disabled]="!anyFilter()">Clear filters</button>
       </section>
-      <div class="row" style="margin-bottom:10px">
-        <input type="search" placeholder="Encounter number or MRN" [value]="search()" (change)="runSearch($any($event.target).value)" (paste)="searchPasted($event)" aria-label="Search by encounter number or MRN" style="width:min(16rem,100%)" />
-      </div>
-      <v-state [loading]="res.isLoading() && !res.value()" [error]="res.error()">
-        @if (res.value(); as r) {
-          <div class="list-head">
-            @if (r.data.phiMasked) { <p class="faint">Patient names are hidden for your role.</p> }
-            <div class="row pager">
-              <button class="btn" type="button" [disabled]="page() <= 1" (click)="page.set(page() - 1)">Previous</button>
-              <span class="muted">Page {{ r.data.page }} of {{ pages() }} · {{ r.data.total }} encounters</span>
-              <button class="btn" type="button" [disabled]="page() >= pages()" (click)="page.set(page() + 1)">Next</button>
-            </div>
+      <div class="list-head">
+        <input type="search" placeholder="Encounter number or MRN" [value]="search()" (change)="runSearch($any($event.target).value)" (input)="searchCleared($any($event.target).value)" (paste)="searchPasted($event)" aria-label="Search by encounter number or MRN" style="width:min(16rem,100%)" />
+        @if (last(); as r) {
+          <div class="row pager">
+            <button class="btn" type="button" [disabled]="page() <= 1" (click)="page.set(page() - 1)">Previous</button>
+            <span class="muted">Page {{ r.data.page }} of {{ pages() }} · {{ r.data.total }} encounters</span>
+            <button class="btn" type="button" [disabled]="page() >= pages()" (click)="page.set(page() + 1)">Next</button>
           </div>
-          <v-table [rows]="r.data.rows" [columns]="cols()" [serverSort]="tableSort()" (sortChange)="sortFromHeader($event)" caption="Patient encounters" empty="No encounters in this period." />
+        }
+      </div>
+      <v-state [loading]="res.isLoading() && !last()" [error]="res.error()">
+        @if (last(); as r) {
+          <div [class.reloading]="res.isLoading()">
+            <v-table [rows]="r.data.rows" [columns]="cols()" [serverSort]="tableSort()" (sortChange)="sortFromHeader($event)" caption="Patient encounters" empty="No encounters in this period." />
+          </div>
         }
       </v-state>
     </v-page>
@@ -2058,6 +2059,7 @@ export class HisInvoicing {
     .list-head { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 12px; margin-bottom: 10px; }
     .list-head p { margin: 0; }
     .pager { margin-left: auto; }
+    .reloading { opacity: .6; transition: opacity .15s; }
   `,
 })
 export class PatientEncounters {
@@ -2130,10 +2132,15 @@ export class PatientEncounters {
     });
   }
   res = catalogueResource<PatientEncounterPage>(() => 'patient-encounters', () => ({
-    page: this.page(), pageSize: 50, search: this.search(), sort: this.sort(), desc: this.desc(),
+    page: this.page(), pageSize: 20, search: this.search(), sort: this.sort(), desc: this.desc(),
     billedPackageId: this.billedPackageId(), ...this.filters(),
   }));
-  pages = computed(() => Math.max(1, Math.ceil((this.res.value()?.data.total ?? 0) / 50)));
+  /** The last page loaded: kept on screen while the next page, search, sort or filter loads, so only the table dims. */
+  last = linkedSignal<Envelope<PatientEncounterPage> | undefined, Envelope<PatientEncounterPage> | undefined>({
+    source: this.res.value,
+    computation: (next, prev) => next ?? (this.res.error() ? undefined : prev?.value),
+  });
+  pages = computed(() => Math.max(1, Math.ceil((this.last()?.data.total ?? 0) / 20)));
   canRevenue = computed(() => this.auth.can('revenue.view'));
   /** The list is paged on the server, so headers ask the server to sort all of it. */
   tableSort = computed(() => ({ key: this.sort(), desc: this.desc() }));
@@ -2142,6 +2149,10 @@ export class PatientEncounters {
     this.page.set(1);
   }
   /** A paste searches straight away; the box only holds the pasted text on the next tick. */
+  /** Emptying the box (typing it away or its clear button) drops the search at once, without waiting for Enter or blur. */
+  searchCleared(value: string): void {
+    if (!value.trim() && this.search()) this.runSearch('');
+  }
   searchPasted(event: Event): void {
     const box = event.target as HTMLInputElement;
     setTimeout(() => this.runSearch(box.value));

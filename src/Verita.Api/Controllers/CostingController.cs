@@ -91,7 +91,12 @@ public sealed class CostingController : VeritaController
 
     [HttpGet("procedures")]
     [Authorize(Policy = "costing.view")]
-    public async Task<Envelope<ProcedureRow[]>> Procedures(CancellationToken ct) { var (p, s) = await CatalogueScoped(); return Wrap(s, await Q.ProcedureListAsync(s, p, ct)); }
+    public async Task<Envelope<CataloguePage<ProcedureRow>>> Procedures([FromQuery] string? search = null, [FromQuery] string? type = null,
+        [FromQuery] string sort = "volume", [FromQuery] bool desc = true, [FromQuery] int page = 1, [FromQuery] int pageSize = 20, CancellationToken ct = default)
+    {
+        var (p, s) = await CatalogueScoped();
+        return Wrap(s, await Q.ProcedurePageAsync(s, p, new CatalogueListQuery { Search = search, Type = type, Sort = sort, Desc = desc, Page = page, PageSize = pageSize }, ct));
+    }
 
     /// <summary>The cost explainer — the primary acceptance test rendered (BRD 23.1).</summary>
     [HttpGet("procedures/{id:guid}")]
@@ -118,7 +123,12 @@ public sealed class CostingController : VeritaController
 
     [HttpGet("packages")]
     [Authorize(Policy = "costing.view")]
-    public async Task<Envelope<PackageRow[]>> Packages(CancellationToken ct) { var (p, s) = await CatalogueScoped(); return Wrap(s, await Q.PackagesAsync(s, p, ct)); }
+    public async Task<Envelope<CataloguePage<PackageRow>>> Packages([FromQuery] string? search = null, [FromQuery] string? type = null,
+        [FromQuery] string sort = "cases", [FromQuery] bool desc = true, [FromQuery] int page = 1, [FromQuery] int pageSize = 20, CancellationToken ct = default)
+    {
+        var (p, s) = await CatalogueScoped();
+        return Wrap(s, await Q.PackagePageAsync(s, p, new CatalogueListQuery { Search = search, Type = type, Sort = sort, Desc = desc, Page = page, PageSize = pageSize }, ct));
+    }
 
     [HttpGet("packages/{id:guid}")]
     [Authorize(Policy = "costing.view")]

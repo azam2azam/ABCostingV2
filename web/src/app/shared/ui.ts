@@ -1,5 +1,5 @@
 import { NgTemplateOutlet } from '@angular/common';
-import { Component, ElementRef, booleanAttribute, Pipe, PipeTransform, TemplateRef, computed, contentChild, inject, input, model, output, signal } from '@angular/core';
+import { Component, ElementRef, booleanAttribute, Pipe, PipeTransform, TemplateRef, computed, contentChild, effect, inject, input, model, output, signal } from '@angular/core';
 import { RouterLink } from '@angular/router';
 import { Direction, compareDec, directionClass, formatDec, formatMoney } from '../core/decimal';
 import { Icon } from './icon';
@@ -225,12 +225,22 @@ export interface Col<T = any> {
 /**
  * Tables are the primary instrument (NG-8): readable dense typography with the expression under
  * each row. Master-data lists sort client-side (NG-9); every linked figure opens its source.
- * Rows render in pages of 100 so very long lists stay responsive.
+ * Rows render in pages of 20 so very long lists stay responsive.
  */
 @Component({
   selector: 'v-table',
   imports: [RouterLink, Chip, Bar, Icon, NgTemplateOutlet, ...PIPES],
   template: `
+    @if (paged()) {
+      <div class="row list-bar">
+        <ng-content select="[toolbar]" />
+        <div class="row pager">
+          <button class="btn" type="button" [disabled]="curPage() <= 1" (click)="page.set(curPage() - 1)">Previous</button>
+          <span class="muted">Page {{ curPage() }} of {{ pages() }} · {{ rangeText() }}</span>
+          <button class="btn" type="button" [disabled]="curPage() >= pages()" (click)="page.set(curPage() + 1)">Next</button>
+        </div>
+      </div>
+    }
     <div class="table-wrap">
       <table class="data">
         <caption class="sr-only">{{ caption() }}</caption>
@@ -304,7 +314,7 @@ export interface Col<T = any> {
         </tbody>
       </table>
     </div>
-    @if (sorted().length > limit()) {
+    @if (!paged() && sorted().length > limit()) {
       <p class="faint more">Showing {{ limit() }} of {{ sorted().length }} rows. <button class="btn" type="button" (click)="limit.set(limit() + pageSize())">Show {{ pageSize() }} more</button></p>
     }
     <ng-template #linked let-c="c" let-r="r" let-text="text">
@@ -314,6 +324,8 @@ export interface Col<T = any> {
   `,
   styles: `.sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
            .more { margin-top: 8px; }
+           .list-bar { justify-content: space-between; margin: 0 0 10px; }
+           .pager { margin-left: auto; }
            button.icon-only { padding: 4px; width: 28px; height: 28px; justify-content: center; border-radius: 8px; }
            button.icon-only v-icon { transition: transform .15s; }
            button.icon-only[aria-expanded] v-icon { transform: rotate(-90deg); }
@@ -332,10 +344,14 @@ export class Table {
   /** For a list the server sorts and pages: the current sort. Header clicks only ask for a new one. */
   serverSort = input<{ key: string; desc: boolean } | null>(null);
   sortChange = output<{ key: string; desc: boolean }>();
-  pageSize = input(100);
+  pageSize = input(20);
+  /** Previous/Next pages above the table (top right) instead of "Show more" below it. */
+  paged = input(false, { transform: booleanAttribute });
+  page = signal(1);
+  private resetPage = effect(() => { this.rows(); this.page.set(1); });
   sortKey = signal<string | null>(null);
   desc = signal(true);
-  limit = signal(100);
+  limit = signal(20);
   rowClick = output<any>();
   expandTpl = contentChild<TemplateRef<{ $implicit: any }>>('expand');
   private host = inject(ElementRef<HTMLElement>);
@@ -370,7 +386,19 @@ export class Table {
     });
     return rows;
   });
-  visible = computed(() => this.sorted().slice(0, this.limit()));
+  pages = computed(() => Math.max(1, Math.ceil(this.sorted().length / this.pageSize())));
+  curPage = computed(() => Math.min(this.page(), this.pages()));
+  rangeText = computed(() => {
+    const n = this.sorted().length;
+    if (!n) return '0 rows';
+    const from = (this.curPage() - 1) * this.pageSize() + 1;
+    return `${from}–${Math.min(from + this.pageSize() - 1, n)} of ${n}`;
+  });
+  visible = computed(() => {
+    if (!this.paged()) return this.sorted().slice(0, this.limit());
+    const start = (this.curPage() - 1) * this.pageSize();
+    return this.sorted().slice(start, start + this.pageSize());
+  });
 
   rowExpanded(r: any): boolean { return this.columns().some(c => !!c.expanded?.(r)); }
   isNum(c: Col): boolean { return c.type === 'money' || c.type === 'num' || c.type === 'pct'; }
@@ -399,12 +427,15 @@ export function typeLabel(type: string): string {
   return type.replace(/_/g, ' ').toLowerCase().replace(/\b\w/g, c => c.toUpperCase());
 }
 
+/** Type tile counts for a whole list, as the server works them out (the list itself arrives a page at a time). */
+export interface TypeCounts { all: number; zeroPrice: number | null; types: { type: string; count: number }[] }
+
 @Component({
   selector: 'v-type-tiles',
   template: `
     <div class="type-tiles" role="group" aria-label="Filter by type">
       <button type="button" class="type-tile" [class.on]="!selected()" (click)="selected.set(null)">
-        All ({{ total() }})
+        All ({{ counts()?.all ?? 0 }})
       </button>
       @for (t of tiles(); track t.type) {
         <button type="button" class="type-tile" [class.on]="selected() === t.type"
@@ -412,10 +443,10 @@ export function typeLabel(type: string): string {
           {{ t.label }} ({{ t.count }})
         </button>
       }
-      @if (zeroPriceTile()) {
+      @if (counts()?.zeroPrice != null) {
         <button type="button" class="type-tile" [class.on]="selected() === 'ZERO_PRICE'"
           [attr.aria-pressed]="selected() === 'ZERO_PRICE'" (click)="toggle('ZERO_PRICE')">
-          Zero Price ({{ zeroPriceCount() }})
+          Zero Price ({{ counts()?.zeroPrice }})
         </button>
       }
     </div>
@@ -428,35 +459,12 @@ export function typeLabel(type: string): string {
            .type-tile.on { border-color: var(--accent); background: var(--accent-soft); color: var(--accent-strong); }`,
 })
 export class TypeTiles {
-  rows = input<{ procType?: string | null; category?: string | null; listPrice?: string | number | null }[]>([]);
-  /** Extra tiles keyed as `CAT:{category}` (e.g. MEDICINE SKUs that are not a procType). */
-  categoryTiles = input<string[]>([]);
-  /** Procedures/packages whose contracted list price is 0. */
-  zeroPriceTile = input(false);
+  /** A category tile arrives keyed `CAT:{category}` (e.g. MEDICINE SKUs that are not a procType). */
+  counts = input<TypeCounts | null | undefined>(null);
   selected = model<string | null>(null);
-  tiles = computed(() => {
-    const cats = new Set(this.categoryTiles().map(c => c.trim().toUpperCase()).filter(Boolean));
-    const types = new Map<string, number>();
-    const extra = new Map<string, number>();
-    const skipZero = this.zeroPriceTile();
-    for (const r of this.rows()) {
-      if (skipZero && Number(r.listPrice) === 0) continue;
-      const cat = (r.category ?? '').trim().toUpperCase();
-      if (cats.has(cat)) {
-        extra.set(cat, (extra.get(cat) ?? 0) + 1);
-        continue;
-      }
-      const t = (r.procType ?? '').trim();
-      if (t) types.set(t, (types.get(t) ?? 0) + 1);
-    }
-    const typeTiles = [...types.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
-      .map(([type, count]) => ({ type, label: typeLabel(type), count }));
-    const catTiles = [...cats].filter(c => extra.has(c))
-      .map(c => ({ type: `CAT:${c}`, label: typeLabel(c), count: extra.get(c)! }));
-    return [...typeTiles, ...catTiles];
-  });
-  zeroPriceCount = computed(() => this.rows().filter(r => Number(r.listPrice) === 0).length);
-  total = computed(() => this.zeroPriceTile() ? this.rows().length - this.zeroPriceCount() : this.rows().length);
+  tiles = computed(() => (this.counts()?.types ?? []).map(t => ({
+    type: t.type, count: t.count, label: typeLabel(t.type.startsWith('CAT:') ? t.type.slice(4) : t.type),
+  })));
   toggle(type: string): void {
     this.selected.set(this.selected() === type ? null : type);
   }
@@ -475,7 +483,8 @@ export function matchesNameOrCode(query: string, name: string | null | undefined
     <input type="search" class="list-search" [placeholder]="placeholder()" [value]="query()"
       (input)="query.set($any($event.target).value)" [attr.aria-label]="placeholder()" />
   `,
-  styles: `.list-search { display: block; width: min(28rem, 100%); margin: 0 0 14px; }`,
+  styles: `:host { display: block; flex: 1 1 16rem; max-width: 28rem; }
+           .list-search { display: block; width: 100%; margin: 0; }`,
 })
 export class ListSearch {
   query = model('');

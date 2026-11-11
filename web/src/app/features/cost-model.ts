@@ -42,9 +42,10 @@ export interface DepartmentRow {
     <v-page title="Departments" purpose="The hospital's departments from the catalogue. When a calculation has been run for the period, cases, revenue and cost are shown too.">
       <v-state [loading]="res.isLoading()" [error]="res.error()">
         @if (res.value()) {
-          <v-list-search [(query)]="search" placeholder="Search by name or code" />
-          <v-table [rows]="filtered()" [columns]="cols()" sortBy="cases" caption="Departments"
-            [empty]="search().trim() ? 'No departments match this search.' : 'No departments in the catalogue for this hospital.'" />
+          <v-table paged [rows]="filtered()" [columns]="cols()" sortBy="cases" caption="Departments"
+            [empty]="search().trim() ? 'No departments match this search.' : 'No departments in the catalogue for this hospital.'">
+            <v-list-search toolbar [(query)]="search" placeholder="Search by name or code" />
+          </v-table>
         }
       </v-state>
     </v-page>
@@ -87,8 +88,9 @@ export class Departments {
     <v-page title="Cost centres" purpose="Where ledger money lands and where it goes next. Support and overhead centres close at zero after step-down.">
       <v-state [loading]="res.isLoading()" [error]="res.error()">
         @if (res.value()) {
-          <v-list-search [(query)]="search" placeholder="Search by name or code" />
-          <v-table [rows]="filtered()" [columns]="cols" sortBy="cases" caption="Cost centres" [empty]="search().trim() ? 'No cost centres match this search.' : 'No rows.'" />
+          <v-table paged [rows]="filtered()" [columns]="cols" sortBy="cases" caption="Cost centres" [empty]="search().trim() ? 'No cost centres match this search.' : 'No rows.'">
+            <v-list-search toolbar [(query)]="search" placeholder="Search by name or code" />
+          </v-table>
         }
       </v-state>
     </v-page>

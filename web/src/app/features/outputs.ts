@@ -1,14 +1,14 @@
-import { Component, computed, inject, input, signal } from '@angular/core';
+import { Component, computed, effect, inject, input, linkedSignal, signal, untracked } from '@angular/core';
 import { RouterLink } from '@angular/router';
 import { firstValueFrom } from 'rxjs';
 import {
-  Api, ComponentDto, PackageDetail as PackageDetailDto, PackageRow,
+  Api, ComponentDto, Envelope, PackageDetail as PackageDetailDto, PackageRow,
   ProcedureDetail as ProcedureDetailDto, ProcedureRow, RecipeLineDto,
 } from '../core/api';
 import { Auth, toApiError } from '../core/auth';
 import { RunContext } from '../core/context';
 import { catalogueResource } from '../core/resource';
-import { Col, UI, matchesNameOrCode, hisProcedureId } from '../shared/ui';
+import { Col, TypeCounts, UI, hisProcedureId } from '../shared/ui';
 
 export const componentCols: Col<ComponentDto>[] = [
   { key: 'label', label: 'Component', sub: r => r.calcExpression, link: r => r.resourceId ? `/resources/${r.resourceId}` : null },
@@ -49,53 +49,97 @@ export function recipeToComponents(
   }));
 }
 
+interface CataloguePage<T> { rows: T[]; total: number; page: number; pageSize: number; counts: TypeCounts }
+
+/**
+ * A catalogue list the server filters, sorts and pages: the browser only ever holds one page and the tile counts.
+ * Any change of tile, search or sort goes back to page 1, and so does a change of hospital or period.
+ */
+class ServerList<T> {
+  static readonly pageSize = 20;
+  private ctx = inject(RunContext);
+  readonly type = signal<string | null>(null);
+  /** What the box shows; the request follows it once typing pauses. */
+  readonly search = signal('');
+  private query = signal('');
+  readonly sort = signal('');
+  readonly desc = signal(true);
+  readonly page = signal(1);
+  readonly res = catalogueResource<CataloguePage<T>>(() => this.path, () => ({
+    search: this.query().trim(), type: this.type(), sort: this.sort(), desc: this.desc(), page: this.page(), pageSize: ServerList.pageSize,
+  }));
+  /** The last page loaded: kept on screen while the next tile, page, search or sort loads, so only the table dims. */
+  readonly last = linkedSignal<Envelope<CataloguePage<T>> | undefined, Envelope<CataloguePage<T>> | undefined>({
+    source: this.res.value,
+    computation: (next, prev) => next ?? (this.res.error() ? undefined : prev?.value),
+  });
+  readonly pages = computed(() => Math.max(1, Math.ceil((this.last()?.data.total ?? 0) / ServerList.pageSize)));
+  readonly tableSort = computed(() => ({ key: this.sort(), desc: this.desc() }));
+
+  constructor(private readonly path: string, defaultSort: string) {
+    this.sort.set(defaultSort);
+    effect(onCleanup => {
+      const text = this.search();
+      const timer = setTimeout(() => untracked(() => { if (text !== this.query()) { this.query.set(text); this.page.set(1); } }), 250);
+      onCleanup(() => clearTimeout(timer));
+    });
+    let scope: string | null = null;
+    effect(() => {
+      const next = `${this.ctx.hospitalParam()}|${this.ctx.periodParam()}`;
+      if (scope !== null && scope !== next) untracked(() => this.page.set(1));
+      scope = next;
+    });
+  }
+
+  setType(type: string | null): void { this.type.set(type); this.page.set(1); }
+  setSort(next: { key: string; desc: boolean }): void { this.sort.set(next.key); this.desc.set(next.desc); this.page.set(1); }
+  /** Showing rows from, to and of, for the pager. */
+  range(r: CataloguePage<T>): string {
+    if (!r.total) return '0 rows';
+    const from = (r.page - 1) * r.pageSize + 1;
+    return `${from}–${from + r.rows.length - 1} of ${r.total}`;
+  }
+}
+
+const LIST_BAR = `
+  <div class="row list-bar">
+  <v-list-search [query]="list.search()" (queryChange)="list.search.set($event)" placeholder="Search by name or code" />
+  <div class="row pager">
+    <button class="btn" type="button" [disabled]="list.page() <= 1" (click)="list.page.set(list.page() - 1)">Previous</button>
+    <span class="muted">Page {{ r.data.page }} of {{ list.pages() }} · {{ list.range(r.data) }}</span>
+    <button class="btn" type="button" [disabled]="r.data.page >= list.pages()" (click)="list.page.set(r.data.page + 1)">Next</button>
+  </div>
+  </div>`;
+const LIST_STYLES = `.list-bar { justify-content: space-between; margin: 0 0 10px; }
+  .pager { margin-left: auto; }
+  .reloading { opacity: .6; transition: opacity .15s; }`;
+
 @Component({
   selector: 'v-procedures',
   imports: [...UI],
   template: `
     <v-page title="Procedure/Activity" purpose="HIS procedure id, name, contracted price, and cases in this run.">
-      <v-state [loading]="res.isLoading()" [error]="res.error()">
-        @if (res.value(); as r) {
-          <v-list-search [(query)]="search" placeholder="Search by name or code" />
-          <v-type-tiles [rows]="r.data" [categoryTiles]="medicineCats" [zeroPriceTile]="true" [(selected)]="type" />
-          @for (_ of [type()]; track _) {
-            <v-table [rows]="filtered()" [columns]="cols" sortBy="volume" caption="Procedure/Activity"
-              [empty]="search().trim() ? 'No procedures match this search.' : 'No rows.'" />
-          }
+      <v-state [loading]="list.res.isLoading() && !list.last()" [error]="list.res.error()">
+        @if (list.last(); as r) {
+          <v-type-tiles [counts]="r.data.counts" [selected]="list.type()" (selectedChange)="list.setType($event)" />
+          ${LIST_BAR}
+          <div [class.reloading]="list.res.isLoading()">
+            <v-table [rows]="r.data.rows" [columns]="cols" [serverSort]="list.tableSort()" (sortChange)="list.setSort($event)" caption="Procedure/Activity"
+              [empty]="list.search().trim() ? 'No procedures match this search.' : 'No rows.'" />
+          </div>
         }
       </v-state>
     </v-page>
   `,
+  styles: LIST_STYLES,
 })
 export class Procedures {
-  medicineCats = ['MEDICINE'];
-  type = signal<string | null>(null);
-  search = signal('');
-  res = catalogueResource<ProcedureRow[]>(() => 'procedures');
+  list = new ServerList<ProcedureRow>('procedures', 'volume');
   private auth = inject(Auth);
   /** Only a run holds actual revenue, and a role without revenue.view reads it as 0. */
   private inLoss(r: { revenue: string; totalCost: string }): boolean {
-    return !!this.res.value()?.meta.run && this.auth.can('revenue.view') && Number(r.totalCost) > Number(r.revenue);
+    return !!this.list.last()?.meta.run && this.auth.can('revenue.view') && Number(r.totalCost) > Number(r.revenue);
   }
-  filtered = computed(() => {
-    const all = this.res.value()?.data ?? [];
-    // A search looks through everything, whichever type tile is selected.
-    if (this.search().trim()) return all.filter(x => matchesNameOrCode(this.search(), x.name, x.code));
-    const t = this.type();
-    let rows: ProcedureRow[];
-    if (t === 'ZERO_PRICE') rows = all.filter(x => Number(x.listPrice) === 0);
-    else {
-      const priced = all.filter(x => Number(x.listPrice) !== 0);
-      if (!t) rows = priced;
-      else if (t.startsWith('CAT:')) {
-        const cat = t.slice(4);
-        rows = priced.filter(x => (x.category ?? '').toUpperCase() === cat);
-      } else {
-        rows = priced.filter(x => x.procType === t && (x.category ?? '').toUpperCase() !== 'MEDICINE');
-      }
-    }
-    return rows;
-  });
   cols: Col<ProcedureRow>[] = [
     { key: 'code', label: 'Id', value: r => hisProcedureId(r.code), link: r => `/procedures/${r.id}` },
     { key: 'name', label: 'Name' },
@@ -213,38 +257,30 @@ export class ProcedureDetail {
   imports: [...UI],
   template: `
     <v-page title="Packages" purpose="HIS package id, name, contracted price, and cases in this run.">
-      <v-state [loading]="res.isLoading()" [error]="res.error()">
-        @if (res.value(); as r) {
+      <v-state [loading]="list.res.isLoading() && !list.last()" [error]="list.res.error()">
+        @if (list.last(); as r) {
           @if (!r.meta.run && r.meta.costingVersion) {
             <p class="notice">No calculation run for {{ r.meta.period }}. Costs are estimated from costing model {{ r.meta.costingVersion }} ({{ r.meta.costingVersionStatus }}): Package Costing where set, otherwise the package's composition.</p>
           }
-          <v-list-search [(query)]="search" placeholder="Search by name or code" />
-          <v-type-tiles [rows]="r.data" [(selected)]="type" />
-          @for (_ of [type()]; track _) {
-            <v-table [rows]="filtered()" [columns]="cols" sortBy="cases" caption="Packages"
-              [empty]="search().trim() ? 'No packages match this search.' : 'No rows.'" />
-          }
+          <v-type-tiles [counts]="r.data.counts" [selected]="list.type()" (selectedChange)="list.setType($event)" />
+          ${LIST_BAR}
+          <div [class.reloading]="list.res.isLoading()">
+            <v-table [rows]="r.data.rows" [columns]="cols" [serverSort]="list.tableSort()" (sortChange)="list.setSort($event)" caption="Packages"
+              [empty]="list.search().trim() ? 'No packages match this search.' : 'No rows.'" />
+          </div>
         }
       </v-state>
     </v-page>
   `,
+  styles: LIST_STYLES,
 })
 export class Packages {
-  type = signal<string | null>(null);
-  search = signal('');
-  res = catalogueResource<PackageRow[]>(() => 'packages');
+  list = new ServerList<PackageRow>('packages', 'cases');
   private auth = inject(Auth);
   /** Only a run holds actual revenue, and a role without revenue.view reads it as 0. */
   private inLoss(r: { revenue: string; totalCost: string }): boolean {
-    return !!this.res.value()?.meta.run && this.auth.can('revenue.view') && Number(r.totalCost) > Number(r.revenue);
+    return !!this.list.last()?.meta.run && this.auth.can('revenue.view') && Number(r.totalCost) > Number(r.revenue);
   }
-  filtered = computed(() => {
-    const all = this.res.value()?.data ?? [];
-    // A search looks through everything, whichever type tile is selected.
-    if (this.search().trim()) return all.filter(x => matchesNameOrCode(this.search(), x.name, x.code));
-    const t = this.type();
-    return t ? all.filter(x => x.procType === t) : all;
-  });
   cols: Col<PackageRow>[] = [
     { key: 'code', label: 'Id', value: r => hisProcedureId(r.code), link: r => `/packages/${r.id}` },
     { key: 'name', label: 'Name' },
