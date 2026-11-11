@@ -26,6 +26,35 @@ public sealed partial class ReadQueries
     private bool DeptAllowed(Principal p, Dictionary<Guid, string> deptCodes, Guid deptId) =>
         p.AllDepartments || (deptCodes.TryGetValue(deptId, out var code) && p.HasDepartment(code));
 
+    // ═══ Departments ═════════════════════════════════════════════════════════════════
+
+    /// <summary>Catalogue departments for the hospital. A run, when present, adds cases/revenue/cost.</summary>
+    public sealed record DepartmentRow(Guid Id, string Code, string Name, string DeptType, string? Specialty, string? ServiceLine,
+        int CostCentres, int Cases, decimal Revenue, decimal Cost);
+
+    public async Task<DepartmentRow[]> DepartmentsAsync(ScopedRun s, Principal p, CancellationToken ct)
+    {
+        var depts = await db.Departments.AsNoTracking().Where(d => d.HospitalId == s.Hospital.Id).OrderBy(d => d.Code).ToListAsync(ct);
+        var deptCodes = depts.ToDictionary(d => d.Id, d => d.CatalogCode);
+        var lines = await db.ServiceLines.AsNoTracking().ToDictionaryAsync(l => l.Id, l => l.Name, ct);
+        var ccCounts = await db.CostCenters.AsNoTracking().Where(c => c.HospitalId == s.Hospital.Id)
+            .GroupBy(c => c.DepartmentId).Select(g => new { g.Key, N = g.Count() }).ToDictionaryAsync(x => x.Key, x => x.N, ct);
+        var showRevenue = p.Can("revenue.view");
+        var figures = await db.RunDimensionCosts.AsNoTracking()
+            .Where(x => x.RunId == s.Run.Id && x.Dimension == "department" && x.Key != "")
+            .ToDictionaryAsync(x => x.Key, ct);
+        return depts.Where(d => DeptAllowed(p, deptCodes, d.Id)).Select(d =>
+        {
+            figures.TryGetValue(d.Id.ToString(), out var f);
+            return new DepartmentRow(d.Id, d.Code, d.Name, d.DeptType, d.Specialty,
+                d.ServiceLineId is { } sl ? lines.GetValueOrDefault(sl) : null,
+                ccCounts.GetValueOrDefault(d.Id),
+                f?.Encounters ?? 0,
+                showRevenue ? f?.Revenue ?? 0m : 0m,
+                f?.TotalCost ?? 0m);
+        }).ToArray();
+    }
+
     // ═══ Cost centres ════════════════════════════════════════════════════════════════
 
     public sealed record CostCentreRow(Guid Id, string Code, string Name, string CcType, int StepDownSeq, string Department, string? Facility,

@@ -88,7 +88,7 @@ public static class Security
             new("er-dashboard", "ER Dashboard", "dashboard.view", "Emergency (ER) cost, revenue and margin for one costed run — limited to ER encounters."),
         ]),
         new("Catalogue", [
-            new("departments", "Departments", "costing.view", "Cost, revenue and margin by department for the selected hospital and period — the same figures as Summary's Department section."),
+            new("departments", "Departments", "costing.view", "The hospital's departments from the catalogue. When a calculation has been run for the period, cases, revenue and cost are shown too."),
             new("cost-centres", "Cost Centres", "masterdata.view", "The financial units money lands in, their step-down sequence and their closing balances."),
             new("packages", "Packages", "costing.view", "Bundled episodes: cost, revenue, variance and margin against the contracted price."),
             new("procedures", "Procedure/Activity", "costing.view", "Standard and actual cost per procedure/activity, fully decomposed into its cost components."),

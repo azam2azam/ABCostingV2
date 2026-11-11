@@ -43,6 +43,10 @@ public sealed class CostingController : VeritaController
     [Authorize(Policy = "costing.view")]
     public async Task<Envelope<CapacityDto>> Capacity(CancellationToken ct) { var (p, s) = await Scoped(); return Wrap(s, await Q.CapacityAsync(s, p, ct)); }
 
+    [HttpGet("departments")]
+    [Authorize(Policy = "costing.view")]
+    public async Task<Envelope<DepartmentRow[]>> Departments(CancellationToken ct) { var (p, s) = await CatalogueScoped(); return Wrap(s, await Q.DepartmentsAsync(s, p, ct)); }
+
     [HttpGet("cost-centres")]
     [Authorize(Policy = "masterdata.view")]
     public async Task<Envelope<CostCentreRow[]>> CostCentres(CancellationToken ct) { var (p, s) = await CatalogueScoped(); return Wrap(s, await Q.CostCentresAsync(s, p, ct)); }
