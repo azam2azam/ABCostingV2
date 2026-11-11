@@ -218,6 +218,8 @@ export interface Col<T = any> {
   expanded?: (r: T) => boolean;
   onButton?: (r: T) => void;
   sortable?: boolean;
+  /** Minimum column width, e.g. '9rem'. */
+  minWidth?: string;
 }
 
 /**
@@ -235,7 +237,7 @@ export interface Col<T = any> {
         <thead>
           <tr>
             @for (c of columns(); track c.key) {
-              <th scope="col" [class.num]="isNum(c)" [attr.aria-sort]="activeSort() === c.key ? (activeDesc() ? 'descending' : 'ascending') : null">
+              <th scope="col" [class.num]="isNum(c)" [style.min-width]="c.minWidth ?? null" [attr.aria-sort]="activeSort() === c.key ? (activeDesc() ? 'descending' : 'ascending') : null">
                 @if (c.sortable !== false) {
                   <button type="button" (click)="sort(c)">{{ c.label }}{{ activeSort() === c.key ? (activeDesc() ? ' ▾' : ' ▴') : '' }}</button>
                 } @else { {{ c.label }} }

@@ -48,13 +48,14 @@ public sealed partial class ReadQueries
         return (await ProceduresAsync(s, p, ct)).Where(x => !packages.Contains(x.Code)).ToArray();
     }
 
-    public async Task<ProcedureRow[]> ProceduresAsync(ScopedRun s, Principal p, CancellationToken ct)
+    /// <summary>The hospital's procedures, or only <paramref name="only"/> when a detail screen needs one row.</summary>
+    public async Task<ProcedureRow[]> ProceduresAsync(ScopedRun s, Principal p, CancellationToken ct, Guid? only = null)
     {
         var depts = await db.Departments.AsNoTracking().ToDictionaryAsync(d => d.Id, ct);
         var deptCodes = depts.ToDictionary(d => d.Key, d => d.Value.CatalogCode);
         var sls = await db.ServiceLines.AsNoTracking().ToDictionaryAsync(x => x.Id, x => x.Name, ct);
-        var costs = (await db.ProcedureCosts.AsNoTracking().Where(c => c.RunId == s.Run.Id).ToListAsync(ct)).ToLookup(c => c.ProcedureId);
-        var prices = (await db.ProcedureRates.AsNoTracking().Where(r => r.HospitalId == s.Hospital.Id).ToListAsync(ct)).Where(r => r.IsEffective(s.Period.EndDate))
+        var costs = (await db.ProcedureCosts.AsNoTracking().Where(c => c.RunId == s.Run.Id && (only == null || c.ProcedureId == only)).ToListAsync(ct)).ToLookup(c => c.ProcedureId);
+        var prices = (await db.ProcedureRates.AsNoTracking().Where(r => r.HospitalId == s.Hospital.Id && (only == null || r.ProcedureId == only)).ToListAsync(ct)).Where(r => r.IsEffective(s.Period.EndDate))
             .GroupBy(r => r.ProcedureId).ToDictionary(g => g.Key, g => g.First().ListPrice);
         // With a run, cost is what the run stored. Only a period with no run works it out from the costing model.
         var hasRun = s.Run.Id != Guid.Empty;
@@ -70,7 +71,7 @@ public sealed partial class ReadQueries
             if (typeMargins.TryGetValue(type, out var typePct)) return typePct;
             return typeMargins.GetValueOrDefault(ProcedureTypeAll);
         }
-        return (await db.Procedures.AsNoTracking().Where(x => x.HospitalId == s.Hospital.Id).OrderBy(x => x.Code).ToListAsync(ct))
+        return (await db.Procedures.AsNoTracking().Where(x => x.HospitalId == s.Hospital.Id && (only == null || x.Id == only)).OrderBy(x => x.Code).ToListAsync(ct))
             .Where(x => DeptAllowed(p, deptCodes, x.DepartmentId))
             .Select(x =>
             {
@@ -92,7 +93,7 @@ public sealed partial class ReadQueries
 
     public async Task<ProcedureDetail> ProcedureAsync(ScopedRun s, Principal p, Guid id, CancellationToken ct)
     {
-        var row = (await ProceduresAsync(s, p, ct)).FirstOrDefault(x => x.Id == id) ?? throw AppError.NotFound("Procedure");
+        var row = (await ProceduresAsync(s, p, ct, id)).FirstOrDefault() ?? throw AppError.NotFound("Procedure");
         var pkgs = await (from c in db.PackageComponents.AsNoTracking()
                           join pk in db.Packages.AsNoTracking() on c.PackageId equals pk.Id
                           where c.ProcedureId == id
@@ -224,7 +225,8 @@ public sealed partial class ReadQueries
     public sealed record PackageComponentDto(Guid ProcedureId, string Procedure, decimal Quantity, decimal StandardUnit, decimal StandardLine, string Code, string Category, string ProcType, decimal Price, bool IsMedicine, decimal Cost);
     public sealed record PackageDetail(PackageRow Package, PackageComponentDto[] Components, EncounterRow[] Encounters, string Explanation, int EncounterCount, decimal? AverageEncounterFee);
 
-    public async Task<PackageRow[]> PackagesAsync(ScopedRun s, Principal p, CancellationToken ct)
+    /// <summary>The hospital's packages, or only <paramref name="only"/> when a detail screen needs one row.</summary>
+    public async Task<PackageRow[]> PackagesAsync(ScopedRun s, Principal p, CancellationToken ct, Guid? only = null)
     {
         var costs = await db.PackageCosts.AsNoTracking().Where(c => c.RunId == s.Run.Id).ToDictionaryAsync(c => c.PackageId, ct);
         var std = await db.ProcedureCosts.AsNoTracking()
@@ -257,25 +259,15 @@ public sealed partial class ReadQueries
         var runCost = await db.ProcedureCosts.AsNoTracking()
             .Where(c => c.RunId == s.Run.Id && c.CostType == "ACTUAL")
             .ToDictionaryAsync(c => c.ProcedureId, ct);
-        var (periodStart, periodEnd) = (s.Period.StartDate.ToDateTime(TimeOnly.MinValue), s.Period.EndDate.AddDays(1).ToDateTime(TimeOnly.MinValue));
-        var fromHis = FromHis(s);
-        var billed = (hasRun
-            ? await (from es in CountedServices(s)
-                     join ec in db.EncounterCosts.AsNoTracking() on es.EncounterId equals ec.EncounterId
-                     join pr in db.Procedures.AsNoTracking() on es.ProcedureId equals pr.Id
-                     join pkg in db.Packages.AsNoTracking() on new { pr.HospitalId, pr.Code } equals new { pkg.HospitalId, pkg.Code }
-                     where ec.RunId == s.Run.Id && pkg.HospitalId == s.Hospital.Id
-                     select new { pkg.Id, es.Quantity }).ToListAsync(ct)
-            : await (from es in CountedServices(s)
-                     join e in db.Encounters.AsNoTracking() on es.EncounterId equals e.Id
-                     join pr in db.Procedures.AsNoTracking() on es.ProcedureId equals pr.Id
-                     join pkg in db.Packages.AsNoTracking() on new { pr.HospitalId, pr.Code } equals new { pkg.HospitalId, pkg.Code }
-                     where e.HospitalId == s.Hospital.Id && (fromHis || (e.AdmitAt >= periodStart && e.AdmitAt < periodEnd)) && pkg.HospitalId == s.Hospital.Id
-                     select new { pkg.Id, es.Quantity }).ToListAsync(ct))
-            .GroupBy(x => x.Id)
+        // Narrow to the packages' procedures first, so the counted-line check runs on those services only.
+        var pkgIdByCode = await db.Packages.AsNoTracking().Where(x => x.HospitalId == s.Hospital.Id && (only == null || x.Id == only)).Select(x => new { x.Id, x.Code }).ToDictionaryAsync(x => x.Code, x => x.Id, ct);
+        var pkgByProc = procIdByCode.Where(kv => pkgIdByCode.ContainsKey(kv.Key)).ToDictionary(kv => kv.Value, kv => pkgIdByCode[kv.Key]);
+        var pkgProcIds = pkgByProc.Keys.ToList();
+        var billed = (await CountedLinesOfAsync(s, pkgProcIds, ct))
+            .GroupBy(x => pkgByProc[x.ProcedureId])
             .ToDictionary(g => g.Key, g => (int)Math.Round(g.Sum(x => x.Quantity), MidpointRounding.AwayFromZero));
         var showRevenue = p.Can("revenue.view");
-        return (await db.Packages.AsNoTracking().Where(x => x.HospitalId == s.Hospital.Id).OrderBy(x => x.Code).ToListAsync(ct)).Select(x =>
+        return (await db.Packages.AsNoTracking().Where(x => x.HospitalId == s.Hospital.Id && (only == null || x.Id == only)).OrderBy(x => x.Code).ToListAsync(ct)).Select(x =>
         {
             costs.TryGetValue(x.Id, out var c);
             var cases = billed.GetValueOrDefault(x.Id);
@@ -295,6 +287,42 @@ public sealed partial class ReadQueries
                 estimate, cases == 0 ? 0 : Money.R4((c?.ActualCost ?? 0) / cases), types.GetValueOrDefault(x.Code) ?? "", unit, total);
         }).ToArray();
     }
+
+    private sealed record CountedLine(Guid EncounterId, Guid ProcedureId, decimal Quantity);
+
+    /// <summary>
+    /// The period's counted service lines of these procedures: in the run's encounters when there is a run, else the
+    /// period's encounters. A HIS hospital counts a service when its invoice line counts; matching the two in memory
+    /// is far cheaper than CountedServices' SUBSTRING comparison in SQL, which cannot use an index.
+    /// </summary>
+    private async Task<List<CountedLine>> CountedLinesOfAsync(ScopedRun s, List<Guid> procIds, CancellationToken ct)
+    {
+        if (procIds.Count == 0) return [];
+        var fromHis = FromHis(s);
+        var countedKeys = fromHis
+            ? (await CountedRevenue(s)
+                .Where(r => r.ProcedureId != null && procIds.Contains(r.ProcedureId.Value))
+                .Where(r => r.RefundedAmount == null || r.NetAmount <= 0m || r.RefundedAmount < r.NetAmount)
+                .Select(r => new { r.EncounterId, r.SourceRef }).ToListAsync(ct))
+                .Select(r => (r.EncounterId, Ref: RefTail(r.SourceRef))).ToHashSet()
+            : null;
+        var (periodStart, periodEnd) = (s.Period.StartDate.ToDateTime(TimeOnly.MinValue), s.Period.EndDate.AddDays(1).ToDateTime(TimeOnly.MinValue));
+        var services = db.EncounterServices.AsNoTracking().Where(es => procIds.Contains(es.ProcedureId));
+        var rows = s.Run.Id != Guid.Empty
+            ? await (from es in services
+                     join ec in db.EncounterCosts.AsNoTracking() on es.EncounterId equals ec.EncounterId
+                     where ec.RunId == s.Run.Id
+                     select new { es.EncounterId, es.SourceRef, es.ProcedureId, es.Quantity }).ToListAsync(ct)
+            : await (from es in services
+                     join e in db.Encounters.AsNoTracking() on es.EncounterId equals e.Id
+                     where e.HospitalId == s.Hospital.Id && (fromHis || (e.AdmitAt >= periodStart && e.AdmitAt < periodEnd))
+                     select new { es.EncounterId, es.SourceRef, es.ProcedureId, es.Quantity }).ToListAsync(ct);
+        return rows.Where(x => countedKeys is null || countedKeys.Contains((x.EncounterId, RefTail(x.SourceRef))))
+            .Select(x => new CountedLine(x.EncounterId, x.ProcedureId, x.Quantity)).ToList();
+    }
+
+    /// <summary>INV-2-7-1 and REV-2-7-1 are the same invoice line: the part after the prefix matches.</summary>
+    private static string RefTail(string sourceRef) => sourceRef.Length > 4 ? sourceRef[4..] : "";
 
     public const string ProcedureTypeAll = "ALL";
     public const string ProcedureTypeMedicine = "MEDICINE";
@@ -810,7 +838,7 @@ public sealed partial class ReadQueries
 
     public async Task<PackageDetail> PackageAsync(ScopedRun s, Principal p, Guid id, CancellationToken ct)
     {
-        var row = (await PackagesAsync(s, p, ct)).FirstOrDefault(x => x.Id == id) ?? throw AppError.NotFound("Package");
+        var row = (await PackagesAsync(s, p, ct, id)).FirstOrDefault() ?? throw AppError.NotFound("Package");
         var std = await db.ProcedureCosts.AsNoTracking().Where(c => c.RunId == s.Run.Id && c.CostType == "STANDARD").ToDictionaryAsync(c => c.ProcedureId, c => c.UnitCost, ct);
         var prices = (await db.ProcedureRates.AsNoTracking().Where(r => r.HospitalId == s.Hospital.Id).ToListAsync(ct))
             .Where(r => r.IsEffective(s.Period.EndDate))
@@ -828,13 +856,35 @@ public sealed partial class ReadQueries
                 return new PackageComponentDto(x.Id, x.Name, x.Quantity, std.GetValueOrDefault(x.Id), Money.R4(std.GetValueOrDefault(x.Id) * x.Quantity), x.Code, x.Category, x.ProcType, prices.GetValueOrDefault(x.Id),
                     string.Equals(x.Category, "MEDICINE", StringComparison.OrdinalIgnoreCase), Money.R4(unit * x.Quantity));
             }).ToArray();
-        var encPage = await EncountersAsync(s, p, new EncounterQuery { BilledPackageId = id, PageSize = 1 }, ct, auditPhi: false);
+        var (encounterCount, averageFee) = await BilledEncounterFiguresAsync(s, p, id, row.Code, ct);
         var perCase = row.Cases == 0 ? 0 : (row.ActualCost - row.StandardCost) / row.Cases;
         var explanation = row.Cases == 0 ? "No cases this period."
             : Math.Abs(perCase) < 1 ? "Actual cost is in line with the standard."
             : $"Each case ran SAR {Math.Abs(perCase):N0} {(perCase > 0 ? "above" : "below")} standard across {row.Cases} cases" +
               (p.Can("revenue.view") ? $"; the contracted price of SAR {row.Price:N0} {(row.ActualPerCase > row.Price ? "no longer covers" : "still covers")} the average case." : ".");
-        return new PackageDetail(row, comps, [], explanation, encPage.Total, await AverageEncounterFeeAsync(s, id, encPage.Total, ct));
+        return new PackageDetail(row, comps, [], explanation, encounterCount, averageFee);
+    }
+
+    /// <summary>
+    /// Encounters in the run that invoiced this package, and the billed net of the package procedure divided by them.
+    /// A user limited to some departments goes through the encounter list, which applies that limit.
+    /// </summary>
+    private async Task<(int Encounters, decimal? AverageFee)> BilledEncounterFiguresAsync(ScopedRun s, Principal p, Guid packageId, string code, CancellationToken ct)
+    {
+        if (!p.AllDepartments)
+        {
+            var page = await EncountersAsync(s, p, new EncounterQuery { BilledPackageId = packageId, PageSize = 1 }, ct, auditPhi: false);
+            return (page.Total, await AverageEncounterFeeAsync(s, packageId, page.Total, ct));
+        }
+        if (s.Run.Id == Guid.Empty) return (0, null);
+        var procId = await db.Procedures.AsNoTracking().Where(x => x.HospitalId == s.Hospital.Id && x.Code == code).Select(x => (Guid?)x.Id).FirstOrDefaultAsync(ct);
+        if (procId is not { } pid) return (0, null);
+        var encounters = (await CountedLinesOfAsync(s, [pid], ct)).Select(x => x.EncounterId).ToHashSet();
+        if (encounters.Count == 0) return (0, null);
+        var net = (await CountedRevenue(s).Where(r => r.ProcedureId == pid)
+                .Select(r => new { r.EncounterId, Net = r.NetAmount - (r.RefundedAmount ?? 0m) }).ToListAsync(ct))
+            .Where(r => encounters.Contains(r.EncounterId)).Sum(r => r.Net);
+        return (encounters.Count, Money.R4(net / encounters.Count));
     }
 
     /// <summary>Billed net of this package procedure, divided by encounters in the run that invoiced it.</summary>

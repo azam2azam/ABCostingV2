@@ -54,6 +54,15 @@ if (corsOrigins.Length > 0)
         .AllowAnyMethod()));
 }
 
+// Catalogue lists (procedures, packages) run to megabytes of JSON; compressed they are a fraction of that.
+builder.Services.AddResponseCompression(o =>
+{
+    o.EnableForHttps = true;
+    o.Providers.Add<Microsoft.AspNetCore.ResponseCompression.BrotliCompressionProvider>();
+    o.Providers.Add<Microsoft.AspNetCore.ResponseCompression.GzipCompressionProvider>();
+});
+builder.Services.Configure<Microsoft.AspNetCore.ResponseCompression.BrotliCompressionProviderOptions>(o => o.Level = System.IO.Compression.CompressionLevel.Fastest);
+builder.Services.Configure<Microsoft.AspNetCore.ResponseCompression.GzipCompressionProviderOptions>(o => o.Level = System.IO.Compression.CompressionLevel.Fastest);
 builder.Services.AddControllers().AddJsonOptions(o => Json.Configure(o.JsonSerializerOptions));
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen(o =>
@@ -70,6 +79,7 @@ builder.Services.AddSwaggerGen(o =>
 
 var app = builder.Build();
 
+app.UseResponseCompression();
 if (corsOrigins.Length > 0) app.UseCors();
 app.UseMiddleware<ErrorEnvelopeMiddleware>();
 app.UseSwagger();
