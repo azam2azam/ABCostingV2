@@ -30,6 +30,7 @@ export interface DepartmentRow {
   specialty: string | null;
   serviceLine: string | null;
   costCentres: number;
+  doctors: number;
   cases: number;
   revenue: number;
   cost: number;
@@ -59,24 +60,102 @@ export class Departments {
   cols = computed<Col<DepartmentRow>[]>(() => {
     const cols: Col<DepartmentRow>[] = [
       { key: 'code', label: 'Code', value: r => localCode(r.code), minWidth: '9rem' },
-      { key: 'name', label: 'Name' },
+      { key: 'name', label: 'Name', link: r => `/departments/${r.id}` },
       { key: 'deptType', label: 'Type' },
       { key: 'specialty', label: 'Specialty' },
       { key: 'serviceLine', label: 'Service line' },
       { key: 'costCentres', label: 'Cost centres', type: 'num', dp: 0 },
+      { key: 'doctors', label: 'Doctors', type: 'num', dp: 0 },
       { key: 'cases', label: 'Cases', type: 'num', dp: 0, link: () => '/patient-encounters',
         linkParams: r => ({ department: r.id }) },
     ];
     if (this.auth.can('revenue.view')) {
       cols.push(
         { key: 'revenue', label: 'Revenue', type: 'money', dp: 0 },
-        { key: 'cost', label: 'Cost', type: 'money', dp: 0 },
+        { key: 'cost', label: 'Cost', type: 'money', dp: 0, bad: r => Number(r.cost) > Number(r.revenue) },
       );
     } else {
       cols.push({ key: 'cost', label: 'Cost', type: 'money', dp: 0 });
     }
     return cols;
   });
+}
+
+/** OpenAPI types catch up on the next api:types run. */
+type CcRow = CostCentreRow & { departmentId?: string };
+
+interface DepartmentDetailDto {
+  department: DepartmentRow;
+  costCentres: CcRow[];
+  doctors: { id: string; code: string; name: string; specialty: string; grade: string; isHome: boolean; isDefault: boolean; isDummy: boolean; cases: number }[];
+}
+
+@Component({
+  selector: 'v-department',
+  imports: [...UI],
+  template: `
+    <v-state [loading]="res.isLoading()" [error]="res.error()">
+      @if (res.value(); as r) {
+        <v-page [title]="r.data.department.name" [purpose]="purpose(r.data.department)">
+          <div class="grid tiles">
+            <v-tile label="Cases" [value]="r.data.department.cases" unit="" />
+            @if (canRevenue()) { <v-tile label="Revenue" [value]="r.data.department.revenue" /> }
+            <v-tile label="Cost" [value]="r.data.department.cost" />
+            @if (canRevenue()) {
+              <v-tile label="Margin" [value]="margin(r.data.department)" direction="higher-better" />
+              <v-tile label="Margin %" [value]="marginPct(r.data.department)" unit="%" direction="higher-better" />
+            }
+            <v-tile label="Cost centres" [value]="r.data.costCentres.length" unit="" />
+            <v-tile label="Doctors" [value]="realDoctors(r.data)" unit="" />
+          </div>
+          <section class="card" style="margin-top:14px">
+            <h2>Cost centres</h2>
+            <v-table [rows]="r.data.costCentres" [columns]="ccCols()" sortBy="cases" caption="Cost centres in this department"
+              empty="No cost centre is linked to this department." />
+          </section>
+          <section class="card">
+            <h2>Doctors</h2>
+            <v-table paged [rows]="r.data.doctors" [columns]="doctorCols" sortBy="cases" caption="Doctors in this department"
+              empty="No doctors work in this department." />
+          </section>
+        </v-page>
+      }
+    </v-state>
+  `,
+})
+export class DepartmentDetail {
+  id = input.required<string>();
+  private auth = inject(Auth);
+  res = catalogueResource<DepartmentDetailDto>(() => `departments/${this.id()}`);
+  canRevenue = computed(() => this.auth.can('revenue.view'));
+  ccCols = computed<Col<CcRow>[]>(() => {
+    const cols: Col<CcRow>[] = [
+      { key: 'code', label: 'Code', value: r => localCode(r.code) },
+      { key: 'name', label: 'Name', link: r => `/cost-centres/${r.id}` },
+      { key: 'ccType', label: 'Type' },
+      { key: 'cases', label: 'Cases', type: 'num', dp: 0 },
+      { key: 'cost', label: 'Cost', type: 'money', dp: 0 },
+    ];
+    if (this.canRevenue()) cols.push({ key: 'revenue', label: 'Revenue', type: 'money', dp: 0 });
+    return cols;
+  });
+  doctorCols: Col<DepartmentDetailDto['doctors'][number]>[] = [
+    { key: 'code', label: 'Id', value: r => localCode(r.code) },
+    { key: 'name', label: 'Doctor', sub: r => r.isDummy ? 'HIS placeholder' : null },
+    { key: 'specialty', label: 'Specialty' },
+    { key: 'grade', label: 'Grade' },
+    { key: 'isHome', label: 'Home department', value: r => r.isHome ? 'Yes' : r.isDefault ? 'Default clinic' : 'Clinic' },
+    { key: 'cases', label: 'Cases', type: 'num', dp: 0 },
+  ];
+  purpose(d: DepartmentRow): string {
+    return [localCode(d.code), d.deptType, d.specialty, d.serviceLine].filter(Boolean).join(' · ');
+  }
+  realDoctors(d: DepartmentDetailDto): number { return d.doctors.filter(x => !x.isDummy).length; }
+  margin(d: DepartmentRow): number { return Number(d.revenue) - Number(d.cost); }
+  marginPct(d: DepartmentRow): number {
+    const rev = Number(d.revenue);
+    return rev === 0 ? 0 : this.margin(d) / rev * 100;
+  }
 }
 
 // ── Cost centres ────────────────────────────────────────────────────────────────
@@ -97,13 +176,14 @@ export class Departments {
   `,
 })
 export class CostCentres {
-  res = catalogueResource<CostCentreRow[]>(() => 'cost-centres');
+  res = catalogueResource<CcRow[]>(() => 'cost-centres');
   search = signal('');
   filtered = computed(() => (this.res.value()?.data ?? []).filter(r => matchesNameOrCode(this.search(), r.name, r.code)));
-  cols: Col<CostCentreRow>[] = [
+  cols: Col<CcRow>[] = [
     { key: 'stepDownSeq', label: 'Seq', type: 'num', dp: 0 },
     { key: 'code', label: 'Code', value: r => localCode(r.code) },
     { key: 'name', label: 'Name', link: r => `/cost-centres/${r.id}` },
+    { key: 'department', label: 'Department', link: r => r.departmentId ? `/departments/${r.departmentId}` : null },
     { key: 'ccType', label: 'Type' },
     { key: 'cases', label: 'Cases', type: 'num', dp: 0 },
     { key: 'cost', label: 'Cost', type: 'money', dp: 0 },

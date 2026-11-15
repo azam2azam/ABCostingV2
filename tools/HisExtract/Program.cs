@@ -42,6 +42,7 @@ static class App
         if (Flag(args, "--hospital") is not null)
             Console.WriteLine("Note: --hospital is ignored. Identity is SetupID + ProjectID. Choose the VERITA hospital on import.");
         s.OutDir = Flag(args, "--out") ?? s.OutDir;
+        s.CcMapPath = Flag(args, "--cc-map");
 
         var fromRaw = Flag(args, "--from");
         var toRaw = Flag(args, "--to");
@@ -369,6 +370,8 @@ static class App
               --to         period end inclusive yyyy-MM-dd or yyyy-MM
               --month      yyyy-MM shorthand for one full month
               --out        output directory     default ./his-extract-out
+              --cc-map     reviewed CSV (costCentreCode, departmentCode) that overrides
+                           the derived cost centre → department link (catalogue)
 
             Defaults (UAT):
               Connection string  ****

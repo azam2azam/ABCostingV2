@@ -11,8 +11,8 @@ public static class CatalogueExtract
         await HospitalAsync(db, s, c, pack);
         await FacilityAsync(db, s, c, pack);
         await ServiceLineAsync(db, s, c, pack);
-        await DepartmentAsync(db, s, c, pack);
-        await CostCenterAsync(db, s, c, pack);
+        var departments = await DepartmentAsync(db, s, c, pack);
+        await CostCenterAsync(db, s, c, pack, departments);
         await ResourceAsync(c, pack);
         await ProviderAsync(db, s, c, pack);
         await ProcedureAsync(db, s, c, pack);
@@ -86,11 +86,17 @@ public static class CatalogueExtract
         });
     }
 
-    private static async Task DepartmentAsync(HisConnection db, Settings s, Codes c, CsvZipWriter pack)
+    private static async Task<Dictionary<string, string>> DepartmentAsync(HisConnection db, Settings s, Codes c, CsvZipWriter pack)
     {
+        var names = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         using var csv = pack.Create("04_Department.csv",
             "hospitalCode", "serviceLineCode", "code", "catalogCode", "name", "deptType", "specialty");
-        csv.Write(c.Hospital, c.UnmappedSl, c.UnmappedDept, "UNMAPPED", "Unmapped", "ADMIN", "");
+        void Add(params string?[] cells)
+        {
+            csv.Write(cells);
+            names[cells[2] ?? ""] = cells[4] ?? "";
+        }
+        Add(c.Hospital, c.UnmappedSl, c.UnmappedDept, "UNMAPPED", "Unmapped", "ADMIN", "");
 
         var clinics = new HashSet<int>();
         await db.QueryAsync("""
@@ -107,7 +113,7 @@ public static class CatalogueExtract
             if (!HisConnection.B(r, "IsActive")) name += " (inactive)";
             var map = HisConnection.S(r, "MappingCode");
             var g = HisConnection.Ni(r, "GroupID");
-            csv.Write(c.Hospital, g is null ? c.UnmappedSl : c.ServiceLine(g.Value),
+            Add(c.Hospital, g is null ? c.UnmappedSl : c.ServiceLine(g.Value),
                 c.ClinicDept(id), map.Length == 0 ? $"CLN-{id}" : map, name, "CLINICAL", name);
         });
 
@@ -129,7 +135,7 @@ public static class CatalogueExtract
             var id = HisConnection.I(r, "ClinicID");
             if (!clinics.Add(id)) return;
             extra++;
-            csv.Write(c.Hospital, c.UnmappedSl, c.ClinicDept(id), $"CLN-{id}", $"Clinic {id}", "CLINICAL", "");
+            Add(c.Hospital, c.UnmappedSl, c.ClinicDept(id), $"CLN-{id}", $"Clinic {id}", "CLINICAL", "");
         });
         if (extra > 0) pack.Note($"Department: {extra} clinics referenced by encounters were missing from HIS_Clinic and were added.");
 
@@ -144,7 +150,7 @@ public static class CatalogueExtract
             if (name.Length == 0) name = HisConnection.S(r, "Alias");
             if (name.Length == 0) name = c.WardDept(id);
             var map = HisConnection.S(r, "MappingCode");
-            csv.Write(c.Hospital, c.UnmappedSl, c.WardDept(id), map.Length == 0 ? $"NS-{id}" : map, name, "CLINICAL", "Inpatient");
+            Add(c.Hospital, c.UnmappedSl, c.WardDept(id), map.Length == 0 ? $"NS-{id}" : map, name, "CLINICAL", "Inpatient");
         });
 
         await db.QueryAsync("""
@@ -156,7 +162,7 @@ public static class CatalogueExtract
             var id = HisConnection.I(r, "OTID");
             var name = HisConnection.S(r, "Description");
             if (name.Length == 0) name = c.OtDept(id);
-            csv.Write(c.Hospital, c.UnmappedSl, c.OtDept(id), $"OT-{id}", name, "CLINICAL", "Surgery");
+            Add(c.Hospital, c.UnmappedSl, c.OtDept(id), $"OT-{id}", name, "CLINICAL", "Surgery");
         });
 
         await db.QueryAsync("""
@@ -168,17 +174,19 @@ public static class CatalogueExtract
             var id = HisConnection.I(r, "DivisionID");
             var name = HisConnection.S(r, "DivisionName");
             if (name.Length == 0) name = c.LabDept(id);
-            csv.Write(c.Hospital, c.UnmappedSl, c.LabDept(id), $"LAB-{id}", name, "ANCILLARY", "Laboratory");
+            Add(c.Hospital, c.UnmappedSl, c.LabDept(id), $"LAB-{id}", name, "ANCILLARY", "Laboratory");
         });
+        return names;
     }
 
-    private static async Task CostCenterAsync(HisConnection db, Settings s, Codes c, CsvZipWriter pack)
+    private static async Task CostCenterAsync(HisConnection db, Settings s, Codes c, CsvZipWriter pack, IReadOnlyDictionary<string, string> departments)
     {
         using var csv = pack.Create("05_CostCenter.csv",
             "hospitalCode", "departmentCode", "facilityCode", "code", "name", "ccType", "stepDownSeq", "isActive");
         csv.Write(c.Hospital, c.UnmappedDept, "", c.UnmappedCc, "Unmapped", "OVERHEAD", "10", "true");
 
-        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        // HIS cost centre id → (name, active), in HIS order.
+        var centres = new Dictionary<string, (string Name, bool Active)>(StringComparer.OrdinalIgnoreCase);
         await db.QueryAsync("""
             SELECT CostCenterID, CostCenterName, IsActive
             FROM dbo.HIS_CostCenterSetup WITH (NOLOCK)
@@ -186,16 +194,14 @@ public static class CatalogueExtract
             """, cmd => cmd.Parameters.AddWithValue("@SetupId", s.SetupId), r =>
         {
             var raw = HisConnection.S(r, "CostCenterID");
-            if (raw.Length == 0 || !seen.Add(raw)) return;
+            if (raw.Length == 0 || centres.ContainsKey(raw)) return;
             var name = HisConnection.S(r, "CostCenterName");
-            if (name.Length == 0) name = raw;
-            csv.Write(c.Hospital, c.UnmappedDept, "", c.OracleCc(raw), name, "PRODUCTION", "100",
-                Maps.Bool(HisConnection.B(r, "IsActive")));
+            centres[raw] = (name.Length == 0 ? raw : name, HisConnection.B(r, "IsActive"));
         });
 
         var billed = 0;
         await db.QueryAsync("""
-            SELECT DISTINCT d.CostCenterID
+            SELECT DISTINCT LTRIM(RTRIM(d.CostCenterID)) AS CostCenterID
             FROM dbo.HIS_InvoiceDetail d WITH (NOLOCK)
             INNER JOIN dbo.HIS_InvoiceMain m WITH (NOLOCK)
               ON m.SetupID=d.SetupID AND m.ProjectID=d.ProjectID
@@ -205,12 +211,19 @@ public static class CatalogueExtract
             """, s.BindTenant, r =>
         {
             var raw = HisConnection.S(r, "CostCenterID");
-            if (raw.Length == 0 || !seen.Add(raw)) return;
+            if (raw.Length == 0 || centres.ContainsKey(raw)) return;
             billed++;
-            csv.Write(c.Hospital, c.UnmappedDept, "", c.OracleCc(raw), raw, "PRODUCTION", "100", "true");
+            centres[raw] = (raw, true);
         });
         if (billed > 0) pack.Note($"CostCenter: {billed} Oracle codes appear on invoices but not in HIS_CostCenterSetup and were added.");
-        pack.Note("CostCenter: HIS_CostCenterSetup + invoice CostCenterID only, all on Unmapped. No dummy CC-CLN/NS/OT/LAB.");
+
+        var picks = await CostCentreDepartments.ResolveAsync(db, s, c,
+            centres.ToDictionary(kv => kv.Key, kv => kv.Value.Name, StringComparer.OrdinalIgnoreCase), departments, pack);
+        foreach (var (raw, (name, active)) in centres)
+        {
+            var dept = picks.TryGetValue(raw, out var p) ? p.Department : c.UnmappedDept;
+            csv.Write(c.Hospital, dept, "", c.OracleCc(raw), name, "PRODUCTION", "100", Maps.Bool(active));
+        }
     }
 
     private static Task ResourceAsync(Codes c, CsvZipWriter pack)
@@ -232,11 +245,17 @@ public static class CatalogueExtract
                     WHERE dc.SetupID=d.SetupID AND dc.ProjectID=d.ProjectID AND dc.DoctorID=d.DoctorID
                       AND ISNULL(dc.IsActive,1)=1
                     ORDER BY ISNULL(dc.IsDefaultClinic,0) DESC, dc.ClinicID) AS ClinicID,
-                   (SELECT TOP 1 ds.SpecialityID FROM dbo.HIS_DoctorSpeciality ds WITH (NOLOCK)
-                    WHERE ds.SetupID=d.SetupID AND ds.ProjectID=d.ProjectID AND ds.DoctorID=d.DoctorID
-                      AND ISNULL(ds.IsActive,1)=1
-                    ORDER BY ds.SpecialityID) AS SpecialityID
+                   sp.SpecialityID, sp.SpecialityName
             FROM dbo.HIS_Doctor d WITH (NOLOCK)
+            -- Specialty names live in STP_Parameter group 1 type 10 (as Epharmacy_fn_HIS_GetDoctorSpecialityDescription reads them).
+            OUTER APPLY (SELECT TOP 1 ds.SpecialityID, LTRIM(RTRIM(pm.Description)) AS SpecialityName
+                         FROM dbo.HIS_DoctorSpeciality ds WITH (NOLOCK)
+                         LEFT JOIN dbo.STP_Parameter pm WITH (NOLOCK)
+                           ON pm.SetupID=ds.SetupID AND pm.ParameterGroup=1 AND pm.ParameterType=10
+                          AND pm.ParameterCode=ds.SpecialityID
+                         WHERE ds.SetupID=d.SetupID AND ds.ProjectID=d.ProjectID AND ds.DoctorID=d.DoctorID
+                           AND ISNULL(ds.IsActive,1)=1
+                         ORDER BY ds.SpecialityID) sp
             WHERE d.SetupID=@SetupId AND d.ProjectID=@ProjectId
               AND (ISNULL(d.IsActive,1)=1 OR ISNULL(d.IsDoctorDummy,0)=1)
             """, s.BindTenant, r =>
@@ -246,12 +265,14 @@ public static class CatalogueExtract
             if (name.Length == 0) name = HisConnection.S(r, "Alias");
             if (name.Length == 0) name = c.Provider(id);
             var spec = HisConnection.Ni(r, "SpecialityID");
+            var specName = HisConnection.S(r, "SpecialityName");
+            if (specName.Length > 200) specName = specName[..200];
             var clinicId = HisConnection.Ni(r, "ClinicID");
             // A dummy is a placeholder across clinics, not a person in one role: it stays Not assigned.
             var dummy = HisConnection.B(r, "IsDoctorDummy");
             csv.Write(dummy ? "" : PhysicianRoles.ResourceCode(c, PhysicianRoles.TokenFromClinic(clinicId)),
                 c.DeptFromClinic(clinicId),
-                c.Provider(id), name, spec is null ? "" : $"SPEC-{spec}",
+                c.Provider(id), name, specName.Length > 0 ? specName : spec is null ? "" : $"SPEC-{spec}",
                 "ET-" + HisConnection.I(r, "EmploymentType"), Maps.Bool(dummy));
         });
 

@@ -12,6 +12,8 @@ public sealed class Settings
     public DateTime? From { get; set; }
     public DateTime? To { get; set; }
     public string OutDir { get; set; } = Path.Combine(Environment.CurrentDirectory, "his-extract-out");
+    /// <summary>Optional reviewed CSV (costCentreCode, departmentCode) that wins over the derived cost centre → department link.</summary>
+    public string? CcMapPath { get; set; }
 
     /// <summary>HIS tenant token used in row codes. Not a VERITA Hospital.Code — import maps that.</summary>
     public string H => $"{SetupId}-{ProjectId}";

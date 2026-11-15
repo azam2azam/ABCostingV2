@@ -30,7 +30,7 @@ public sealed partial class ReadQueries
 
     /// <summary>Catalogue departments for the hospital. A run, when present, adds cases/revenue/cost.</summary>
     public sealed record DepartmentRow(Guid Id, string Code, string Name, string DeptType, string? Specialty, string? ServiceLine,
-        int CostCentres, int Cases, decimal Revenue, decimal Cost);
+        int CostCentres, int Cases, decimal Revenue, decimal Cost, int Doctors);
 
     public async Task<DepartmentRow[]> DepartmentsAsync(ScopedRun s, Principal p, CancellationToken ct)
     {
@@ -39,6 +39,15 @@ public sealed partial class ReadQueries
         var lines = await db.ServiceLines.AsNoTracking().ToDictionaryAsync(l => l.Id, l => l.Name, ct);
         var ccCounts = await db.CostCenters.AsNoTracking().Where(c => c.HospitalId == s.Hospital.Id)
             .GroupBy(c => c.DepartmentId).Select(g => new { g.Key, N = g.Count() }).ToDictionaryAsync(x => x.Key, x => x.N, ct);
+        // Doctors: home department or an active HIS clinic there; HIS placeholder doctors are not people.
+        var deptIds = depts.Select(d => d.Id).ToList();
+        var homes = await db.Providers.AsNoTracking().Where(x => !x.IsDummy && deptIds.Contains(x.DepartmentId))
+            .Select(x => new { x.Id, x.DepartmentId }).ToListAsync(ct);
+        var clinics = await (from c in db.ProviderClinics.AsNoTracking()
+                             join x in db.Providers.AsNoTracking() on c.ProviderId equals x.Id
+                             where c.IsActive && !x.IsDummy && deptIds.Contains(c.DepartmentId)
+                             select new { x.Id, c.DepartmentId }).ToListAsync(ct);
+        var doctors = homes.Concat(clinics).Distinct().GroupBy(x => x.DepartmentId).ToDictionary(g => g.Key, g => g.Count());
         var showRevenue = p.Can("revenue.view");
         var figures = await db.RunDimensionCosts.AsNoTracking()
             .Where(x => x.RunId == s.Run.Id && x.Dimension == "department" && x.Key != "")
@@ -51,14 +60,47 @@ public sealed partial class ReadQueries
                 ccCounts.GetValueOrDefault(d.Id),
                 f?.Encounters ?? 0,
                 showRevenue ? f?.Revenue ?? 0m : 0m,
-                f?.TotalCost ?? 0m);
+                f?.TotalCost ?? 0m,
+                doctors.GetValueOrDefault(d.Id));
         }).ToArray();
+    }
+
+    public sealed record DepartmentDoctorRow(Guid Id, string Code, string Name, string Specialty, string Grade, bool IsHome, bool IsDefault, bool IsDummy, int Cases);
+    public sealed record DepartmentDetail(DepartmentRow Department, CostCentreRow[] CostCentres, DepartmentDoctorRow[] Doctors);
+
+    /// <summary>One department: its figures for the run, the cost centres it owns and the doctors who work in it.</summary>
+    public async Task<DepartmentDetail> DepartmentAsync(ScopedRun s, Principal p, Guid id, CancellationToken ct)
+    {
+        var row = (await DepartmentsAsync(s, p, ct)).FirstOrDefault(d => d.Id == id) ?? throw AppError.NotFound("Department");
+        var ccIds = (await db.CostCenters.AsNoTracking().Where(c => c.HospitalId == s.Hospital.Id && c.DepartmentId == id)
+            .Select(c => c.Id).ToListAsync(ct)).ToHashSet();
+        var centres = ccIds.Count == 0 ? [] : (await CostCentresAsync(s, p, ct)).Where(c => ccIds.Contains(c.Id)).ToArray();
+
+        // A doctor belongs here when this is their home department or one of their HIS clinics.
+        var clinics = await db.ProviderClinics.AsNoTracking().Where(c => c.DepartmentId == id && c.IsActive)
+            .Select(c => new { c.ProviderId, c.IsDefault }).ToListAsync(ct);
+        var clinicOf = clinics.GroupBy(c => c.ProviderId).ToDictionary(g => g.Key, g => g.Any(c => c.IsDefault));
+        var linked = clinicOf.Keys.ToList();
+        // Cases: this run's encounters in the department, by the encounter's doctor (the same encounters as the department's Cases).
+        var cases = await (from e in db.Encounters.AsNoTracking()
+                           join ec in db.EncounterCosts.AsNoTracking() on e.Id equals ec.EncounterId
+                           where ec.RunId == s.Run.Id && e.DepartmentId == id && e.ProviderId != null
+                           group e by e.ProviderId into g
+                           select new { ProviderId = g.Key!.Value, N = g.Select(x => x.Id).Distinct().Count() })
+            .ToDictionaryAsync(x => x.ProviderId, x => x.N, ct);
+        linked.AddRange(cases.Keys.Where(k => !clinicOf.ContainsKey(k)));
+        var doctors = (await db.Providers.AsNoTracking().Where(x => x.DepartmentId == id || linked.Contains(x.Id)).ToListAsync(ct))
+            .Select(x => new DepartmentDoctorRow(x.Id, x.Code, x.Name, x.Specialty, x.Grade, x.DepartmentId == id,
+                clinicOf.GetValueOrDefault(x.Id), x.IsDummy, cases.GetValueOrDefault(x.Id)))
+            .OrderByDescending(x => x.Cases).ThenBy(x => x.IsDummy).ThenBy(x => x.Name).ToArray();
+        return new DepartmentDetail(row, centres, doctors);
     }
 
     // ═══ Cost centres ════════════════════════════════════════════════════════════════
 
     public sealed record CostCentreRow(Guid Id, string Code, string Name, string CcType, int StepDownSeq, string Department, string? Facility,
-        decimal Direct, decimal Received, decimal AllocatedOut, decimal Final, bool IsClosed, decimal GlPosted, int Cases, decimal Revenue, decimal Cost);
+        decimal Direct, decimal Received, decimal AllocatedOut, decimal Final, bool IsClosed, decimal GlPosted, int Cases, decimal Revenue, decimal Cost,
+        Guid DepartmentId);
     public sealed record CostCentreBilledRow(Guid Id, string Code, string Name, decimal UnitPrice, decimal Cases, decimal Revenue, decimal UnitCost, decimal TotalCost);
     public sealed record CostCentreDetail(CostCentreRow CostCentre, CostCentreBilledRow[] Packages, CostCentreBilledRow[] Procedures);
 
@@ -112,7 +154,7 @@ public sealed partial class ReadQueries
                 bal.TryGetValue(c.Id, out var b);
                 return new CostCentreRow(c.Id, c.Code, c.Name, c.CcType, c.StepDownSeq, depts[c.DepartmentId].Name, c.FacilityId is { } f ? facs.GetValueOrDefault(f) : null,
                     b?.DirectAmount ?? 0, b?.ReceivedAmount ?? 0, b?.AllocatedOut ?? 0, b?.FinalAmount ?? 0, b?.IsClosed ?? false, gl.GetValueOrDefault(c.Id),
-                    cases.GetValueOrDefault(c.Id), showRevenue ? revenue.GetValueOrDefault(c.Id) : 0, cost.GetValueOrDefault(c.Id));
+                    cases.GetValueOrDefault(c.Id), showRevenue ? revenue.GetValueOrDefault(c.Id) : 0, cost.GetValueOrDefault(c.Id), c.DepartmentId);
             }).ToArray();
     }
 
