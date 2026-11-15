@@ -83,7 +83,7 @@ app.UseResponseCompression();
 if (corsOrigins.Length > 0) app.UseCors();
 app.UseMiddleware<ErrorEnvelopeMiddleware>();
 app.UseSwagger();
-app.UseSwaggerUI(o => o.SwaggerEndpoint("/swagger/v1/swagger.json", "VERITA v1"));
+app.UseSwaggerUI(o => o.SwaggerEndpoint("v1/swagger.json", "VERITA v1"));
 app.UseAuthentication();
 app.UseAuthorization();
 app.MapControllers();
