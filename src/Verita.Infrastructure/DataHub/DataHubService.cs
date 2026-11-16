@@ -395,7 +395,11 @@ public sealed class DataHubService(IDbContextFactory<VeritaDbContext> factory, I
     private async Task<VeritaDbContext> Db(CancellationToken ct)
     {
         if (_shared is not { } s) return await factory.CreateDbContextAsync(ct);
-        var db = new VeritaDbContext(new DbContextOptionsBuilder<VeritaDbContext>().UseSqlServer(s.Conn).Options);
+        // Without an explicit timeout these contexts fall back to SQL Server's 30 s default (the factory's 300 s
+        // does not carry over), and a 50k-row page on a slower server fails and rolls the whole import back.
+        var db = new VeritaDbContext(new DbContextOptionsBuilder<VeritaDbContext>()
+            .UseSqlServer(s.Conn, sql => { sql.CommandTimeout(ImportCommandTimeoutSeconds); sql.UseQuerySplittingBehavior(QuerySplittingBehavior.SingleQuery); })
+            .Options);
         await db.Database.UseTransactionAsync(s.Tx, ct);
         return db;
     }
@@ -448,6 +452,9 @@ public sealed class DataHubService(IDbContextFactory<VeritaDbContext> factory, I
     }
 
     public const int ImportPageRows = 50_000;
+
+    /// <summary>Per-command timeout inside an import transaction; matches BulkWriter's bulk copy timeout.</summary>
+    public const int ImportCommandTimeoutSeconds = 600;
 
     public async Task<ImportResult> SaveAsync(EntitySpec spec, Principal p, IReadOnlyList<Dictionary<string, string>> rows, bool dryRun, string source, CancellationToken ct)
     {
