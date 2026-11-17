@@ -14,10 +14,15 @@ public sealed class Settings
     public string OutDir { get; set; } = Path.Combine(Environment.CurrentDirectory, "his-extract-out");
     /// <summary>Optional reviewed CSV (costCentreCode, departmentCode) that wins over the derived cost centre → department link.</summary>
     public string? CcMapPath { get; set; }
-    /// <summary>Ward nursing minutes per patient-day until nursing supplies a standard per ward (StaffTime, STANDARD).</summary>
+    /// <summary>
+    /// Legacy CLI flag only. Ward nursing is no longer invented from INP_Transfer in extract;
+    /// raw transfer timing lands in EncounterTransfer for VERITA to apply standards later.
+    /// </summary>
     public decimal WardNurseMinutesPerDay { get; set; } = 260m;
     /// <summary>Seconds one HIS query may run (0 = no limit). A step that times out is skipped and noted in extract-log.txt.</summary>
     public int QueryTimeoutSeconds { get; set; } = 1800;
+    /// <summary>Pharmacy / inventory database holding the item master (PHR_Item) for item names; empty to skip. Same server as HIS.</summary>
+    public string PharmacyDb { get; set; } = "PHARMAKON";
 
     /// <summary>HIS tenant token used in row codes. Not a VERITA Hospital.Code — import maps that.</summary>
     public string H => $"{SetupId}-{ProjectId}";

@@ -97,6 +97,8 @@ export interface DoctorRow {
   cases: number;
   revenue: number;
   cost: number;
+  staffMinutes?: number | string;
+  materials?: number | string;
 }
 
 interface DoctorDetailDto {
@@ -143,14 +145,10 @@ export class Doctors {
       { key: 'cases', label: 'Cases', type: 'num', dp: 0, link: () => '/patient-encounters',
         linkParams: r => ({ physician: r.id }) },
     ];
-    if (this.auth.can('revenue.view')) {
-      cols.push(
-        { key: 'revenue', label: 'Revenue', type: 'money', dp: 0 },
-        { key: 'cost', label: 'Cost', type: 'money', dp: 0, bad: r => Number(r.cost) > Number(r.revenue) },
-      );
-    } else {
-      cols.push({ key: 'cost', label: 'Cost', type: 'money', dp: 0 });
-    }
+    if (this.auth.can('revenue.view')) cols.push({ key: 'revenue', label: 'Revenue', type: 'money', dp: 0 });
+    // On the doctor's cases in the period: all staff minutes, and billed consumables, implants and medicine (charge, not cost).
+    cols.push({ key: 'staffMinutes', label: 'Staff Min', type: 'num', dp: 0, blankZero: true });
+    if (this.auth.can('revenue.view')) cols.push({ key: 'materials', label: 'Materials', type: 'money', dp: 0, blankZero: true });
     return cols;
   });
 }

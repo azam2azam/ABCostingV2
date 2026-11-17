@@ -417,14 +417,18 @@ const STATUS_TEXT: Record<string, string> = {
         <div class="row">
           <input #picker type="file" accept=".csv,.zip" multiple (change)="pick($event, picker)" aria-label="Files to upload" [disabled]="uploading()" />
         </div>
-        <p class="muted" style="margin:6px 0 0">Choose one file to review it first, or several (e.g. a month of daily packs) to upload them all and queue them for import, oldest date first.</p>
+        <p class="muted" style="margin:6px 0 0">Choose one file to review it first, or several (e.g. a month of daily packs) to upload them all. Uploading does not import: start the import from the list.</p>
         @if (uploading()) {
           <div class="import-loading" role="status"><span class="spinner" aria-hidden="true"></span><strong>{{ uploadText() }}</strong></div>
         }
         @if (error()) { <div class="notice bad" role="alert" style="margin-top:10px">{{ error() }}</div> }
         @if (batch(); as b) {
           <div class="notice" [class.warn]="b.failed.length > 0" role="status" style="margin-top:10px">
-            <strong>{{ b.uploaded }} of {{ b.total }} file(s) uploaded, {{ b.queued }} queued for import{{ b.queued ? ' (oldest date first)' : '' }}.</strong>
+            @if (b.queued) {
+              <strong>{{ b.queued }} of {{ b.total }} file(s) queued for import, catalogue first, then facts oldest date first.</strong>
+            } @else {
+              <strong>{{ b.uploaded }} of {{ b.total }} file(s) uploaded. Nothing is imported yet: use Import uploaded files below to start.</strong>
+            }
             @if (b.failed.length) {
               <ul style="margin:6px 0 0; padding-left:20px">@for (f of b.failed; track f) { <li>{{ f }}</li> }</ul>
             }
@@ -432,7 +436,7 @@ const STATUS_TEXT: Record<string, string> = {
         }
 
         @if (selected(); as d) {
-          <div class="his-preview">
+          <div class="his-preview" id="file-detail">
             <div class="sel-head">
               <h3>{{ d.file.fileName }}</h3>
               <button class="btn" type="button" (click)="close()">Close</button>
@@ -444,7 +448,7 @@ const STATUS_TEXT: Record<string, string> = {
                 @if (d.file.pack) { · {{ d.file.pack }} }
                 @if (d.file.factsFrom) { · {{ d.file.factsFrom }} .. {{ d.file.factsTo }} }
               </p>
-              @if (mismatch(d.file); as m) {
+              @if (blocked(d.file); as m) {
                 <p class="notice bad" role="alert" style="margin-top:8px">{{ m }}</p>
               } @else {
                 <p class="muted" style="margin-top:8px">Imports into <strong>{{ target()?.code }}</strong> · {{ target()?.name }}, the hospital selected at the top.</p>
@@ -477,9 +481,33 @@ const STATUS_TEXT: Record<string, string> = {
               </div>
             }
 
+            @if (live(d.file).status !== 'UPLOADED') {
+              <h3 style="margin-top:14px">Log</h3>
+              <dl class="file-log">
+                @for (e of timeline(live(d.file)); track e.label) { <dt>{{ e.label }}</dt><dd>{{ e.value }}</dd> }
+              </dl>
+            }
             @if (d.results.length && !isActive(live(d.file))) {
               <h3 style="margin-top:14px">{{ d.file.lastDryRun ? 'Validation results' : 'Import results' }}</h3>
               <v-table [rows]="d.results" [columns]="resultCols" [caption]="d.file.lastDryRun ? 'Validation results' : 'Import results'" />
+              @if (rejectGroups().length) {
+                <h3 style="margin-top:14px">Rejected rows</h3>
+                <p class="muted">Each rejected row was left out; every other row {{ d.file.lastDryRun ? 'would load' : 'was saved' }}. Fix the rows at the source (HIS or the template) and import the file again: rows are matched on their keys, so nothing is duplicated.</p>
+                @for (g of rejectGroups(); track g.entity) {
+                  <div class="reject-group">
+                    <div class="reject-head">
+                      <strong>{{ g.entity }}</strong>
+                      <span class="muted">{{ fmt(g.rejected) }} of {{ fmt(g.rows) }} rows rejected</span>
+                      @if (g.batchId) { <button class="btn" type="button" (click)="rejects(g.result)">Download all rejects (CSV)</button> }
+                    </div>
+                    <ul class="reject-reasons">
+                      @for (r of g.reasons; track r.reason) { <li><span class="reject-count">{{ fmt(r.count) }}×</span> {{ r.reason }}</li> }
+                    </ul>
+                    @if (g.sampled < g.rejected) { <p class="muted" style="margin:4px 0 0">Reasons counted from the first {{ g.sampled }} rejected rows{{ g.batchId ? '; the CSV has all of them' : '' }}.</p> }
+                    <v-table [rows]="g.samples" [columns]="rejectCols" [caption]="g.entity + ' rejected rows'" />
+                  </div>
+                }
+              }
             } @else if (d.preview?.tables?.length) {
               <h3 style="margin-top:14px">Tables in this file</h3>
               <v-table [rows]="d.preview!.tables" [columns]="previewTableCols" caption="File contents" />
@@ -489,15 +517,115 @@ const STATUS_TEXT: Record<string, string> = {
       </section>
 
       <section class="card">
-        <h2>Uploaded files</h2>
+        <h2>Uploaded files · {{ ctx.hospitalParam() }}</h2>
+        @if (catalogue.value(); as cs) {
+          @if (!cs.hasCatalogue) {
+            <p class="notice warn" role="alert">
+              <strong>{{ cs.hospital }} has no catalogue yet.</strong>
+              @if (cs.catalogueQueued) { A catalogue import is queued; facts queued after it will load once it finishes. }
+              @else { Import its catalogue pack first. Facts files cannot be imported or validated until the catalogue is loaded. }
+            </p>
+          }
+        }
+        @if (pendingBlocked().length) {
+          <p class="notice warn">{{ pendingBlocked().length }} facts file(s) are waiting for the catalogue and are not included in Import uploaded files.</p>
+        }
         <v-state [loading]="files.isLoading() && !files.value()" [error]="files.error()">
-          <v-table paged [rows]="files.value() ?? []" [columns]="fileCols()" caption="Uploaded files" empty="No files uploaded yet." />
+          <div class="row files-bar">
+            <button class="btn primary" type="button" (click)="importPending()" [disabled]="busy() || uploading() || !importable().length">
+              Import uploaded files ({{ importable().length }})
+            </button>
+            @if (busy() && uploadText()) { <span class="muted">{{ uploadText() }}</span> }
+            @if (filePages() > 1) {
+              <span class="pager">
+                <button class="btn" type="button" [disabled]="filePage() <= 1" (click)="filePage.set(filePage() - 1)">Previous</button>
+                <span class="muted">Page {{ filePage() }} of {{ filePages() }}</span>
+                <button class="btn" type="button" [disabled]="filePage() >= filePages()" (click)="filePage.set(filePage() + 1)">Next</button>
+              </span>
+            }
+          </div>
+          <div class="table-wrap">
+            <table class="data files">
+              <caption class="sr-only">Uploaded files</caption>
+              <thead><tr><th scope="col">File</th><th scope="col" class="actions-col">Actions</th></tr></thead>
+              <tbody>
+                @for (f of pagedFiles(); track f.id) {
+                  <tr [class.selected]="selected()?.file?.id === f.id">
+                    <td>
+                      <div class="file-title">
+                        <strong>{{ f.fileName }}</strong>
+                        <v-chip [value]="fileType(f)" kind="info" />
+                        <v-chip [value]="statusText(f)" [kind]="statusKind(f)" />
+                      </div>
+                      <dl class="file-facts">
+                        @for (e of facts(f); track e.label) { <div [class.bad]="e.bad"><dt>{{ e.label }}:</dt><dd>{{ e.value }}</dd></div> }
+                      </dl>
+                    </td>
+                    <td class="actions-col">
+                      <div class="file-actions">
+                        <button class="btn" type="button" (click)="open(f.id, true)">Details</button>
+                        @if (!isActive(f) && !blocked(f)) {
+                          <button class="btn" type="button" (click)="quick(f)" [disabled]="busy()">{{ imported(f) ? 'Re-import' : 'Import' }}</button>
+                        }
+                        @if (!isActive(f)) { <button class="btn" type="button" (click)="remove(f)">Remove</button> }
+                      </div>
+                    </td>
+                  </tr>
+                } @empty {
+                  <tr><td colspan="2" class="faint">No files uploaded for this hospital yet.</td></tr>
+                }
+              </tbody>
+            </table>
+          </div>
         </v-state>
       </section>
     </v-page>
+    @if (ask(); as q) {
+      <div class="confirm-backdrop" (click)="answer(false)" (document:keydown.escape)="answer(false)">
+        <div class="confirm-dialog" role="alertdialog" aria-modal="true" aria-labelledby="confirm-title" (click)="$event.stopPropagation()">
+          <h2 id="confirm-title">{{ q.title }}</h2>
+          <ul>@for (line of q.lines; track line) { <li>{{ line }}</li> }</ul>
+          @if (q.note) { <p class="muted">{{ q.note }}</p> }
+          <div class="confirm-actions">
+            <button class="btn" type="button" (click)="answer(false)">Cancel</button>
+            <button class="btn" [class.danger]="q.danger" [class.primary]="!q.danger" type="button" (click)="answer(true)">{{ q.confirm }}</button>
+          </div>
+        </div>
+      </div>
+    }
   `,
   styles: `
     .his-preview { margin-top: 16px; padding-top: 14px; border-top: 1px solid var(--border); }
+    .confirm-backdrop { position: fixed; inset: 0; z-index: 1000; display: flex; align-items: center; justify-content: center; padding: 16px; background: rgba(15, 23, 42, .5); }
+    .confirm-dialog { width: min(520px, 100%); max-height: calc(100vh - 32px); overflow-y: auto; padding: 22px 24px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--surface-solid); color: var(--text); box-shadow: var(--shadow); }
+    .confirm-dialog h2 { margin: 0 0 12px; overflow-wrap: anywhere; }
+    .confirm-dialog ul { margin: 0 0 12px; padding-left: 20px; }
+    .confirm-dialog li { margin-bottom: 4px; }
+    .confirm-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 16px; flex-wrap: wrap; }
+    .btn.danger, .btn.danger:hover { background: var(--bad); border-color: var(--bad); color: #fff; }
+    .btn.danger:hover { filter: brightness(.9); }
+    .files-bar { gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 10px; }
+    .files-bar .pager { margin-left: auto; display: flex; gap: 8px; align-items: center; }
+    table.files .actions-col { width: 1%; white-space: nowrap; }
+    table.files tr.selected td { background: var(--surface-2); }
+    .file-title { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 6px; }
+    .file-title strong { overflow-wrap: anywhere; }
+    .file-facts { display: flex; flex-wrap: wrap; gap: 2px 18px; margin: 0; font-size: 13px; }
+    .file-facts > div { display: flex; gap: 4px; }
+    .file-facts dt { color: var(--text-3); }
+    .file-facts dd { margin: 0; overflow-wrap: anywhere; }
+    .file-facts > div.bad dd { color: var(--bad); }
+    .file-actions { display: flex; gap: 6px; flex-wrap: wrap; justify-content: flex-end; }
+    .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+    .file-log { display: grid; grid-template-columns: max-content 1fr; gap: 4px 16px; margin: 0; font-size: 14px; }
+    .file-log dt { color: var(--text-3); }
+    .file-log dd { margin: 0; overflow-wrap: anywhere; }
+    .reject-group { margin-top: 12px; padding: 12px 14px; border: 1px solid var(--border); border-radius: var(--radius-sm); }
+    .reject-head { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+    .reject-head .btn { margin-left: auto; }
+    .reject-reasons { margin: 8px 0; padding-left: 18px; }
+    .reject-reasons li { margin-bottom: 4px; }
+    .reject-count { font-weight: 700; font-variant-numeric: tabular-nums; }
     .sel-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
     .sel-head h3 { margin: 0; overflow-wrap: anywhere; }
     .import-loading { display: flex; align-items: center; gap: 14px; margin-top: 14px; font-size: 16px; }
@@ -516,8 +644,12 @@ const STATUS_TEXT: Record<string, string> = {
 export class DataImport {
   private http = inject(HttpClient);
   private api = inject(Api);
-  private ctx = inject(RunContext);
-  files = apiResource<ImportFileDto[]>(() => 'data/files');
+  ctx = inject(RunContext);
+  /** Only the top-bar hospital's files; the list reloads when the hospital changes. */
+  files = apiResource<ImportFileDto[]>(() => this.ctx.hospitalParam() ? 'data/files' : null, () => ({ hospital: this.ctx.hospitalParam() }));
+  catalogue = apiResource<CatalogueStatus>(() => this.ctx.hospitalParam() ? 'data/catalogue-status' : null, () => ({ hospital: this.ctx.hospitalParam() }));
+  /** The hospital's catalogue is loaded, or a catalogue import is queued ahead of anything queued now. */
+  catalogueReady = computed(() => { const c = this.catalogue.value(); return !c || c.hasCatalogue || c.catalogueQueued; });
   selected = signal<ImportFileDetail | null>(null);
   /** The hospital selected in the top bar: every import goes there. */
   target = computed(() => {
@@ -542,7 +674,7 @@ export class DataImport {
       this.wasActive = new Set(active.map(f => f.id));
       const sel = this.selected();
       if (sel && finished.includes(sel.file.id)) void this.open(sel.file.id);
-      if (finished.length) void this.ctx.load(true);
+      if (finished.length) { void this.ctx.load(true); this.catalogue.reload(); }
       if (active.length && !this.poll) this.poll = setInterval(() => this.files.reload(), 3000);
       if (!active.length && this.poll) { clearInterval(this.poll); this.poll = null; }
     });
@@ -558,23 +690,68 @@ export class DataImport {
     { key: 'rejected', label: 'Rejected', type: 'num', dp: 0, bad: r => r.rejected > 0 },
     { key: 'rejects', label: '', type: 'button', sortable: false, button: r => r.batchId && r.rejected > 0 ? 'Download rejects' : null, onButton: r => void this.rejects(r) },
   ];
-  fileCols = computed<Col<ImportFileDto>[]>(() => [
-    { key: 'uploadedAt', label: 'Uploaded', value: r => this.when(r.uploadedAt), sub: r => r.uploadedBy },
-    { key: 'fileName', label: 'File', sub: r => this.fileFacts(r) },
-    { key: 'hospital', label: 'Hospital', value: r => r.hospital ?? '—' },
-    { key: 'status', label: 'Status', type: 'chip', value: r => this.statusText(r), bad: r => r.status === 'FAILED' || r.rowsRejected > 0 && !ACTIVE.includes(r.status), sub: r => r.status === 'FAILED' ? r.errorMessage ?? null : this.mismatch(r) ? 'Not for the selected hospital' : null },
-    { key: 'result', label: 'Result', sortable: false, value: r => this.resultText(r) },
-    { key: 'open', label: '', type: 'button', sortable: false, button: () => 'Open', onButton: r => void this.open(r.id) },
-    { key: 'sync', label: '', type: 'button', sortable: false, button: r => this.isActive(r) || this.mismatch(r) ? null : this.imported(r) ? 'Re-import' : 'Import', onButton: r => void this.quick(r) },
-    { key: 'delete', label: '', type: 'button', sortable: false, button: r => this.isActive(r) ? null : 'Remove', onButton: r => void this.remove(r) },
-  ]);
+  fileType = fileType;
+  filePage = signal(1);
+  private readonly filePageSize = 20;
+  filePages = computed(() => Math.max(1, Math.ceil((this.files.value()?.length ?? 0) / this.filePageSize)));
+  pagedFiles = computed(() => {
+    const page = Math.min(this.filePage(), this.filePages());
+    return (this.files.value() ?? []).slice((page - 1) * this.filePageSize, page * this.filePageSize);
+  });
+
+  statusKind(f: ImportFileDto): string {
+    if (f.status === 'FAILED') return 'bad';
+    if (f.status === 'COMPLETED_WITH_REJECTS' || (f.status === 'VALIDATED' && f.rowsRejected > 0)) return 'warn';
+    if (f.status === 'COMPLETED') return 'good';
+    if (this.isActive(f)) return 'info live';
+    return '';
+  }
+
+  /** The VERITA period(s) the file's dates fall in, as the hospital names them (e.g. 2026 Nov). */
+  periodOf(from: string, to: string): string {
+    const periods = this.ctx.periodsOf(this.ctx.hospitalParam());
+    const nameOf = (day: string) =>
+      periods.find(p => p.startDate <= day && day <= p.endDate)?.code
+      ?? new Date(day + 'T00:00:00Z').toLocaleDateString('en-GB', { year: 'numeric', month: 'short', timeZone: 'UTC' }).split(' ').reverse().join(' ');
+    const a = nameOf(from), b = nameOf(to);
+    return a === b ? a : `${a} – ${b}`;
+  }
+
+  /** Everything about a file, as label: value pairs for the list. */
+  facts(f: ImportFileDto): { label: string; value: string; bad?: boolean }[] {
+    const out: { label: string; value: string; bad?: boolean }[] = [
+      { label: 'Uploaded', value: `${this.when(f.uploadedAt)} by ${f.uploadedBy}` },
+      { label: 'Size', value: formatBytes(f.sizeBytes) },
+      { label: 'Rows', value: this.fmt(f.totalRows) },
+      { label: 'Tables', value: String(f.tablesTotal) },
+    ];
+    if (f.isHisPack) out.push({ label: 'HIS', value: `SetupID ${f.hisSetupId} / ProjectID ${f.hisProjectId}` });
+    if (f.factsFrom) out.push({ label: 'Period', value: this.periodOf(f.factsFrom, f.factsTo ?? f.factsFrom) });
+    if (f.finishedAt && !this.isActive(f)) out.push({ label: f.lastDryRun ? 'Validated' : 'Imported', value: this.when(f.finishedAt) });
+    if (!this.isActive(f) && f.status !== 'UPLOADED' && f.status !== 'FAILED')
+      out.push({ label: 'Result', value: `${this.fmt(f.rowsCreated)} new · ${this.fmt(f.rowsUpdated)} updated · ${this.fmt(f.rowsUnchanged)} unchanged · ${this.fmt(f.rowsRejected)} rejected`, bad: f.rowsRejected > 0 });
+    if (f.attempts > 1) out.push({ label: 'Attempts', value: String(f.attempts) });
+    if (f.status === 'FAILED' && f.errorMessage) out.push({ label: 'Error', value: f.errorMessage, bad: true });
+    else if (this.mismatch(f)) out.push({ label: 'Note', value: 'Not for the selected hospital', bad: true });
+    else if (this.blocked(f)) out.push({ label: 'Note', value: 'Waiting for the catalogue to be imported', bad: true });
+    return out;
+  }
 
   isActive(f: ImportFileDto | null | undefined): boolean { return !!f && ACTIVE.includes(f.status); }
   imported(f: ImportFileDto): boolean { return f.status === 'COMPLETED' || f.status === 'COMPLETED_WITH_REJECTS' || (f.status === 'FAILED' && !f.lastDryRun); }
   /** The open file's latest status comes from the polled list. */
   live(f: ImportFileDto): ImportFileDto { return this.files.value()?.find(x => x.id === f.id) ?? f; }
   pct(f: ImportFileDto): number { return f.tablesTotal ? Math.floor(f.tablesDone / f.tablesTotal * 100) : 0; }
-  canRun(f: ImportFileDto, _d: ImportFileDetail): boolean { return !this.busy() && !this.isActive(f) && !this.mismatch(f); }
+  canRun(f: ImportFileDto, _d: ImportFileDetail): boolean { return !this.busy() && !this.isActive(f) && !this.blocked(f); }
+
+  /** Why this file cannot be imported now: another hospital's HIS pack, or facts before the catalogue. Null when it can. */
+  blocked(f: ImportFileDto): string | null {
+    const m = this.mismatch(f);
+    if (m) return m;
+    if (needsCatalogue(f) && !this.catalogueReady())
+      return `${this.ctx.hospitalParam()} has no catalogue yet. Import its catalogue pack first, then the facts.`;
+    return null;
+  }
 
   /** Why a HIS pack cannot load into the top-bar hospital: SetupID / ProjectID must match. Null when it can. */
   mismatch(f: ImportFileDto): string | null {
@@ -652,35 +829,110 @@ export class DataImport {
         failed.push(`${f.name}: ${toApiError(e).message}`);
       }
     }
-    this.files.reload();
-    const hospital = this.ctx.hospitalParam();
-    const toQueue = uploaded.filter(f => {
+    for (const f of uploaded) {
       const m = this.mismatch(f);
       if (m) failed.push(`${f.fileName}: ${m}`);
-      return !m;
-    }).sort((a, b) => queueKey(a).localeCompare(queueKey(b), undefined, { numeric: true }));
-    let queued = 0;
-    for (const [i, f] of toQueue.entries()) {
-      this.uploadText.set(`Queuing ${i + 1} of ${toQueue.length}: ${f.fileName}…`);
-      try {
-        await firstValueFrom(this.api.post<ImportFileDto>(`data/files/${f.id}/import`, { hospital: hospital || null, dryRun: false }));
-        queued++;
-      } catch (e) {
-        failed.push(`${f.fileName}: ${toApiError(e).message}`);
-      }
     }
-    this.batch.set({ total: picked.length, uploaded: uploaded.length, queued, failed });
+    this.batch.set({ total: picked.length, uploaded: uploaded.length, queued: 0, failed });
     this.files.reload();
   }
 
-  async open(id: string): Promise<void> {
+  /** Files that can be imported into the top-bar hospital now and have not been imported yet, in queue order. */
+  pending = computed(() => (this.files.value() ?? [])
+    .filter(f => ['UPLOADED', 'VALIDATED', 'FAILED'].includes(f.status) && !this.mismatch(f))
+    .filter(f => !(f.status === 'FAILED' && f.lastDryRun === false && f.rowsCreated + f.rowsUpdated > 0))
+    .sort((a, b) => queueKey(a).localeCompare(queueKey(b), undefined, { numeric: true })));
+  /** Of those, the facts that must wait because the hospital has no catalogue and none is among them. */
+  pendingBlocked = computed(() => {
+    const p = this.pending();
+    if (this.catalogueReady() || p.some(f => isCatalogue(f))) return [];
+    return p.filter(f => needsCatalogue(f));
+  });
+  importable = computed(() => this.pending().filter(f => !this.pendingBlocked().includes(f)));
+
+  /** Queue every pending file: catalogue first, then facts by date. The worker runs them in this order. */
+  async importPending(): Promise<void> {
+    const list = this.importable();
+    if (!list.length || this.busy()) return;
+    const hospital = this.ctx.hospitalParam();
+    const catalogues = list.filter(f => isCatalogue(f)).length;
+    if (!await this.confirmAsk({
+      title: `Import ${list.length} file(s) into ${hospital}?`,
+      lines: [
+        catalogues ? `${catalogues} catalogue file(s) first, then ${list.length - catalogues} facts file(s), oldest date first.` : `${list.length} file(s), oldest date first.`,
+        'They run one at a time in the background; you can leave this page.',
+        'Rows are matched on their keys: existing rows are updated, not duplicated.',
+      ],
+      confirm: `Import ${list.length} file(s)`,
+    })) return;
+    this.busy.set(true);
+    this.error.set(null);
+    const failed: string[] = [];
+    let queued = 0;
+    try {
+      for (const [i, f] of list.entries()) {
+        this.uploadText.set(`Queuing ${i + 1} of ${list.length}: ${f.fileName}…`);
+        try {
+          await firstValueFrom(this.api.post<ImportFileDto>(`data/files/${f.id}/import`, { hospital: hospital || null, dryRun: false }));
+          queued++;
+        } catch (e) {
+          failed.push(`${f.fileName}: ${toApiError(e).message}`);
+        }
+      }
+    } finally {
+      this.uploadText.set('');
+      this.busy.set(false);
+    }
+    this.batch.set({ total: list.length, uploaded: list.length, queued, failed });
+    this.files.reload();
+    this.catalogue.reload();
+  }
+
+  async open(id: string, scroll = false): Promise<void> {
     this.error.set(null);
     try {
       this.select(await firstValueFrom(this.api.get<ImportFileDetail>(`data/files/${id}`)));
+      if (scroll) setTimeout(() => document.getElementById('file-detail')?.scrollIntoView({ behavior: 'smooth', block: 'start' }));
     } catch (e) {
       this.error.set(toApiError(e).message);
     }
   }
+
+  /** What happened to the file, in order: the log of its last validate / import. */
+  timeline(f: ImportFileDto): { label: string; value: string }[] {
+    const t: { label: string; value: string }[] = [
+      { label: 'Uploaded', value: `${this.when(f.uploadedAt)} by ${f.uploadedBy}` },
+    ];
+    if (f.queuedAt) t.push({ label: f.lastDryRun ? 'Validation queued' : 'Import queued', value: `${this.when(f.queuedAt)}${f.runBy ? ' by ' + f.runBy : ''}` });
+    if (f.startedAt) t.push({ label: 'Started', value: this.when(f.startedAt) });
+    if (f.finishedAt) {
+      const secs = f.startedAt ? Math.max(0, Math.round((Date.parse(utc(f.finishedAt)) - Date.parse(utc(f.startedAt))) / 1000)) : null;
+      t.push({ label: 'Finished', value: `${this.when(f.finishedAt)}${secs !== null ? ` (${secs < 60 ? secs + ' s' : Math.floor(secs / 60) + ' min ' + (secs % 60) + ' s'})` : ''}` });
+    }
+    t.push({ label: 'Status', value: this.statusText(f) });
+    if (f.attempts > 1) t.push({ label: 'Attempts', value: String(f.attempts) });
+    if (f.tablesTotal) t.push({ label: 'Tables', value: `${f.tablesDone} of ${f.tablesTotal} done` });
+    if (!this.isActive(f) && f.status !== 'FAILED' && f.status !== 'UPLOADED')
+      t.push({ label: 'Rows', value: `${this.fmt(f.rowsCreated)} new · ${this.fmt(f.rowsUpdated)} updated · ${this.fmt(f.rowsUnchanged)} unchanged · ${this.fmt(f.rowsRejected)} rejected` });
+    if (f.errorMessage) t.push({ label: 'Error', value: f.errorMessage });
+    return t;
+  }
+
+  /** Rejected rows of the open file, per table: reasons with counts, and a few sample rows. */
+  rejectGroups = computed(() => (this.selected()?.results ?? []).filter(r => r.rejected > 0).map(r => {
+    const counts = new Map<string, number>();
+    for (const x of r.rejects) for (const e of x.errors) counts.set(e, (counts.get(e) ?? 0) + 1);
+    return {
+      entity: r.entity, rows: r.rows, rejected: r.rejected, batchId: r.batchId, result: r, sampled: r.rejects.length,
+      reasons: [...counts.entries()].sort((a, b) => b[1] - a[1]).map(([reason, count]) => ({ reason, count })),
+      samples: r.rejects.slice(0, 10),
+    };
+  }));
+  rejectCols: Col<ImportResult['rejects'][number]>[] = [
+    { key: 'row', label: 'Row', type: 'num', dp: 0 },
+    { key: 'key', label: 'Key', value: r => r.key ?? '—' },
+    { key: 'errors', label: 'Reason', value: r => r.errors.join(' · '), sortable: false },
+  ];
 
   private select(d: ImportFileDetail): void {
     this.selected.set(d);
@@ -704,10 +956,19 @@ export class DataImport {
 
   /** From the list: import into the top-bar hospital. A HIS pack for another hospital is refused. */
   async quick(f: ImportFileDto): Promise<void> {
-    const mismatch = this.mismatch(f);
-    if (mismatch) { this.error.set(mismatch); return; }
+    const blocked = this.blocked(f);
+    if (blocked) { this.error.set(blocked); return; }
     const hospital = this.ctx.hospitalParam();
-    if (this.imported(f) && !confirm(`Import ${f.fileName} again${hospital ? ' into ' + hospital : ''}? Rows are matched on their keys, so existing rows are updated, not duplicated.`)) return;
+    if (this.imported(f) && !await this.confirmAsk({
+      title: `Re-import ${f.fileName}?`,
+      lines: [
+        `Loads the file into ${hospital} again, in the background.`,
+        'Rows are matched on their keys: existing rows are updated with the file\'s values, not duplicated.',
+        'Rows that were rejected last time are tried again.',
+      ],
+      note: f.finishedAt ? `Last ${f.lastDryRun ? 'validated' : 'imported'} ${this.when(f.finishedAt)}.` : undefined,
+      confirm: 'Re-import',
+    })) return;
     if (this.busy()) return;
     this.busy.set(true);
     this.error.set(null);
@@ -722,7 +983,16 @@ export class DataImport {
   }
 
   async remove(f: ImportFileDto): Promise<void> {
-    if (!confirm(`Remove ${f.fileName} from the list? Data already imported stays.`)) return;
+    if (!await this.confirmAsk({
+      title: `Remove ${f.fileName}?`,
+      lines: [
+        'Deletes the uploaded file and its import results from this list.',
+        this.imported(f) ? 'Data it already imported stays in VERITA. To delete that, use the period\'s facts on Periods.' : 'Nothing was imported from it, so no data changes.',
+        'To import it again later you must upload the file again.',
+      ],
+      confirm: 'Remove',
+      danger: true,
+    })) return;
     try {
       await firstValueFrom(this.api.delete(`data/files/${f.id}`));
       if (this.selected()?.file.id === f.id) this.selected.set(null);
@@ -732,8 +1002,37 @@ export class DataImport {
     }
   }
 
+  /** The open confirmation, and how to answer it. */
+  ask = signal<{ title: string; lines: string[]; note?: string; confirm: string; danger?: boolean } | null>(null);
+  private resolveAsk: ((ok: boolean) => void) | null = null;
+  private confirmAsk(q: { title: string; lines: string[]; note?: string; confirm: string; danger?: boolean }): Promise<boolean> {
+    this.resolveAsk?.(false);
+    this.ask.set(q);
+    return new Promise(resolve => (this.resolveAsk = resolve));
+  }
+  answer(ok: boolean): void {
+    const resolve = this.resolveAsk;
+    this.resolveAsk = null;
+    this.ask.set(null);
+    resolve?.(ok);
+  }
+
   rejects(r: ImportResult) { return download(this.http, `${apiV1}/data/imports/${r.batchId}/rejects`, `${r.entity}-rejects.csv`); }
 }
+
+interface CatalogueStatus { hospital: string; hasCatalogue: boolean; procedures: number; departments: number; catalogueQueued: boolean; lastCatalogueImport?: string | null; }
+
+/** The file's kind for the list: a HIS catalogue pack, a HIS facts pack, or a filled VERITA template. */
+function fileType(f: ImportFileDto): string {
+  if (!f.isHisPack) return 'Template';
+  return isCatalogue(f) ? 'Catalogue' : 'Facts';
+}
+
+function isCatalogue(f: ImportFileDto): boolean { return f.isHisPack && (f.pack ?? '').toLowerCase() === 'catalogue'; }
+function needsCatalogue(f: ImportFileDto): boolean { return f.isHisPack && !isCatalogue(f); }
+
+/** API timestamps are UTC without a zone suffix. */
+function utc(v: string): string { return v.endsWith('Z') ? v : v + 'Z'; }
 
 /** Queue order: catalogue packs first, then facts by their first day, then by name. */
 function queueKey(f: ImportFileDto): string {
@@ -755,20 +1054,25 @@ interface StoragePeriod {
   id: string; code: string; startDate: string; endDate: string; status: string; run?: string | null; runStatus?: string | null;
   entities: StoragePeriodEntity[]; factRows: number; factBytes: number; resultRows: number; resultBytes: number;
 }
+interface StorageGroupDto { group: string; deletable: boolean; blocker: string | null; rows: number; bytes: number; }
 interface StorageDto {
   hospital: string; databaseBytes: number; usedBytes: number; tables: StorageTable[];
   factEntities: { entity: string; label: string; group: string }[]; periods: StoragePeriod[];
+  groups?: StorageGroupDto[];
 }
-interface StorageGroupRow { group: string; tables: number; rows: number; bytes: number; share: number; }
+interface StorageGroupRow {
+  group: string; tables: number; rows: number; bytes: number; share: number;
+  deletable: boolean; blocker: string | null;
+}
 
 const GROUP_ORDER = ['Facts', 'Catalogue', 'Calculation results', 'Import files', 'History', 'System'];
 const GROUP_NOTE: Record<string, string> = {
-  Facts: 'Monthly HIS data: encounters, services, activity, revenue, refunds, consumption, staff time, ledger.',
-  Catalogue: 'Hospitals, departments, cost centres, procedures, resources, rates and the rest of the costing model.',
+  Facts: 'Monthly HIS data: encounters, services, revenue, refunds, consumption, staff time, transfers, ledger. Activity×Resource invent from HIS clocks is not used.',
+  Catalogue: 'Departments, cost centres, procedures, resources, rates and the rest of the costing model. The hospital entry is kept.',
   'Calculation results': 'What calculation runs wrote. Removed with the run.',
   'Import files': 'Uploaded files kept for re-import, and import batches.',
   History: 'Earlier versions of catalogue rows (temporal history).',
-  System: 'Users, audit trail, assistant and migration tables.',
+  System: 'Users, audit trail, assistant and migration tables. Cannot be deleted here.',
 };
 
 /** How much the database holds: by table and group (all hospitals), and the selected hospital's facts per period. */
@@ -788,7 +1092,8 @@ const GROUP_NOTE: Record<string, string> = {
 
           <section class="card" style="margin-top:14px">
             <h2>By group · {{ d.hospital }}</h2>
-            <v-table [rows]="groups()" [columns]="groupCols" caption="Storage by group" />
+            @if (message()) { <p class="notice" [class.bad]="error()">{{ message() }}</p> }
+            <v-table [rows]="groups()" [columns]="groupCols()" caption="Storage by group" />
           </section>
 
           <section class="card">
@@ -801,10 +1106,17 @@ const GROUP_NOTE: Record<string, string> = {
       </v-state>
     </v-page>
   `,
+  styles: `.notice.bad { color: var(--bad); }`,
 })
 export class Storage {
+  private api = inject(Api);
+  private auth = inject(Auth);
   private ctx = inject(RunContext);
   res = apiResource<StorageDto>(() => this.ctx.hospitalParam() ? 'storage' : null, () => ({ hospital: this.ctx.hospitalParam() }));
+  busy = signal(false);
+  error = signal(false);
+  message = signal<string | null>(null);
+  canEdit = computed(() => this.auth.can('masterdata.edit'));
   size = formatBytes;
   fmt(n: number): string { return formatDec(String(n), 0); }
 
@@ -817,22 +1129,88 @@ export class Storage {
   groups = computed<StorageGroupRow[]>(() => {
     const t = this.own();
     const total = this.totalBytes() || 1;
-    const names = [...new Set(t.map(x => x.group))].sort((a, b) => GROUP_ORDER.indexOf(a) - GROUP_ORDER.indexOf(b));
+    const apiGroups = new Map((this.res.value()?.groups ?? []).map(g => [g.group, g]));
+    const names = [...new Set([
+      ...t.map(x => x.group),
+      ...(this.res.value()?.groups ?? []).map(g => g.group),
+    ])].sort((a, b) => GROUP_ORDER.indexOf(a) - GROUP_ORDER.indexOf(b));
     return names.map(g => {
       const rows = t.filter(x => x.group === g);
       const bytes = rows.reduce((s, x) => s + x.hospitalBytes, 0);
-      return { group: g, tables: rows.filter(x => x.hospitalRows > 0).length, rows: rows.reduce((s, x) => s + x.hospitalRows, 0), bytes, share: bytes / total * 100 };
+      const rowCount = rows.reduce((s, x) => s + x.hospitalRows, 0);
+      const meta = apiGroups.get(g);
+      return {
+        group: g,
+        tables: rows.filter(x => x.hospitalRows > 0).length,
+        rows: rowCount || meta?.rows || 0,
+        bytes: bytes || meta?.bytes || 0,
+        share: (bytes || meta?.bytes || 0) / total * 100,
+        deletable: meta?.deletable ?? g !== 'System',
+        blocker: meta?.blocker ?? (g === 'System' ? 'System tables cannot be deleted.' : null),
+      };
     }).filter(g => g.rows > 0 || ['Facts', 'Catalogue', 'Calculation results'].includes(g.group));
   });
   groupTiles = computed(() => this.groups().filter(g => ['Facts', 'Catalogue', 'Calculation results'].includes(g.group)));
 
-  groupCols: Col<StorageGroupRow>[] = [
-    { key: 'group', label: 'Group', sub: r => GROUP_NOTE[r.group] ?? null },
-    { key: 'tables', label: 'Tables', type: 'num', dp: 0 },
-    { key: 'rows', label: 'Rows', type: 'num', dp: 0 },
-    { key: 'bytes', label: 'Storage', value: r => formatBytes(r.bytes) },
-    { key: 'share', label: 'Share', type: 'bar' },
-  ];
+  groupCols = computed<Col<StorageGroupRow>[]>(() => {
+    const cols: Col<StorageGroupRow>[] = [
+      {
+        key: 'group', label: 'Group',
+        sub: r => [GROUP_NOTE[r.group], r.blocker].filter(Boolean).join(' — ') || null,
+      },
+      { key: 'tables', label: 'Tables', type: 'num', dp: 0 },
+      { key: 'rows', label: 'Rows', type: 'num', dp: 0 },
+      { key: 'bytes', label: 'Storage', value: r => formatBytes(r.bytes) },
+      { key: 'share', label: 'Share', type: 'bar' },
+    ];
+    if (this.canEdit()) {
+      cols.push({
+        key: 'delete', label: '', type: 'button', sortable: false,
+        // System: never. Blocked groups: no button — blocker text under the group name warns what to delete first.
+        button: r => r.group !== 'System' && r.deletable && r.rows > 0 && !r.blocker ? 'Delete' : null,
+        onButton: r => void this.removeGroup(r),
+      });
+    }
+    return cols;
+  });
+
+  async removeGroup(row: StorageGroupRow): Promise<void> {
+    const hospital = this.ctx.hospitalParam();
+    if (!hospital || this.busy() || row.group === 'System') return;
+    if (row.blocker) {
+      this.error.set(true);
+      this.message.set(row.blocker);
+      return;
+    }
+    const keepHospital = row.group === 'Catalogue'
+      ? '\n\nThe hospital entry itself is kept.'
+      : '';
+    const typed = prompt(
+      `Delete all ${row.group.toLowerCase()} for ${hospital} (${row.rows.toLocaleString()} rows, ${formatBytes(row.bytes)})?${keepHospital}\n\nThis cannot be undone.\n\nType the hospital code (${hospital}) to confirm.`);
+    if (typed === null) return;
+    if (typed.trim() !== hospital) {
+      this.error.set(true);
+      this.message.set('The hospital code did not match. Nothing was deleted.');
+      return;
+    }
+    this.busy.set(true);
+    this.error.set(false);
+    this.message.set(`Deleting ${row.group.toLowerCase()}…`);
+    try {
+      const done = await firstValueFrom(this.api.deleteWith<{ table: string; rows: number }[]>(
+        'storage', { hospital, group: row.group }));
+      const removed = done.filter(x => x.rows > 0);
+      this.message.set(removed.length
+        ? `Deleted ${removed.reduce((s, x) => s + x.rows, 0).toLocaleString()} rows across ${removed.length} table${removed.length === 1 ? '' : 's'}.`
+        : 'Nothing to delete.');
+      this.res.reload();
+    } catch (err) {
+      this.error.set(true);
+      this.message.set(toApiError(err).message);
+    } finally {
+      this.busy.set(false);
+    }
+  }
 
   private rowsOf(p: StoragePeriod, ...entities: string[]): number {
     return (p.entities ?? []).filter(e => entities.includes(e.entity)).reduce((s, e) => s + e.rows, 0);
@@ -850,6 +1228,7 @@ export class Storage {
     { key: 'rev', label: 'Revenue', type: 'num', dp: 0, value: this.count('rev', 'RevenueTransaction') },
     { key: 'cons', label: 'Consumption', type: 'num', dp: 0, value: this.count('cons', 'ConsumptionItem') },
     { key: 'staff', label: 'Staff time', type: 'num', dp: 0, value: this.count('staff', 'StaffTime') },
+    { key: 'xfer', label: 'Transfers', type: 'num', dp: 0, value: this.count('xfer', 'EncounterTransfer') },
     { key: 'other', label: 'Other', type: 'num', dp: 0, value: this.count('other', 'Patient', 'RefundTransaction', 'InvoicePackageItem', 'GLPosting', 'DriverVolume') },
     { key: 'factRows', label: 'Fact records', type: 'num', dp: 0 },
     { key: 'factBytes', label: 'Fact storage', value: r => r.factRows ? formatBytes(r.factBytes) : '—' },
@@ -863,6 +1242,7 @@ export class Storage {
     return {
       enc: sum(p => this.rowsOf(p, 'Encounter')), svc: sum(p => this.rowsOf(p, 'EncounterService')), act: sum(p => this.rowsOf(p, 'ActivityTransaction')),
       rev: sum(p => this.rowsOf(p, 'RevenueTransaction')), cons: sum(p => this.rowsOf(p, 'ConsumptionItem')), staff: sum(p => this.rowsOf(p, 'StaffTime')),
+      xfer: sum(p => this.rowsOf(p, 'EncounterTransfer')),
       other: sum(p => this.rowsOf(p, 'Patient', 'RefundTransaction', 'InvoicePackageItem', 'GLPosting', 'DriverVolume')),
       factRows: sum(p => p.factRows), factBytes: formatBytes(sum(p => p.factBytes)), resultRows: sum(p => p.resultRows), resultBytes: formatBytes(sum(p => p.resultBytes)),
     };

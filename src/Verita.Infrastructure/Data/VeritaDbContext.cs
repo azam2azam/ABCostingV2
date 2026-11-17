@@ -61,6 +61,7 @@ public sealed class VeritaDbContext(DbContextOptions<VeritaDbContext> options) :
     public DbSet<RefundTransaction> RefundTransactions => Set<RefundTransaction>();
     public DbSet<InvoicePackageItem> InvoicePackageItems => Set<InvoicePackageItem>();
     public DbSet<ConsumptionItem> ConsumptionItems => Set<ConsumptionItem>();
+    public DbSet<EncounterTransfer> EncounterTransfers => Set<EncounterTransfer>();
     public DbSet<StaffTime> StaffTimes => Set<StaffTime>();
     // Rules & versions
     public DbSet<AllocationRule> AllocationRules => Set<AllocationRule>();
@@ -187,6 +188,7 @@ public sealed class VeritaDbContext(DbContextOptions<VeritaDbContext> options) :
         mb.Entity<CostComponent>().HasKey(x => x.Id).IsClustered(false);
         mb.Entity<CostComponent>().HasIndex(x => new { x.RunId, x.Scope, x.ScopeId }).IsClustered();
         mb.Entity<EncounterCost>().HasKey(x => x.Id).IsClustered(false);
+        mb.Entity<RevenueTransaction>().Property(x => x.DoctorShareType).HasMaxLength(1);
         mb.Entity<ImportFile>().Property(x => x.Sha256).HasMaxLength(64);
         mb.Entity<ImportFile>().Property(x => x.Status).HasMaxLength(32);
         mb.Entity<ImportFile>().HasIndex(x => x.UploadedAt);
@@ -293,6 +295,8 @@ public sealed class VeritaDbContext(DbContextOptions<VeritaDbContext> options) :
         Fk<InvoicePackageItem, Procedure>(x => x.ProcedureId);
         Fk<ConsumptionItem, Hospital>(x => x.HospitalId);
         Fk<ConsumptionItem, Encounter>(x => x.EncounterId);
+        Fk<EncounterTransfer, Hospital>(x => x.HospitalId);
+        Fk<EncounterTransfer, Encounter>(x => x.EncounterId);
         Fk<StaffTime, Hospital>(x => x.HospitalId);
         Fk<StaffTime, Encounter>(x => x.EncounterId);
         Fk<StaffTime, Provider>(x => x.ProviderId);
@@ -395,7 +399,18 @@ public sealed class VeritaDbContext(DbContextOptions<VeritaDbContext> options) :
         mb.Entity<ConsumptionItem>().HasIndex(x => new { x.HospitalId, x.SourceRef }).IsUnique();
         mb.Entity<ConsumptionItem>().HasIndex(x => x.EncounterId);
         mb.Entity<ConsumptionItem>().HasIndex(x => new { x.HospitalId, x.HisEncounterNo });
+        mb.Entity<EncounterTransfer>().Property(x => x.SourceRef).HasMaxLength(120);
+        mb.Entity<EncounterTransfer>().Property(x => x.StartTime).HasMaxLength(50);
+        mb.Entity<EncounterTransfer>().Property(x => x.EndTime).HasMaxLength(50);
+        mb.Entity<EncounterTransfer>().Property(x => x.RoomId).HasMaxLength(20);
+        mb.Entity<EncounterTransfer>().Property(x => x.BedId).HasMaxLength(20);
+        mb.Entity<EncounterTransfer>().Property(x => x.Remarks).HasMaxLength(500);
+        mb.Entity<EncounterTransfer>().HasIndex(x => new { x.HospitalId, x.SourceRef }).IsUnique();
+        mb.Entity<EncounterTransfer>().HasIndex(x => x.EncounterId);
+        mb.Entity<EncounterTransfer>().HasIndex(x => new { x.HospitalId, x.HisEncounterNo });
         mb.Entity<StaffTime>().Property(x => x.SourceRef).HasMaxLength(120);
+        mb.Entity<StaffTime>().Property(x => x.StartTime).HasMaxLength(50);
+        mb.Entity<StaffTime>().Property(x => x.EndTime).HasMaxLength(50);
         mb.Entity<StaffTime>().HasIndex(x => new { x.HospitalId, x.SourceRef }).IsUnique();
         mb.Entity<StaffTime>().HasIndex(x => x.EncounterId);
         mb.Entity<StaffTime>().HasIndex(x => new { x.HospitalId, x.HisEncounterNo });

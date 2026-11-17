@@ -4,7 +4,9 @@ using Microsoft.Data.SqlClient;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
 using Verita.Application;
+using Verita.Domain;
 using Verita.Infrastructure.Data;
+using Verita.Infrastructure.DataHub;
 
 namespace Verita.Infrastructure.Runs;
 
@@ -27,17 +29,24 @@ public sealed record StoragePeriodEntity(string Entity, long Rows, long Estimate
 public sealed record StoragePeriod(Guid Id, string Code, DateOnly StartDate, DateOnly EndDate, string Status, string? Run, string? RunStatus,
     StoragePeriodEntity[] Entities, long FactRows, long FactBytes, long ResultRows, long ResultBytes);
 public sealed record StorageFactEntity(string Entity, string Label, string Group);
-public sealed record StorageDto(string Hospital, long DatabaseBytes, long UsedBytes, StorageTable[] Tables, StorageFactEntity[] FactEntities, StoragePeriod[] Periods);
+/// <summary>Hospital-scoped storage group: whether it can be wiped, and what must be removed first.</summary>
+public sealed record StorageGroupDto(string Group, bool Deletable, string? Blocker, long Rows, long Bytes);
+public sealed record StorageGroupDeleted(string Table, long Rows);
+public sealed record StorageDto(string Hospital, long DatabaseBytes, long UsedBytes, StorageTable[] Tables, StorageFactEntity[] FactEntities, StoragePeriod[] Periods,
+    StorageGroupDto[] Groups);
 
 /// <summary>
 /// The facts that belong to one hospital's period: encounters admitted in it (the engine's rule) with
 /// their services, activity, revenue, refunds and package items, plus the period's ledger and driver
 /// volumes. Counts, storage estimates, and deletion — only while no calculation run uses them.
 /// </summary>
-public sealed class PeriodFactsService(IDbContextFactory<VeritaDbContext> factory, IAuditWriter audit, ILogger<PeriodFactsService> log)
+public sealed class PeriodFactsService(IDbContextFactory<VeritaDbContext> factory, RunService runs, IAuditWriter audit, ILogger<PeriodFactsService> log)
 {
     private const int DeleteChunk = 20_000;
     private const int DeleteTimeoutSeconds = 3600;
+    private static readonly string[] StorageGroupOrder = ["Facts", "Catalogue", "Calculation results", "Import files", "History", "System"];
+    /// <summary>Never wiped with catalogue — the hospital entry itself stays.</summary>
+    private static readonly HashSet<string> CatalogueNeverDelete = new(StringComparer.OrdinalIgnoreCase) { "Hospital" };
 
     // Encounters of the period: same membership as RunContextLoader (admit date in the period).
     private const string Enc = "SELECT e.Id FROM [Encounter] e WHERE e.HospitalId = @h AND e.AdmitAt >= @s AND e.AdmitAt < @e";
@@ -48,7 +57,7 @@ public sealed class PeriodFactsService(IDbContextFactory<VeritaDbContext> factor
     [
         new("Encounter", "Encounters", "Clinical", "Encounter",
             "t.HospitalId = @h AND t.AdmitAt >= @s AND t.AdmitAt < @e", true,
-            ["EncounterService", "ActivityTransaction", "RevenueTransaction", "RefundTransaction", "InvoicePackageItem", "ConsumptionItem", "StaffTime", "Patient"],
+            ["EncounterService", "ActivityTransaction", "RevenueTransaction", "RefundTransaction", "InvoicePackageItem", "ConsumptionItem", "StaffTime", "EncounterTransfer", "Patient"],
             "Admitted in this period."),
         new("Patient", "Patients", "Clinical", "Patient",
             $"t.Id IN (SELECT x.PatientId FROM [Encounter] x WHERE x.Id IN ({Enc})) AND NOT EXISTS (SELECT 1 FROM [Encounter] o WHERE o.PatientId = t.Id AND o.Id NOT IN ({Enc}))",
@@ -71,6 +80,9 @@ public sealed class PeriodFactsService(IDbContextFactory<VeritaDbContext> factor
         new("StaffTime", "Staff time", "Clinical", "StaffTime",
             $"t.HospitalId = @h AND (t.EncounterId IN ({Enc}) OR (t.EncounterId IS NULL AND t.OccurredAt >= @s AND t.OccurredAt < @e))", true, [],
             "Doctor, nurse and technician minutes. Unlinked rows count by date."),
+        new("EncounterTransfer", "Bed / ward transfers", "Clinical", "EncounterTransfer",
+            $"t.HospitalId = @h AND (t.EncounterId IN ({Enc}) OR (t.EncounterId IS NULL AND t.TransferDate >= @s AND t.TransferDate < @e))", true, [],
+            "HIS INP_Transfer as stored (TransferDate, StartTime, EndTime, Duration). Unlinked rows count by TransferDate."),
         new("GLPosting", "GL postings", "Ledger", "GLPosting",
             "t.HospitalId = @h AND t.PeriodId = @p", true, []),
         new("DriverVolume", "Driver volumes", "Ledger", "DriverVolume",
@@ -79,7 +91,7 @@ public sealed class PeriodFactsService(IDbContextFactory<VeritaDbContext> factor
 
     // Children before parents: NoAction foreign keys.
     private static readonly string[] DeleteOrder =
-        ["ActivityTransaction", "EncounterService", "RevenueTransaction", "RefundTransaction", "InvoicePackageItem", "ConsumptionItem", "StaffTime", "GLPosting", "DriverVolume", "Encounter", "Patient"];
+        ["ActivityTransaction", "EncounterService", "RevenueTransaction", "RefundTransaction", "InvoicePackageItem", "ConsumptionItem", "StaffTime", "EncounterTransfer", "GLPosting", "DriverVolume", "Encounter", "Patient"];
 
     private sealed record Scope(Guid PeriodId, string PeriodCode, DateOnly Start, DateOnly End, string PeriodStatus, Guid HospitalId, string HospitalCode);
 
@@ -328,7 +340,7 @@ public sealed class PeriodFactsService(IDbContextFactory<VeritaDbContext> factor
         }
 
         var runs = await db.CalculationRuns.AsNoTracking().Where(x => x.HospitalId == h.Id).OrderByDescending(x => x.CreatedAt)
-            .Select(x => new { x.PeriodId, x.Code, x.Status }).ToListAsync(ct);
+            .Select(x => new { x.Id, x.PeriodId, x.Code, x.Status, x.CostingVersionId }).ToListAsync(ct);
         var list = periods.Select(per =>
         {
             var ents = Defs.Select(d =>
@@ -342,8 +354,202 @@ public sealed class PeriodFactsService(IDbContextFactory<VeritaDbContext> factor
                 ents, ents.Sum(e => e.Rows), ents.Sum(e => e.EstimatedBytes), rr, rb);
         }).ToArray();
 
+        var versionStatuses = await db.CostingVersions.AsNoTracking().Where(v => v.HospitalId == h.Id)
+            .ToDictionaryAsync(v => v.Id, v => v.Status, ct);
+        var own = tables.Where(t => !t.Shared).ToList();
+        var groups = StorageGroupOrder.Select(g =>
+        {
+            var rows = own.Where(t => t.Group == g).Sum(t => t.HospitalRows);
+            var bytes = own.Where(t => t.Group == g).Sum(t => t.HospitalBytes);
+            var (deletable, blocker) = GroupDeleteState(g, own, runs.Count, runs.Count(r =>
+                !Catalogue.IsRunDeletable(r.Status, versionStatuses.GetValueOrDefault(r.CostingVersionId, "DRAFT"))));
+            return new StorageGroupDto(g, deletable, blocker, rows, bytes);
+        }).Where(g => g.Rows > 0 || g.Group is "Facts" or "Catalogue" or "Calculation results" or "System").ToArray();
+
         return new StorageDto(h.Code, dbBytes, usedBytes, tables.OrderByDescending(t => t.Bytes).ToArray(),
-            Defs.Select(d => new StorageFactEntity(d.Entity, d.Label, d.Group)).ToArray(), list);
+            Defs.Select(d => new StorageFactEntity(d.Entity, d.Label, d.Group)).ToArray(), list, groups);
+    }
+
+    /// <summary>
+    /// Wipe one hospital-scoped storage group. Catalogue never removes the Hospital row.
+    /// Facts refuse while calculation runs exist; catalogue refuses while facts exist.
+    /// </summary>
+    public async Task<StorageGroupDeleted[]> DeleteGroupAsync(Principal p, string hospital, string group, CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(hospital)) throw AppError.Invalid("Choose a hospital.");
+        if (!p.HasHospital(hospital)) throw AppError.OutOfScope($"Hospital {hospital}");
+        group = group?.Trim() ?? "";
+        if (string.Equals(group, "System", StringComparison.OrdinalIgnoreCase))
+            throw AppError.Invalid("System tables cannot be deleted.");
+        if (!StorageGroupOrder.Contains(group, StringComparer.OrdinalIgnoreCase))
+            throw AppError.Invalid($"Unknown storage group '{group}'.");
+
+        await using var db = await factory.CreateDbContextAsync(ct);
+        var h = await db.Hospitals.AsNoTracking().FirstOrDefaultAsync(x => x.Code == hospital, ct) ?? throw AppError.NotFound($"Hospital {hospital}");
+        var conn = db.Database.GetDbConnection();
+        await db.Database.OpenConnectionAsync(ct);
+        var filters = await HospitalFiltersAsync(conn, ct);
+        var tableGroups = await TableGroupsAsync(conn, ct);
+
+        var factRows = await HospitalGroupRowsAsync(conn, tableGroups, filters, "Facts", h.Id, h.Code, ct);
+        var runRows = await db.CalculationRuns.AsNoTracking().Where(r => r.HospitalId == h.Id)
+            .Select(r => new { r.Id, r.Code, r.Status, r.CostingVersionId }).ToListAsync(ct);
+        var versionStatuses = await db.CostingVersions.AsNoTracking().Where(v => v.HospitalId == h.Id)
+            .ToDictionaryAsync(v => v.Id, v => v.Status, ct);
+        var lockedRuns = runRows.Count(r => !Catalogue.IsRunDeletable(r.Status, versionStatuses.GetValueOrDefault(r.CostingVersionId, "DRAFT")));
+
+        var blocker = group switch
+        {
+            "Catalogue" when factRows > 0 =>
+                $"{h.Code} still has {factRows:N0} fact row{(factRows == 1 ? "" : "s")}. Delete facts first.",
+            "Facts" when runRows.Count > 0 =>
+                $"{h.Code} has calculation run{(runRows.Count == 1 ? "" : "s")} {string.Join(", ", runRows.Select(r => r.Code).Take(8))}{(runRows.Count > 8 ? "…" : "")}. Delete {(runRows.Count == 1 ? "it" : "them")} first.",
+            "Calculation results" when lockedRuns > 0 =>
+                $"{h.Code} has {lockedRuns} calculation run{(lockedRuns == 1 ? "" : "s")} that cannot be deleted (published or in use). Remove {(lockedRuns == 1 ? "it" : "them")} from Runs when allowed.",
+            "System" => "System tables cannot be deleted.",
+            _ => null,
+        };
+        if (blocker is not null) throw AppError.Conflict("STORAGE_GROUP_BLOCKED", blocker);
+
+        var deleted = new List<StorageGroupDeleted>();
+        if (string.Equals(group, "Calculation results", StringComparison.OrdinalIgnoreCase))
+        {
+            foreach (var run in runRows)
+            {
+                await runs.DeleteDraftAsync(run.Id, p, ct);
+                deleted.Add(new StorageGroupDeleted($"CalculationRun:{run.Code}", 1));
+            }
+        }
+        else if (string.Equals(group, "Import files", StringComparison.OrdinalIgnoreCase))
+        {
+            foreach (var table in new[] { "ImportFileContent", "ImportFile" })
+            {
+                if (!filters.TryGetValue(table, out var where)) continue;
+                var n = await ChunkedHospitalDeleteAsync(conn, table, where, h.Id, h.Code, ct);
+                deleted.Add(new StorageGroupDeleted(table, n));
+            }
+        }
+        else
+        {
+            var targets = tableGroups
+                .Where(t => string.Equals(t.Group, group, StringComparison.OrdinalIgnoreCase))
+                .Select(t => t.Table)
+                .Where(t => filters.ContainsKey(t))
+                .Where(t => !(string.Equals(group, "Catalogue", StringComparison.OrdinalIgnoreCase) && CatalogueNeverDelete.Contains(t)))
+                .ToList();
+
+            // Children before parents: reverse EntitySpecs load order, then anything else.
+            var specOrder = EntitySpecs.All
+                .Select(s => s.Type.Name == "Drg" ? "DRG" : s.Type.Name)
+                .Select((name, i) => (name, i))
+                .ToDictionary(x => x.name, x => x.i, StringComparer.OrdinalIgnoreCase);
+            targets = targets
+                .OrderByDescending(t => specOrder.GetValueOrDefault(t, -1))
+                .ThenByDescending(t => t, StringComparer.OrdinalIgnoreCase)
+                .ToList();
+
+            // Facts: patients after encounters would leave orphans — delete children first via Defs order, then leftover hospital-filtered rows.
+            if (string.Equals(group, "Facts", StringComparison.OrdinalIgnoreCase))
+            {
+                foreach (var name in DeleteOrder)
+                {
+                    var d = Defs.FirstOrDefault(x => x.Entity == name);
+                    if (d is null || !filters.TryGetValue(d.Table, out var where)) continue;
+                    // Prefer the hospital filter (all periods) over the period-scoped Def where.
+                    long n;
+                    if (name == "Patient")
+                    {
+                        n = await ChunkedHospitalDeleteAsync(conn, "Patient",
+                            "t.HospitalId = @h AND NOT EXISTS (SELECT 1 FROM [Encounter] e WHERE e.PatientId = t.Id)",
+                            h.Id, h.Code, ct);
+                    }
+                    else
+                        n = await ChunkedHospitalDeleteAsync(conn, d.Table, where, h.Id, h.Code, ct);
+                    deleted.Add(new StorageGroupDeleted(d.Table, n));
+                    targets.RemoveAll(t => string.Equals(t, d.Table, StringComparison.OrdinalIgnoreCase));
+                }
+            }
+
+            foreach (var table in targets)
+            {
+                var n = await ChunkedHospitalDeleteAsync(conn, table, filters[table], h.Id, h.Code, ct);
+                deleted.Add(new StorageGroupDeleted(table, n));
+            }
+        }
+
+        await audit.WriteAsync(p, "DELETE", "StorageGroup", h.Id.ToString(), $"{h.Code} · {group}",
+            metadata: new { hospital = h.Code, group, deleted }, ct: ct);
+        log.LogInformation("Storage group delete {Hospital} {Group}: {Tables} tables, {Rows} rows",
+            h.Code, group, deleted.Count, deleted.Sum(x => x.Rows));
+        return deleted.ToArray();
+    }
+
+    private static (bool Deletable, string? Blocker) GroupDeleteState(string group, IReadOnlyList<StorageTable> own, int runCount, int lockedRuns)
+    {
+        if (string.Equals(group, "System", StringComparison.OrdinalIgnoreCase))
+            return (false, "System tables cannot be deleted.");
+        var factRows = own.Where(t => t.Group == "Facts").Sum(t => t.HospitalRows);
+        return group switch
+        {
+            "Catalogue" when factRows > 0 => (true, "Delete facts first (catalogue wipe keeps the hospital entry)."),
+            "Facts" when runCount > 0 => (true, "Delete calculation runs first."),
+            "Calculation results" when lockedRuns > 0 => (true, "Some calculation runs cannot be deleted yet (published or in use)."),
+            _ => (true, null),
+        };
+    }
+
+    private static async Task<List<(string Table, string Group)>> TableGroupsAsync(DbConnection conn, CancellationToken ct)
+    {
+        var list = new List<(string, string)>();
+        await using var cmd = conn.CreateCommand();
+        cmd.CommandText = "SELECT name FROM sys.tables WHERE is_ms_shipped = 0";
+        await using var r = await cmd.ExecuteReaderAsync(ct);
+        while (await r.ReadAsync(ct))
+        {
+            var name = r.GetString(0);
+            list.Add((name, GroupOf(name)));
+        }
+        return list;
+    }
+
+    private static async Task<long> HospitalGroupRowsAsync(DbConnection conn, List<(string Table, string Group)> tables,
+        Dictionary<string, string> filters, string group, Guid hospitalId, string hospitalCode, CancellationToken ct)
+    {
+        long total = 0;
+        foreach (var (table, g) in tables)
+        {
+            if (!string.Equals(g, group, StringComparison.OrdinalIgnoreCase)) continue;
+            if (!filters.TryGetValue(table, out var where)) continue;
+            await using var cmd = conn.CreateCommand();
+            cmd.CommandTimeout = 600;
+            cmd.CommandText = $"SELECT COUNT_BIG(*) FROM [{table}] t WHERE {where}";
+            cmd.Parameters.Add(new SqlParameter("@h", SqlDbType.UniqueIdentifier) { Value = hospitalId });
+            cmd.Parameters.Add(new SqlParameter("@code", SqlDbType.NVarChar, 200) { Value = hospitalCode });
+            total += Convert.ToInt64(await cmd.ExecuteScalarAsync(ct));
+        }
+        return total;
+    }
+
+    private static async Task<long> ChunkedHospitalDeleteAsync(DbConnection conn, string table, string where, Guid hospitalId, string hospitalCode, CancellationToken ct)
+    {
+        var sql = $"""
+            SET NOCOUNT ON;
+            DECLARE @total bigint = 0, @n int = 1;
+            WHILE @n > 0
+            BEGIN
+                DELETE TOP ({DeleteChunk}) t FROM [{table}] t WHERE {where};
+                SET @n = @@ROWCOUNT;
+                SET @total += @n;
+            END
+            SELECT @total;
+            """;
+        await using var cmd = conn.CreateCommand();
+        cmd.CommandText = sql;
+        cmd.CommandTimeout = DeleteTimeoutSeconds;
+        cmd.Parameters.Add(new SqlParameter("@h", SqlDbType.UniqueIdentifier) { Value = hospitalId });
+        cmd.Parameters.Add(new SqlParameter("@code", SqlDbType.NVarChar, 200) { Value = hospitalCode });
+        var v = await cmd.ExecuteScalarAsync(ct);
+        return v is null or DBNull ? 0 : Convert.ToInt64(v);
     }
 
     private static string? Blocker(Scope s, PeriodFactRun[] runs) =>

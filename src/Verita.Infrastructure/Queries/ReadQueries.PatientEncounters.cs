@@ -111,13 +111,41 @@ public sealed partial class ReadQueries
         FilterOption[] Payers, FilterOption[] Insurers, FilterOption[] Drgs, FilterOption[] EncounterTypes, FilterOption[] Segments);
 
     public sealed record PatientEncounterRow(Guid Id, string EncounterNo, string Mrn, string Patient, string Segment, string EncType, string Department,
-        string Payer, string? Insurer, string? Physician, DateTime AdmitAt, DateTime? DischargeAt, int LengthOfStay, int Services, decimal Gross, decimal Discount, decimal Net, decimal? Cost = null);
+        string Payer, string? Insurer, string? Physician, DateTime AdmitAt, DateTime? DischargeAt, int LengthOfStay, int Services, decimal Gross, decimal Discount, decimal Net, decimal? Cost = null,
+        /// <summary>HIS doctor share on the counted lines (V value, or P % of the line net); null when no line carries one.</summary>
+        decimal? DoctorFee = null,
+        /// <summary>Doctor, nurse and technician minutes (measured and standard).</summary>
+        decimal StaffMinutes = 0,
+        /// <summary>Billed value of consumables and implants consumed (charge, not cost).</summary>
+        decimal Materials = 0,
+        /// <summary>Claimed from the payer on the counted lines, as HIS holds it.</summary>
+        decimal Claimed = 0,
+        /// <summary>Net billed on the encounter's service lines (the doctors' lines): the sum of "Billed on their lines" on the detail.</summary>
+        decimal DoctorBilled = 0,
+        /// <summary>Billed value of medicine consumed (charge, not cost).</summary>
+        decimal Medicine = 0);
     public sealed record PatientEncounterPage(PatientEncounterRow[] Rows, int Total, int Page, int PageSize, bool PhiMasked);
     public sealed record PatientEncounterLine(string? Procedure, Guid? ProcedureId, decimal? Quantity, string? CostCentre, string? Physician, string? Payer,
         DateTime? PerformedAt, decimal? Gross, decimal? Discount, decimal? Net, string SourceRef, decimal? Cost = null, string? ProcedureCode = null, bool IsPackage = false, decimal? Refunded = null,
         /// <summary>When the line billed a package header, the Packages row to open (same HIS code as the procedure).</summary>
         Guid? PackageId = null);
-    public sealed record PatientEncounterDetail(PatientEncounterRow Encounter, PatientEncounterLine[] Lines);
+    public sealed record PatientEncounterDetail(PatientEncounterRow Encounter, PatientEncounterLine[] Lines, EncounterCharges? Charges = null);
+
+    /// <summary>A doctor on the encounter: HIS share on their billed lines (null when no line carries one) and measured minutes.</summary>
+    public sealed record ChargeDoctor(Guid? ProviderId, string Doctor, int Lines, decimal Billed, decimal? Share, decimal Minutes, string Roles);
+    /// <summary>Nursing and other staff time by role. Fee needs a payroll rate, which is not loaded yet.</summary>
+    public sealed record ChargeStaff(string Role, decimal Minutes, string Basis, decimal? Volume, string? VolumeUom, int Rows);
+    /// <summary>A consumed item (consumable, implant, medicine), summed per item. Billed is the charge, not cost.</summary>
+    public sealed record ChargeItem(string Category, string ItemKey, string? Description, string? OracleItemCode, decimal Quantity, string Uom, decimal? Billed,
+        decimal? PrescribedQty, string LinkedTo, int Rows);
+    public sealed record ChargeBilled(decimal Gross, decimal Discount, decimal Net, decimal Refunded, decimal PatientShare, decimal CompanyShare, decimal Tax, int Lines);
+    public sealed record ChargeClaims(decimal Claimed, decimal Settled, decimal Rejected, decimal Outstanding, int LinesClaimed, int LinesRejected);
+    /// <summary>
+    /// What the encounter used and was charged: resources (doctors, nursing), materials (consumables, implants, medicine),
+    /// the billed amount and the claims. HIS values as billed / claimed, not cost. Money is empty without revenue.view.
+    /// </summary>
+    public sealed record EncounterCharges(ChargeDoctor[] Doctors, ChargeStaff[] Staff, ChargeItem[] Consumables, ChargeItem[] Medicine,
+        ChargeBilled? Billed, ChargeClaims? Claims, bool ShowsMoney);
 
     // Properties, not a constructor: EF has to filter and sort on these after the projection.
     private sealed class EncounterBase
@@ -252,13 +280,54 @@ public sealed partial class ReadQueries
                 .Select(g => new { g.Key, Gross = g.Sum(x => x.GrossAmount), Discount = g.Sum(x => x.Discount), Net = g.Sum(x => x.NetAmount - (x.RefundedAmount ?? 0m)) })
                 .ToDictionaryAsync(x => x.Key, x => (x.Gross, x.Discount, x.Net), ct)
             : [];
+        var money = p.Can("revenue.view");
+        var fees = money
+            ? await CountedRevenue(s).Where(x => ids.Contains(x.EncounterId) && x.DoctorShare != null).GroupBy(x => x.EncounterId)
+                .Select(g => new { g.Key, Fee = g.Sum(x => x.DoctorShareType == "P" ? x.NetAmount * x.DoctorShare!.Value / 100m : x.DoctorShare!.Value) })
+                .ToDictionaryAsync(x => x.Key, x => x.Fee, ct)
+            : [];
+        var claimed = money
+            ? await CountedRevenue(s).Where(x => ids.Contains(x.EncounterId) && x.ClaimedAmount != null).GroupBy(x => x.EncounterId)
+                .Select(g => new { g.Key, Claimed = g.Sum(x => x.ClaimedAmount!.Value) })
+                .ToDictionaryAsync(x => x.Key, x => x.Claimed, ct)
+            : [];
+        var materials = money
+            ? await db.ConsumptionItems.AsNoTracking().Where(x => x.EncounterId != null && ids.Contains(x.EncounterId.Value)).GroupBy(x => x.EncounterId!.Value)
+                .Select(g => new
+                {
+                    g.Key,
+                    Materials = g.Sum(x => x.Category == "MEDICINE" ? 0m : x.BilledAmount ?? 0m),
+                    Medicine = g.Sum(x => x.Category == "MEDICINE" ? x.BilledAmount ?? 0m : 0m),
+                })
+                .ToDictionaryAsync(x => x.Key, x => (x.Materials, x.Medicine), ct)
+            : [];
+        // Billed on the doctors' lines: each counted service line's revenue (net after refunds), as the detail's Doctors table adds it up.
+        var doctorBilled = new Dictionary<Guid, decimal>();
+        if (money)
+        {
+            var svcRefs = (await CountedServices(s).Where(x => ids.Contains(x.EncounterId)).Select(x => new { x.EncounterId, x.SourceRef }).ToListAsync(ct))
+                .Select(x => (x.EncounterId, InvoiceLineKey(x.SourceRef))).ToHashSet();
+            foreach (var r in await CountedRevenue(s).Where(x => ids.Contains(x.EncounterId))
+                         .Select(x => new { x.EncounterId, x.SourceRef, Net = x.NetAmount - (x.RefundedAmount ?? 0m) }).ToListAsync(ct))
+                if (svcRefs.Contains((r.EncounterId, InvoiceLineKey(r.SourceRef))))
+                    doctorBilled[r.EncounterId] = doctorBilled.GetValueOrDefault(r.EncounterId) + r.Net;
+        }
+        var minutes = await db.StaffTimes.AsNoTracking().Where(x => x.EncounterId != null && ids.Contains(x.EncounterId.Value)).GroupBy(x => x.EncounterId!.Value)
+            .Select(g => new { g.Key, Minutes = g.Sum(x => x.Minutes) })
+            .ToDictionaryAsync(x => x.Key, x => x.Minutes, ct);
         var phi = p.Can("phi.view");
         return rows.Select(x =>
         {
             var b = billed.GetValueOrDefault(x.Id);
             return new PatientEncounterRow(x.Id, x.EncounterNo, x.Mrn, phi ? x.FullName : Security.MaskName(x.FullName),
                 x.Segment, x.EncType, x.Department, x.Payer, x.InsurerName, x.Physician, x.AdmitAt, x.DischargeAt, x.LengthOfStay, services.GetValueOrDefault(x.Id), b.Gross, b.Discount, b.Net,
-                costs.TryGetValue(x.Id, out var cost) ? cost : null);
+                costs.TryGetValue(x.Id, out var cost) ? cost : null,
+                DoctorFee: fees.TryGetValue(x.Id, out var fee) ? Money.R4(fee) : null,
+                StaffMinutes: Money.R4(minutes.GetValueOrDefault(x.Id)),
+                Materials: Money.R4(materials.GetValueOrDefault(x.Id).Materials),
+                Medicine: Money.R4(materials.GetValueOrDefault(x.Id).Medicine),
+                Claimed: Money.R4(claimed.GetValueOrDefault(x.Id)),
+                DoctorBilled: Money.R4(doctorBilled.GetValueOrDefault(x.Id)));
         }).ToArray();
     }
 
@@ -480,8 +549,122 @@ public sealed partial class ReadQueries
             var code = l.ProcedureId is { } procedure ? codes.GetValueOrDefault(procedure) : null;
             Guid? packageId = l.IsPackage && code is { } c && packageByCode.TryGetValue(c, out var pk) ? pk : null;
             return l with { ProcedureCode = code, PackageId = packageId };
-        }).ToArray());
+        }).ToArray(), await EncounterChargesAsync(s, p, id, services.Select(x => (x.SourceRef, x.Doctor)).ToList(), ct));
     }
+
+    private sealed class DoctorAcc
+    {
+        public Guid? Id;
+        public int Lines;
+        public decimal Billed, Share, Minutes;
+        public bool HasShare;
+        public readonly HashSet<string> Roles = new(StringComparer.OrdinalIgnoreCase);
+    }
+
+    private static readonly HashSet<string> DoctorRoles = new(StringComparer.OrdinalIgnoreCase) { "SURGEON", "ASSISTANT", "ANESTHETIST", "OP_DOCTOR", "ER_DOCTOR" };
+
+    private async Task<EncounterCharges> EncounterChargesAsync(ScopedRun s, Principal p, Guid id, List<(string SourceRef, string? Doctor)> serviceDoctors, CancellationToken ct)
+    {
+        var showMoney = p.Can("revenue.view");
+        var revenue = showMoney
+            ? await CountedRevenue(s).Where(r => r.EncounterId == id)
+                .Select(r => new { r.SourceRef, r.GrossAmount, r.Discount, r.NetAmount, Refunded = r.RefundedAmount ?? 0m, r.PatientShare, r.CompanyShare, r.TaxAmount,
+                    r.ClaimedAmount, r.SettledAmount, r.RejectedAmount, r.DoctorShare, r.DoctorShareType })
+                .ToListAsync(ct)
+            : [];
+        var revByLine = revenue.GroupBy(r => InvoiceLineKey(r.SourceRef)).ToDictionary(g => g.Key, g => g.First());
+
+        // Doctors: from the service lines they billed (share), and from measured staff time (minutes).
+        var staff = await (from t in db.StaffTimes.AsNoTracking()
+                           join pr in db.Providers on t.ProviderId equals pr.Id into pj
+                           from pr in pj.DefaultIfEmpty()
+                           where t.EncounterId == id
+                           select new { t.StaffRole, t.Minutes, t.Basis, t.Volume, t.VolumeUom, t.ProviderId, Doctor = pr != null ? pr.Name : null }).ToListAsync(ct);
+        var doctors = new Dictionary<string, DoctorAcc>(StringComparer.OrdinalIgnoreCase);
+        DoctorAcc Acc(string name) => doctors.TryGetValue(name, out var a) ? a : doctors[name] = new DoctorAcc();
+        foreach (var (sourceRef, doctor) in serviceDoctors)
+        {
+            var d = Acc(doctor ?? "No doctor on the line");
+            d.Lines++;
+            if (revByLine.TryGetValue(InvoiceLineKey(sourceRef), out var r))
+            {
+                d.Billed += r.NetAmount - r.Refunded;
+                if (r.DoctorShare is { } v)
+                {
+                    d.HasShare = true;
+                    d.Share += string.Equals(r.DoctorShareType, "P", StringComparison.OrdinalIgnoreCase) ? Money.R4(r.NetAmount * v / 100m) : v;
+                }
+            }
+            d.Roles.Add("Billed");
+        }
+        foreach (var t in staff.Where(t => DoctorRoles.Contains(t.StaffRole)))
+        {
+            var d = Acc(t.Doctor ?? (t.StaffRole == "ANESTHETIST" ? "Anaesthetist (not named in HIS)" : "Doctor (not named in HIS)"));
+            d.Id ??= t.ProviderId;
+            d.Minutes += t.Minutes;
+            d.Roles.Add(t.StaffRole);
+        }
+        var names = doctors.Where(kv => kv.Value.Id is null).Select(kv => kv.Key).ToList();
+        var providerIds = names.Count == 0 ? [] : await (from x in db.Providers.AsNoTracking()
+                                                          join d in db.Departments.AsNoTracking() on x.DepartmentId equals d.Id
+                                                          where d.HospitalId == s.Hospital.Id && names.Contains(x.Name)
+                                                          select new { x.Name, x.Id }).ToListAsync(ct);
+        var doctorRows = doctors.Select(kv => new ChargeDoctor(kv.Value.Id ?? providerIds.FirstOrDefault(x => x.Name == kv.Key)?.Id, kv.Key, kv.Value.Lines,
+                showMoney ? Money.R4(kv.Value.Billed) : 0m, showMoney && kv.Value.HasShare ? Money.R4(kv.Value.Share) : null, Money.R4(kv.Value.Minutes),
+                string.Join(", ", kv.Value.Roles.OrderBy(x => x).Select(RoleLabel))))
+            .OrderByDescending(x => x.Billed).ThenByDescending(x => x.Minutes).ToArray();
+        var staffRows = staff.Where(t => !DoctorRoles.Contains(t.StaffRole)).GroupBy(t => new { t.StaffRole, t.Basis })
+            .Select(g => new ChargeStaff(RoleLabel(g.Key.StaffRole), Money.R4(g.Sum(x => x.Minutes)), g.Key.Basis,
+                g.Any(x => x.Volume != null) ? Money.R4(g.Sum(x => x.Volume ?? 0m)) : null, g.Select(x => x.VolumeUom).FirstOrDefault(x => x != null), g.Count()))
+            .OrderByDescending(x => x.Minutes).ToArray();
+
+        // Materials: what was consumed, per item.
+        var items = await db.ConsumptionItems.AsNoTracking().Where(c => c.EncounterId == id)
+            .Select(c => new { c.Category, c.ItemKey, c.Description, c.OracleItemCode, c.Quantity, c.Uom, c.BilledAmount, c.PrescribedQty, c.ServiceRef })
+            .ToListAsync(ct);
+        ChargeItem[] Items(bool medicine) => items.Where(c => (c.Category == "MEDICINE") == medicine)
+            .GroupBy(c => new { c.Category, c.ItemKey, c.Uom })
+            .Select(g => new ChargeItem(g.Key.Category, g.Key.ItemKey, g.Select(x => x.Description).FirstOrDefault(x => !string.IsNullOrWhiteSpace(x)),
+                g.Select(x => x.OracleItemCode).FirstOrDefault(x => !string.IsNullOrWhiteSpace(x)), Money.R4(g.Sum(x => x.Quantity)), g.Key.Uom,
+                showMoney && g.Any(x => x.BilledAmount != null) ? Money.R4(g.Sum(x => x.BilledAmount ?? 0m)) : null,
+                g.Any(x => x.PrescribedQty != null) ? Money.R4(g.Sum(x => x.PrescribedQty ?? 0m)) : null,
+                g.Count(x => x.ServiceRef != null) == g.Count() ? "Procedure line" : g.Any(x => x.ServiceRef != null) ? "Partly to a procedure line" : "Encounter",
+                g.Count()))
+            .OrderByDescending(x => x.Billed ?? 0m).ThenByDescending(x => x.Quantity).ToArray();
+
+        ChargeBilled? billed = null;
+        ChargeClaims? claims = null;
+        if (showMoney && revenue.Count > 0)
+        {
+            var refunded = revenue.Sum(r => r.Refunded);
+            billed = new ChargeBilled(Money.R4(revenue.Sum(r => r.GrossAmount)), Money.R4(revenue.Sum(r => r.Discount)), Money.R4(revenue.Sum(r => r.NetAmount) - refunded),
+                Money.R4(refunded), Money.R4(revenue.Sum(r => r.PatientShare ?? 0m)), Money.R4(revenue.Sum(r => r.CompanyShare ?? 0m)), Money.R4(revenue.Sum(r => r.TaxAmount ?? 0m)), revenue.Count);
+            var claimed = revenue.Sum(r => r.ClaimedAmount ?? 0m);
+            var settled = revenue.Sum(r => r.SettledAmount ?? 0m);
+            var rejected = revenue.Sum(r => r.RejectedAmount ?? 0m);
+            claims = new ChargeClaims(Money.R4(claimed), Money.R4(settled), Money.R4(rejected), Money.R4(claimed - settled - rejected),
+                revenue.Count(r => (r.ClaimedAmount ?? 0m) != 0m), revenue.Count(r => (r.RejectedAmount ?? 0m) != 0m));
+        }
+        return new EncounterCharges(doctorRows, staffRows, Items(false), Items(true), billed, claims, showMoney);
+    }
+
+    private static string RoleLabel(string role) => role.ToUpperInvariant() switch
+    {
+        "BILLED" => "Billed lines",
+        "SURGEON" => "Surgeon",
+        "ASSISTANT" => "Assistant surgeon",
+        "ANESTHETIST" => "Anaesthesia",
+        "OP_DOCTOR" => "OP consultation",
+        "ER_DOCTOR" => "ER",
+        "OT_STAFF" => "OR team",
+        "SCRUB_NURSE" => "Scrub nurse",
+        "CIRC_NURSE" => "Circulating nurse",
+        "RECOVERY_NURSE" => "Recovery nurse",
+        "WARD_NURSE" => "Ward nursing",
+        "ER_NURSE" => "ER nursing",
+        "TECHNICIAN" => "Technician",
+        _ => role,
+    };
 
     // ═══ HIS source: what an encounter holds, under the HIS table and column it came from ═══
 

@@ -171,6 +171,10 @@ public class RevenueTransaction
     public decimal? ClaimedAmount { get; set; }
     public decimal? SettledAmount { get; set; }
     public decimal? RejectedAmount { get; set; }
+    /// <summary>HIS_InvoiceDetail.PrimaryDoctorShare: a value (type V) or a percentage of the line amount (type P).</summary>
+    [Precise] public decimal? DoctorShare { get; set; }
+    /// <summary>V (value) or P (percentage), as HIS holds it.</summary>
+    public string? DoctorShareType { get; set; }
     public bool? IsZeroPrice { get; set; }
     public bool? IsPackageSelected { get; set; }
     public string? PackageProcedureId { get; set; }
@@ -288,10 +292,26 @@ public class ConsumptionItem
     [Precise] public decimal? PrescribedQty { get; set; }
     public string? CostCentreCode { get; set; }
     public string? LocationId { get; set; }
-    /// <summary>Charge on the linked line. Informational — not cost.</summary>
+    /// <summary>Charge on the linked invoice line, if any. Informational — not cost.</summary>
     public decimal? BilledAmount { get; set; }
     /// <summary>HIS_FloorConsumption.UnitPrice as stored, until it is confirmed to be cost or price.</summary>
     [Precise] public decimal? HisUnitPrice { get; set; }
+    /// <summary>HIS floor / log TransType as received (issue vs return codes not decoded yet).</summary>
+    public int? HisTransType { get; set; }
+    [Precise] public decimal? RefundableQty { get; set; }
+    public int? ItemCategoryId { get; set; }
+    public int? SubCategoryId { get; set; }
+    public int? OrderNo { get; set; }
+    public int? OrderLineItemNo { get; set; }
+    public int? NursingStationId { get; set; }
+    [Precise] public decimal? SellingPrice { get; set; }
+    [Precise] public decimal? BillingPrice { get; set; }
+    [Precise] public decimal? MarkUp { get; set; }
+    /// <summary>HIS_FloorConsumption.GrossAmount as stored (not necessarily cost).</summary>
+    [Precise] public decimal? HisGrossAmount { get; set; }
+    [Precise] public decimal? StockQtySnapshot { get; set; }
+    /// <summary>HIS_FloorConsumption.Source as received.</summary>
+    public int? HisSource { get; set; }
     public DateTime OccurredAt { get; set; }
     public string SourceTable { get; set; } = "";
     public string SourceSystem { get; set; } = "VIDA-HIS";
@@ -299,8 +319,46 @@ public class ConsumptionItem
 }
 
 /// <summary>
+/// One HIS bed/ward placement (<c>INP_Transfer</c>) as stored: TransferDate, StartTime, EndTime and Duration
+/// with no minutes/hours conversion. Nursing standards and patient-days are applied later in VERITA.
+/// </summary>
+public class EncounterTransfer
+{
+    public Guid Id { get; set; }
+    public Guid HospitalId { get; set; }
+    public Guid? EncounterId { get; set; }
+    public string HisEncounterNo { get; set; } = "";
+    public int TransferNo { get; set; }
+    public DateTime TransferDate { get; set; }
+    /// <summary>HIS StartTime string as received (may be empty).</summary>
+    public string? StartTime { get; set; }
+    /// <summary>HIS EndTime string as received (may be empty).</summary>
+    public string? EndTime { get; set; }
+    /// <summary>HIS Duration as received — untyped in HIS (hours or minutes). Not converted on import.</summary>
+    public int? Duration { get; set; }
+    public int? HisClinicId { get; set; }
+    public int? TransferType { get; set; }
+    public int? DoctorId { get; set; }
+    public int? CategoryId { get; set; }
+    public string? RoomId { get; set; }
+    public string? BedId { get; set; }
+    public int? NursingStationId { get; set; }
+    [Precise] public decimal? Charges { get; set; }
+    public string? Remarks { get; set; }
+    public int? Status { get; set; }
+    public int? PatientStatus { get; set; }
+    public int? PerformingClinicId { get; set; }
+    public int? PerformingDoctorId { get; set; }
+    public string? CostCentreCode { get; set; }
+    public string SourceTable { get; set; } = "INP_Transfer";
+    public string SourceSystem { get; set; } = "VIDA-HIS";
+    public string SourceRef { get; set; } = "";
+}
+
+/// <summary>
 /// Minutes a member of staff (doctor, nurse, technician) spent on a case: measured from HIS clocks,
 /// or a volume times a standard. Rates come later from payroll on staffId or role.
+/// Ward nursing from INP_Transfer is not invented here — see <see cref="EncounterTransfer"/>.
 /// </summary>
 public class StaffTime
 {
@@ -311,6 +369,8 @@ public class StaffTime
     public string? ServiceRef { get; set; }
     public string LinkMethod { get; set; } = "NONE";
     public int? OtReservationId { get; set; }
+    public int? OtId { get; set; }
+    public int? ClinicId { get; set; }
     /// <summary>SURGEON, ASSISTANT, ANESTHETIST, OT_STAFF, SCRUB_NURSE, CIRC_NURSE, RECOVERY_NURSE, WARD_NURSE, ER_NURSE, ER_DOCTOR, OP_DOCTOR, TECHNICIAN.</summary>
     public string StaffRole { get; set; } = "";
     /// <summary>The raw HIS staff type code (e.g. INP_OTMedicalStaffDetail.MedicalStaffType) until it is decoded.</summary>
@@ -323,6 +383,10 @@ public class StaffTime
     public string Basis { get; set; } = "MEASURED";
     [Precise] public decimal? Volume { get; set; }
     public string? VolumeUom { get; set; }
+    /// <summary>HIS clock start string as received (appointment / OT / ER), when present.</summary>
+    public string? StartTime { get; set; }
+    /// <summary>HIS clock end string as received, when present.</summary>
+    public string? EndTime { get; set; }
     public string? CostCentreCode { get; set; }
     public DateTime OccurredAt { get; set; }
     public string SourceTable { get; set; } = "";

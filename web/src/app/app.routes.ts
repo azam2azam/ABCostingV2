@@ -35,6 +35,7 @@ export const routes: Routes = [
       r('activities', model, 'Activities'), r('activities/:id', model, 'ActivityDetail'),
       r('procedures', outputs, 'Procedures'), r('procedures/:id', outputs, 'ProcedureDetail'),
       r('packages', outputs, 'Packages'), r('packages/:id', outputs, 'PackageDetail'),
+      r('packages-v2', outputs, 'PackagesV2'),
       r('departments', model, 'Departments'), r('departments/:id', model, 'DepartmentDetail'),
       r('doctors', model, 'Doctors'), r('doctors/:id', model, 'DoctorDetail'),
       r('costing-models', exec, 'CostingModels', false),

@@ -227,7 +227,14 @@ public sealed partial class ReadQueries
         PackageDoctorRow[] Doctors);
 
     /// <summary>A doctor on the package's billed lines this period (HIS PrimaryDoctorID on the line). Id is null for lines with no doctor.</summary>
-    public sealed record PackageDoctorRow(Guid? Id, string Code, string Name, string Specialty, string? Department, bool IsDummy, int Encounters, decimal Quantity, decimal SharePct);
+    /// <remarks>
+    /// Money is what HIS billed and claimed, not cost. DoctorShare: HIS share on the package lines (value, or percentage of the
+    /// line's net); null when none of the lines carries a share (facts extracted before it was added). Consumables and medicine
+    /// are the billed value of everything consumed on the doctor's package encounters.
+    /// </remarks>
+    public sealed record PackageDoctorRow(Guid? Id, string Code, string Name, string Specialty, string? Department, bool IsDummy, int Encounters, decimal Quantity, decimal SharePct,
+        decimal FeeBilled = 0, decimal? DoctorShare = null, decimal ConsumablesBilled = 0, int ConsumableItems = 0, decimal MedicineBilled = 0, decimal MedicineQuantity = 0,
+        decimal Claimed = 0, decimal Settled = 0, decimal RejectedClaims = 0);
 
     /// <summary>The hospital's packages, or only <paramref name="only"/> when a detail screen needs one row.</summary>
     public async Task<PackageRow[]> PackagesAsync(ScopedRun s, Principal p, CancellationToken ct, Guid? only = null)
@@ -292,7 +299,7 @@ public sealed partial class ReadQueries
         }).ToArray();
     }
 
-    private sealed record CountedLine(Guid EncounterId, Guid ProcedureId, decimal Quantity, Guid? ProviderId = null);
+    private sealed record CountedLine(Guid EncounterId, Guid ProcedureId, decimal Quantity, Guid? ProviderId = null, string? SourceRef = null);
 
     /// <summary>
     /// The period's counted service lines of these procedures: in the run's encounters when there is a run, else the
@@ -322,7 +329,7 @@ public sealed partial class ReadQueries
                      where e.HospitalId == s.Hospital.Id && (fromHis || (e.AdmitAt >= periodStart && e.AdmitAt < periodEnd))
                      select new { es.EncounterId, es.SourceRef, es.ProcedureId, es.Quantity, es.ProviderId }).ToListAsync(ct);
         return rows.Where(x => countedKeys is null || countedKeys.Contains((x.EncounterId, RefTail(x.SourceRef))))
-            .Select(x => new CountedLine(x.EncounterId, x.ProcedureId, x.Quantity, x.ProviderId)).ToList();
+            .Select(x => new CountedLine(x.EncounterId, x.ProcedureId, x.Quantity, x.ProviderId, x.SourceRef)).ToList();
     }
 
     /// <summary>INV-2-7-1 and REV-2-7-1 are the same invoice line: the part after the prefix matches.</summary>
@@ -971,15 +978,57 @@ public sealed partial class ReadQueries
                                 select new { pr.Id, pr.Code, pr.Name, pr.Specialty, pr.IsDummy, Department = d == null ? null : d.Name }).ToListAsync(ct))
             .ToDictionary(x => x.Id);
         var total = lines.Select(l => l.EncounterId).Distinct().Count();
+        var encIds = lines.Select(l => l.EncounterId).Distinct().ToList();
+
+        // The package's own revenue lines (fee, doctor share, claims), matched to each service line by invoice line.
+        var showRevenue = p.Can("revenue.view");
+        var money = new Dictionary<(Guid, string), (decimal Net, decimal? Share, decimal Claimed, decimal Settled, decimal Rejected)>();
+        if (showRevenue)
+        {
+            foreach (var r in await CountedRevenue(s).Where(r => r.ProcedureId == pid && encIds.Contains(r.EncounterId))
+                         .Select(r => new { r.EncounterId, r.SourceRef, r.NetAmount, r.RefundedAmount, r.DoctorShare, r.DoctorShareType, r.ClaimedAmount, r.SettledAmount, r.RejectedAmount })
+                         .ToListAsync(ct))
+            {
+                var net = r.NetAmount - (r.RefundedAmount ?? 0m);
+                // HIS share type: V = a value; P = a percentage of the line amount.
+                decimal? share = r.DoctorShare is not { } v ? null
+                    : string.Equals(r.DoctorShareType, "P", StringComparison.OrdinalIgnoreCase) ? Money.R4(r.NetAmount * v / 100m) : v;
+                money[(r.EncounterId, RefTail(r.SourceRef))] = (net, share, r.ClaimedAmount ?? 0m, r.SettledAmount ?? 0m, r.RejectedAmount ?? 0m);
+            }
+        }
+
+        // What was consumed on the package encounters (billed value; cost comes later from pharmacy / ERP).
+        var consumption = (await db.ConsumptionItems.AsNoTracking().Where(c => c.EncounterId != null && encIds.Contains(c.EncounterId.Value))
+                .GroupBy(c => new { Encounter = c.EncounterId!.Value, Medicine = c.Category == "MEDICINE" })
+                .Select(g => new { g.Key.Encounter, g.Key.Medicine, Items = g.Count(), Qty = g.Sum(x => x.Quantity), Billed = g.Sum(x => x.BilledAmount ?? 0m) })
+                .ToListAsync(ct))
+            .ToLookup(x => x.Encounter);
+
         return lines.GroupBy(l => l.ProviderId)
             .Select(g =>
             {
-                var enc = g.Select(l => l.EncounterId).Distinct().Count();
-                var share = total == 0 ? 0m : Math.Round(enc * 100m / total, 1);
+                var encs = g.Select(l => l.EncounterId).Distinct().ToList();
+                var enc = encs.Count;
+                var pct = total == 0 ? 0m : Math.Round(enc * 100m / total, 1);
                 var qty = g.Sum(l => l.Quantity);
-                return g.Key is { } id && providers.TryGetValue(id, out var pr)
-                    ? new PackageDoctorRow(pr.Id, pr.Code, pr.Name, pr.Specialty, pr.Department, pr.IsDummy, enc, qty, share)
-                    : new PackageDoctorRow(null, "", "No doctor on the line", "", null, false, enc, qty, share);
+                var m = g.Select(l => l.SourceRef is null ? default : money.GetValueOrDefault((l.EncounterId, RefTail(l.SourceRef)))).ToList();
+                var shares = m.Where(x => x.Share is not null).Select(x => x.Share!.Value).ToList();
+                var cons = encs.SelectMany(e => consumption[e]).ToList();
+                var row = g.Key is { } id && providers.TryGetValue(id, out var pr)
+                    ? new PackageDoctorRow(pr.Id, pr.Code, pr.Name, pr.Specialty, pr.Department, pr.IsDummy, enc, qty, pct)
+                    : new PackageDoctorRow(null, "", "No doctor on the line", "", null, false, enc, qty, pct);
+                return row with
+                {
+                    FeeBilled = Money.R4(m.Sum(x => x.Net)),
+                    DoctorShare = shares.Count == 0 ? null : Money.R4(shares.Sum()),
+                    ConsumablesBilled = Money.R4(cons.Where(c => !c.Medicine).Sum(c => c.Billed)),
+                    ConsumableItems = cons.Where(c => !c.Medicine).Sum(c => c.Items),
+                    MedicineBilled = Money.R4(cons.Where(c => c.Medicine).Sum(c => c.Billed)),
+                    MedicineQuantity = cons.Where(c => c.Medicine).Sum(c => c.Qty),
+                    Claimed = Money.R4(m.Sum(x => x.Claimed)),
+                    Settled = Money.R4(m.Sum(x => x.Settled)),
+                    RejectedClaims = Money.R4(m.Sum(x => x.Rejected)),
+                };
             })
             .OrderByDescending(x => x.Encounters).ThenBy(x => x.Name)
             .ToArray();

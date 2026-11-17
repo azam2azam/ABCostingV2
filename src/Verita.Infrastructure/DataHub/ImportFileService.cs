@@ -18,6 +18,9 @@ public sealed record ImportFileDto(
 
 public sealed record ImportFileDetail(ImportFileDto File, ImportPreview? Preview, ImportResult[] Results);
 
+/// <summary>Whether a hospital's HIS catalogue is in VERITA (or queued to load first), so facts can be imported.</summary>
+public sealed record CatalogueStatus(string Hospital, bool HasCatalogue, int Procedures, int Departments, bool CatalogueQueued, DateTime? LastCatalogueImport);
+
 /// <summary>A queued validate / import of a stored file, run by the background import worker.</summary>
 public sealed record ImportFileJob(Guid FileId, string? Hospital, bool DryRun, Principal Actor);
 
@@ -61,10 +64,23 @@ public sealed class ImportFileService(IDbContextFactory<VeritaDbContext> factory
         return new ImportFileDetail(Dto(file), preview, []);
     }
 
-    public async Task<ImportFileDto[]> ListAsync(Principal p, CancellationToken ct)
+    /// <summary>
+    /// Uploaded files, newest first. With a hospital, only that hospital's: HIS packs whose SetupID / ProjectID match it
+    /// (imported or not), and templates imported into it or not imported anywhere yet.
+    /// </summary>
+    public async Task<ImportFileDto[]> ListAsync(Principal p, string? hospital, CancellationToken ct)
     {
         await using var db = await factory.CreateDbContextAsync(ct);
-        var files = await db.ImportFiles.AsNoTracking().OrderByDescending(f => f.UploadedAt).Take(200).ToListAsync(ct);
+        var q = db.ImportFiles.AsNoTracking();
+        if (!string.IsNullOrWhiteSpace(hospital))
+        {
+            if (!p.HasHospital(hospital)) throw AppError.OutOfScope($"Hospital {hospital}");
+            var h = await db.Hospitals.AsNoTracking().FirstOrDefaultAsync(x => x.Code == hospital, ct) ?? throw AppError.NotFound($"Hospital {hospital}");
+            q = q.Where(f => f.IsHisPack
+                ? f.HisSetupId == h.HisSetupId && f.HisProjectId == h.HisProjectId && h.HisSetupId != null
+                : f.Hospital == null || f.Hospital == h.Code);
+        }
+        var files = await q.OrderByDescending(f => f.UploadedAt).Take(500).ToListAsync(ct);
         return files.Where(f => Visible(p, f)).Select(Dto).ToArray();
     }
 
@@ -91,6 +107,10 @@ public sealed class ImportFileService(IDbContextFactory<VeritaDbContext> factory
             // A HIS pack loads only into the hospital bound to the same HIS SetupID / ProjectID.
             var h = await db.Hospitals.AsNoTracking().FirstOrDefaultAsync(x => x.Code == hospital, ct) ?? throw AppError.NotFound($"Hospital {hospital}");
             if (MismatchMessage(f, h.Code, h.HisSetupId, h.HisProjectId) is { } mismatch) throw AppError.Invalid(mismatch);
+            // Facts refer to the catalogue's procedures, departments and doctors: it must be loaded, or queued ahead.
+            if (NeedsCatalogue(f) && !await db.Procedures.AnyAsync(x => x.HospitalId == h.Id, ct)
+                && !await db.ImportFiles.AnyAsync(x => x.Id != id && x.Hospital == h.Code && x.Pack == "catalogue" && Active.Contains(x.Status) && !x.LastDryRun, ct))
+                throw AppError.Invalid($"{h.Code} has no catalogue yet. Import its catalogue pack first, then the facts.");
         }
         // Several files may be queued: the single import worker runs them one at a time, in the order queued.
 
@@ -136,7 +156,15 @@ public sealed class ImportFileService(IDbContextFactory<VeritaDbContext> factory
         byte[] bytes;
         await using (var db = await factory.CreateDbContextAsync(ct))
         {
-            fileName = await db.ImportFiles.Where(x => x.Id == job.FileId).Select(x => x.FileName).FirstAsync(ct);
+            var meta = await db.ImportFiles.Where(x => x.Id == job.FileId).Select(x => new { x.FileName, x.IsHisPack, x.Pack }).FirstAsync(ct);
+            fileName = meta.FileName;
+            // The catalogue queued ahead of these facts may have failed or been removed: check again before loading.
+            if (meta.IsHisPack && !string.Equals(meta.Pack, "catalogue", StringComparison.OrdinalIgnoreCase) && !string.IsNullOrWhiteSpace(job.Hospital)
+                && !await db.Procedures.AnyAsync(x => db.Hospitals.Any(h => h.Id == x.HospitalId && h.Code == job.Hospital), ct))
+            {
+                await MarkFailedAsync(job.FileId, $"{job.Hospital} has no catalogue yet (the catalogue import before this file did not load). Import the catalogue, then this file again.");
+                return;
+            }
             bytes = await db.ImportFileContents.Where(x => x.Id == job.FileId).Select(x => x.Content).FirstAsync(ct);
         }
 
@@ -150,18 +178,23 @@ public sealed class ImportFileService(IDbContextFactory<VeritaDbContext> factory
                         .ExecuteUpdateAsync(u => u.SetProperty(x => x.CurrentTable, table).SetProperty(x => x.TablesDone, index).SetProperty(x => x.TablesTotal, total), CancellationToken.None);
                 });
             if (!job.DryRun) Assistant.AssistantVocabulary.Invalidate();
+            // Totals as plain values: EF cannot translate a Sum over an in-memory array inside ExecuteUpdate.
+            var created = results.Sum(r => r.Created);
+            var updated = results.Sum(r => r.Updated);
+            var unchanged = results.Sum(r => r.Unchanged);
             var rejected = results.Sum(r => r.Rejected);
             var status = job.DryRun ? "VALIDATED" : rejected > 0 ? "COMPLETED_WITH_REJECTS" : "COMPLETED";
             var detail = JsonSerializer.Serialize(results, Json);
+            var finished = DateTime.UtcNow;
             await using var db = await factory.CreateDbContextAsync(CancellationToken.None);
             await db.ImportFiles.Where(x => x.Id == job.FileId).ExecuteUpdateAsync(u => u
-                .SetProperty(x => x.Status, status).SetProperty(x => x.FinishedAt, DateTime.UtcNow)
+                .SetProperty(x => x.Status, status).SetProperty(x => x.FinishedAt, finished)
                 .SetProperty(x => x.CurrentTable, (string?)null).SetProperty(x => x.TablesDone, x => x.TablesTotal)
-                .SetProperty(x => x.RowsCreated, results.Sum(r => r.Created)).SetProperty(x => x.RowsUpdated, results.Sum(r => r.Updated))
-                .SetProperty(x => x.RowsUnchanged, results.Sum(r => r.Unchanged)).SetProperty(x => x.RowsRejected, rejected)
+                .SetProperty(x => x.RowsCreated, created).SetProperty(x => x.RowsUpdated, updated)
+                .SetProperty(x => x.RowsUnchanged, unchanged).SetProperty(x => x.RowsRejected, rejected)
                 .SetProperty(x => x.DetailJson, detail).SetProperty(x => x.ErrorMessage, (string?)null), CancellationToken.None);
             log.LogInformation("Import file {Id} {File} {Status}: created={Created} updated={Updated} rejected={Rejected}",
-                job.FileId, fileName, status, results.Sum(r => r.Created), results.Sum(r => r.Updated), rejected);
+                job.FileId, fileName, status, created, updated, rejected);
         }
         catch (Exception ex)
         {
@@ -195,6 +228,21 @@ public sealed class ImportFileService(IDbContextFactory<VeritaDbContext> factory
     {
         while (ex.InnerException is not null) ex = ex.InnerException;
         return ex.Message;
+    }
+
+    private static bool NeedsCatalogue(ImportFile f) => f.IsHisPack && !string.Equals(f.Pack, "catalogue", StringComparison.OrdinalIgnoreCase);
+
+    public async Task<CatalogueStatus> CatalogueStatusAsync(Principal p, string hospital, CancellationToken ct)
+    {
+        if (!p.HasHospital(hospital)) throw AppError.OutOfScope($"Hospital {hospital}");
+        await using var db = await factory.CreateDbContextAsync(ct);
+        var h = await db.Hospitals.AsNoTracking().FirstOrDefaultAsync(x => x.Code == hospital, ct) ?? throw AppError.NotFound($"Hospital {hospital}");
+        var procedures = await db.Procedures.CountAsync(x => x.HospitalId == h.Id, ct);
+        var departments = await db.Departments.CountAsync(x => x.HospitalId == h.Id, ct);
+        var queued = await db.ImportFiles.AnyAsync(x => x.Hospital == h.Code && x.Pack == "catalogue" && Active.Contains(x.Status) && !x.LastDryRun, ct);
+        var last = await db.ImportFiles.Where(x => x.Hospital == h.Code && x.Pack == "catalogue" && !x.LastDryRun && (x.Status == "COMPLETED" || x.Status == "COMPLETED_WITH_REJECTS"))
+            .MaxAsync(x => (DateTime?)x.FinishedAt, ct);
+        return new CatalogueStatus(h.Code, procedures > 0, procedures, departments, queued, last);
     }
 
     /// <summary>Null when the HIS pack belongs to the hospital; otherwise why it cannot be imported there.</summary>

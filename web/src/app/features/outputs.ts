@@ -8,6 +8,7 @@ import {
 import { Auth, toApiError } from '../core/auth';
 import { RunContext } from '../core/context';
 import { catalogueResource } from '../core/resource';
+import { formatDec, formatMoney } from '../core/decimal';
 import { Col, TypeCounts, UI, hisProcedureId } from '../shared/ui';
 
 export const componentCols: Col<ComponentDto>[] = [
@@ -297,6 +298,51 @@ export class Packages {
 
 
 @Component({
+  selector: 'v-packages-v2',
+  imports: [...UI],
+  template: `
+    <v-page title="Packages V2" purpose="HIS package id, name, contracted price, and cases in this run.">
+      <v-state [loading]="list.res.isLoading() && !list.last()" [error]="list.res.error()">
+        @if (list.last(); as r) {
+          @if (!r.meta.run && r.meta.costingVersion) {
+            <p class="notice">No calculation run for {{ r.meta.period }}. Costs are estimated from costing model {{ r.meta.costingVersion }} ({{ r.meta.costingVersionStatus }}): Package Costing where set, otherwise the package's composition.</p>
+          }
+          <v-type-tiles [counts]="r.data.counts" [selected]="list.type()" (selectedChange)="list.setType($event)" />
+          ${LIST_BAR}
+          <div [class.reloading]="list.res.isLoading()">
+            <v-table [rows]="r.data.rows" [columns]="cols" [serverSort]="list.tableSort()" (sortChange)="list.setSort($event)" caption="Packages V2"
+              [empty]="list.search().trim() ? 'No packages match this search.' : 'No rows.'" />
+          </div>
+        }
+      </v-state>
+    </v-page>
+  `,
+  styles: LIST_STYLES,
+})
+/** A copy of Packages to change independently; same data and detail page. */
+export class PackagesV2 {
+  list = new ServerList<PackageRow>('packages', 'cases');
+  private auth = inject(Auth);
+  /** Only a run holds actual revenue, and a role without revenue.view reads it as 0. */
+  private inLoss(r: { revenue: string; totalCost: string }): boolean {
+    return !!this.list.last()?.meta.run && this.auth.can('revenue.view') && Number(r.totalCost) > Number(r.revenue);
+  }
+  cols: Col<PackageRow>[] = [
+    { key: 'code', label: 'Id', value: r => hisProcedureId(r.code), link: r => `/packages/${r.id}` },
+    { key: 'name', label: 'Name' },
+    { key: 'procType', label: 'Type' },
+    { key: 'compositionPrice', label: 'Composition Price', type: 'money', blankZero: true },
+    { key: 'price', label: 'Contracted price', type: 'money', blankZero: true },
+    { key: 'cases', label: 'Cases', type: 'num', dp: 0, blankZero: true },
+    { key: 'billedRevenue', label: 'Exp. Revenue', type: 'money', blankZero: true, value: r => Number(r.price) * Number(r.cases) },
+    { key: 'revenue', label: 'Act. Revenue', type: 'money', blankZero: true, bad: r => Number(r.revenue) < Number(r.totalCost) },
+    { key: 'unitCost', label: 'Unit Cost', type: 'money', blankZero: true, bad: r => Number(r.unitCost) > Number(r.price) },
+    { key: 'totalCost', label: 'Total Cost', type: 'money', blankZero: true, bad: r => this.inLoss(r) },
+  ];
+}
+
+
+@Component({
   selector: 'v-package',
   imports: [RouterLink, ...UI],
   template: `
@@ -314,6 +360,7 @@ export class Packages {
             <h2>Doctors who performed this package</h2>
             <p class="muted">Doctor on each billed package line in {{ r.meta.period }}, counted the same way as the encounter count.</p>
             <v-table [rows]="r.data.doctors" [columns]="doctorCols" caption="Doctors who performed this package" empty="No billed package lines in this period." />
+            <p class="muted" style="margin:8px 0 0">Doctor fee (share) is the doctor's share on the package lines as HIS holds it (a value, or a percentage of the line), blank for facts extracted before the share was added; underneath is what the hospital billed on those lines. Consumables and medicine are everything billed on the doctor's package encounters, as charged, not cost. Claims are what was claimed from payers, settled and rejected.</p>
           </section>
           <section class="card">
             <h2>Encounters</h2>
@@ -336,13 +383,17 @@ export class PackageDetail {
     { key: 'price', label: 'Contracted price', type: 'money' },
     { key: 'cost', label: 'Cost', type: 'money' },
   ];
+  /** Money columns are what HIS billed and claimed (not cost). Share/Fee is "—" for facts extracted before the share was. */
   doctorCols: Col<PackageDetailDto['doctors'][number]>[] = [
     { key: 'name', label: 'Doctor', link: r => r.id ? `/doctors/${r.id}` : null, sub: r => r.isDummy ? 'HIS placeholder' : r.code || null },
-    { key: 'specialty', label: 'Specialty', value: r => r.specialty || '—' },
-    { key: 'department', label: 'Department', value: r => r.department ?? '—' },
-    { key: 'encounters', label: 'Encounters', type: 'num', dp: 0 },
-    { key: 'quantity', label: 'Quantity billed', type: 'num', dp: 0 },
-    { key: 'sharePct', label: 'Share of encounters', type: 'bar' },
+    { key: 'encounters', label: 'Encounters', type: 'num', dp: 0, sub: r => `${formatDec(String(r.quantity), 0)} billed · ${formatDec(String(r.sharePct), 1)}% of cases` },
+    { key: 'doctorShare', label: 'Doctor fee (share)', value: r => r.doctorShare == null ? '—' : formatMoney(String(r.doctorShare), { dp: 0 }),
+      sub: r => `Billed on package lines ${formatMoney(String(r.feeBilled), { dp: 0 })}` },
+    { key: 'consumablesBilled', label: 'Consumables', type: 'money', dp: 0, sub: r => `${formatDec(String(r.consumableItems), 0)} items` },
+    { key: 'medicineBilled', label: 'Medicine', type: 'money', dp: 0, sub: r => `qty ${formatDec(String(r.medicineQuantity), 0)}` },
+    { key: 'claimed', label: 'Claims', type: 'money', dp: 0,
+      sub: r => `settled ${formatMoney(String(r.settled), { dp: 0 })} · rejected ${formatMoney(String(r.rejectedClaims), { dp: 0 })}`,
+      bad: r => Number(r.rejectedClaims) > 0 },
   ];
   encCount = computed(() => this.res.value()?.data.encounterCount ?? 0);
   /** Same as the packages list: contracted list price × billed quantity in this run. */

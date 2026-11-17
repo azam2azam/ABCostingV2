@@ -12,9 +12,9 @@ public static class FactsExtract
         await PatientsAsync(db, s, c, pack, asOf);
         await EncountersAsync(db, s, c, pack);
         await BillingAsync(db, s, c, pack);
-        await ActivityTxnExtract.RunAsync(db, s, c, pack);
+        // No 35_ActivityTransaction — utilization is StaffTime / EncounterTransfer / ConsumptionItem only.
         await ConsumptionExtract.RunAsync(db, s, c, pack);
-        pack.Note("Facts extract finished");
+        pack.Note("Facts extract finished (no invented ActivityTransaction ACT/RES volumes)");
     }
 
     private static async Task PatientsAsync(HisConnection db, Settings s, Codes c, CsvZipWriter pack, DateTime asOf)
@@ -331,6 +331,13 @@ public static class FactsExtract
 
     private static async Task BillingAsync(HisConnection db, Settings s, Codes c, CsvZipWriter pack)
     {
+        // Encounter-driven: same pack keys as consumption. Claims (Claimed/Settled/Rejected on the line)
+        // ride with every invoice of those encounters — not only invoices dated inside the short window.
+        pack.Step("Billing: pack encounters");
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        var (ipN, opN, erN) = await ConsumptionExtract.EncounterSetsAsync(db, s);
+        pack.Note($"Billing: {ipN} admissions, {opN} appointments, {erN} ER assessments in scope ({sw.Elapsed.TotalSeconds:N0} s)");
+
         using var svc = pack.Create("34_EncounterService.csv",
             "encounterNo", "procedureCode", "costCentreCode", "providerCode", "quantity", "performedAt", "sourceSystem", "sourceRef", "isChildInvoice");
         using var rev = pack.Create("36_RevenueTransaction.csv",
@@ -339,20 +346,24 @@ public static class FactsExtract
             "hisUnitPrice", "hisQuantity", "discountType", "hisDiscountAmount", "waivedAmount", "waiverId", "patientShare", "companyShare",
             "taxAmount", "patientTaxAmount", "companyTaxAmount", "outlierPayment", "claimedAmount", "settledAmount", "rejectedAmount",
             "isZeroPrice", "isPackageSelected", "packageProcedureId", "packageSequenceNo", "isPackageInvoice", "billType", "isAcceptedWithDrg",
-            "hisInvoiceType", "hisMainInvoiceNo", "isChildInvoice");
+            "hisInvoiceType", "hisMainInvoiceNo", "isChildInvoice", "doctorShare", "doctorShareType");
         var noEncounter = 0;
+        var seenRev = new HashSet<string>(StringComparer.Ordinal);
+        var seenSvc = new HashSet<string>(StringComparer.Ordinal);
+        var outsideWindow = 0;
 
-        await db.QueryAsync("""
-            SELECT m.TransactionType, m.InvoiceNo, m.InvoiceDate, m.AppointmentNo, m.AdmissionNo,
-                   m.ClinicID, m.CompanyID, m.PerformedServiceClinicID,
-                   d.LineItemNo, d.ProcedureID, d.Price, d.Quantity, d.DiscountAmount, d.WaivedAmount,
-                   d.PatientShare, d.CompanyShare, d.CostCenterID, d.PrimaryDoctorID, d.PrimaryClinicID,
-                   d.PerformDate, d.Status, d.IsPerformed, d.PerformType, d.IsReturned, d.IsRefunded, d.RefundedAmount,
-                   d.DiscountType, d.WaiverID, d.TaxAmount, d.PatientTaxAmount, d.CompanyTaxAmount, d.OutlierPayment,
-                   d.ClaimedAmount, d.SettledAmount, d.RejectedAmount, d.IsZeroPrice, d.IsPackageSelected,
-                   d.PackageProcedureID, d.PackageSequenceNo, m.IsPackageInvoice, m.BillType, m.IsAcceptedWithDRG, m.InvoiceType, m.MainInvoiceNo,
-                   hp.IsMedicine, er.AssessmentNo
-            FROM dbo.HIS_InvoiceMain m WITH (NOLOCK)
+        const string cols = """
+            m.TransactionType, m.InvoiceNo, m.InvoiceDate, m.AppointmentNo, m.AdmissionNo,
+            m.ClinicID, m.CompanyID, m.PerformedServiceClinicID,
+            d.LineItemNo, d.ProcedureID, d.Price, d.Quantity, d.DiscountAmount, d.WaivedAmount,
+            d.PatientShare, d.CompanyShare, d.CostCenterID, d.PrimaryDoctorID, d.PrimaryClinicID,
+            d.PerformDate, d.Status, d.IsPerformed, d.PerformType, d.IsReturned, d.IsRefunded, d.RefundedAmount,
+            d.DiscountType, d.WaiverID, d.TaxAmount, d.PatientTaxAmount, d.CompanyTaxAmount, d.OutlierPayment,
+            d.ClaimedAmount, d.SettledAmount, d.RejectedAmount, d.IsZeroPrice, d.IsPackageSelected,
+            d.PackageProcedureID, d.PackageSequenceNo, m.IsPackageInvoice, m.BillType, m.IsAcceptedWithDRG, m.InvoiceType, m.MainInvoiceNo,
+            hp.IsMedicine, er.AssessmentNo, d.PrimaryDoctorShare, d.PrimaryDoctorShareType
+            """;
+        const string detailJoins = """
             INNER JOIN dbo.HIS_InvoiceDetail d WITH (NOLOCK)
               ON d.SetupID=m.SetupID AND d.ProjectID=m.ProjectID
              AND d.TransactionType=m.TransactionType AND d.InvoiceNo=m.InvoiceNo
@@ -361,10 +372,33 @@ public static class FactsExtract
             LEFT JOIN dbo.INP_ERAssessment er WITH (NOLOCK)
               ON er.SetupID=m.SetupID AND er.ProjectID=m.ProjectID AND er.InvoiceNo=m.InvoiceNo
              AND ISNULL(m.AppointmentNo,0)=0 AND ISNULL(m.AdmissionNo,0)=0
-            WHERE m.SetupID=@SetupId AND m.ProjectID=@ProjectId
-              AND m.InvoiceDate >= @From AND m.InvoiceDate < @To
-              AND m.CancelledOn IS NULL
-            """, s.BindPeriod, r =>
+            """;
+
+        await db.QueryAsync($"""
+            SELECT {cols}
+            FROM #ip i
+            INNER JOIN dbo.HIS_InvoiceMain m WITH (NOLOCK)
+              ON m.SetupID=@SetupId AND m.ProjectID=@ProjectId AND m.AdmissionNo=i.No
+            {detailJoins}
+            WHERE m.CancelledOn IS NULL
+            UNION ALL
+            SELECT {cols}
+            FROM #op o
+            INNER JOIN dbo.HIS_InvoiceMain m WITH (NOLOCK)
+              ON m.SetupID=@SetupId AND m.ProjectID=@ProjectId AND m.AppointmentNo=o.No
+            {detailJoins}
+            WHERE m.CancelledOn IS NULL AND ISNULL(m.AdmissionNo, 0) = 0
+            UNION ALL
+            SELECT {cols}
+            FROM #er e
+            INNER JOIN dbo.INP_ERAssessment a WITH (NOLOCK)
+              ON a.SetupID=@SetupId AND a.ProjectID=@ProjectId AND a.AssessmentNo=e.No AND a.InvoiceNo > 0
+            INNER JOIN dbo.HIS_InvoiceMain m WITH (NOLOCK)
+              ON m.SetupID=a.SetupID AND m.ProjectID=a.ProjectID AND m.InvoiceNo=a.InvoiceNo
+             AND ISNULL(m.AppointmentNo,0)=0 AND ISNULL(m.AdmissionNo,0)=0
+            {detailJoins}
+            WHERE m.CancelledOn IS NULL
+            """, s.BindTenant, r =>
         {
             var enc = EncounterOf(c, HisConnection.Ni(r, "AdmissionNo"), HisConnection.Ni(r, "AppointmentNo"), HisConnection.Ni(r, "AssessmentNo"));
             if (enc is null)
@@ -373,6 +407,8 @@ public static class FactsExtract
                 return;
             }
             var posted = HisConnection.Dt(r, "InvoiceDate") ?? s.From!.Value;
+            if (posted.Date < s.From!.Value.Date || posted.Date >= s.To!.Value.Date)
+                outsideWindow++;
             var performed = HisConnection.Dt(r, "PerformDate") ?? posted;
             var qty = Math.Max(1, HisConnection.I(r, "Quantity"));
             var price = Maps.Round4(HisConnection.F(r, "Price"));
@@ -390,16 +426,19 @@ public static class FactsExtract
             var payer = c.PayerOrSelf(HisConnection.Ni(r, "CompanyID"));
             // InvoiceType 2 is a child invoice: the parent line carries the package's money and cost.
             var child = Maps.Bool(HisConnection.I(r, "InvoiceType") == 2);
+            var invRef = $"INV-{tt}-{inv}-{line}";
+            var revRef = $"REV-{tt}-{inv}-{line}";
 
-            if (procCode.Length > 0)
+            if (procCode.Length > 0 && seenSvc.Add(invRef))
             {
                 svc.Write(enc, procCode, c.CcFromInvoice(HisConnection.S(r, "CostCenterID"), clinic),
                     c.ProviderOrEmpty(HisConnection.Ni(r, "PrimaryDoctorID")),
-                    Maps.Dec(qty), Maps.DateTime(performed), "VIDA-HIS", $"INV-{tt}-{inv}-{line}", child);
+                    Maps.Dec(qty), Maps.DateTime(performed), "VIDA-HIS", invRef, child);
             }
 
+            if (!seenRev.Add(revRef)) return;
             rev.Write(enc, procCode, payer, Maps.Money(gross), Maps.Money(discount), Maps.Money(net),
-                Maps.DateTime(posted), "VIDA-HIS", $"REV-{tt}-{inv}-{line}",
+                Maps.DateTime(posted), "VIDA-HIS", revRef,
                 HisConnection.S(r, "Status"), Flag(r, "IsPerformed"), HisConnection.S(r, "PerformType"), Flag(r, "IsReturned"), Flag(r, "IsRefunded"),
                 Maps.Money(Maps.Round4(HisConnection.F(r, "RefundedAmount"))),
                 // As HIS holds them, for reference: gross, discount and net above stay what they are.
@@ -409,14 +448,16 @@ public static class FactsExtract
                 Stored(r, "OutlierPayment"), Stored(r, "ClaimedAmount"), Stored(r, "SettledAmount"), Stored(r, "RejectedAmount"),
                 Flag(r, "IsZeroPrice"), Flag(r, "IsPackageSelected"), HisConnection.S(r, "PackageProcedureID"), HisConnection.S(r, "PackageSequenceNo"),
                 Flag(r, "IsPackageInvoice"), HisConnection.S(r, "BillType"), Flag(r, "IsAcceptedWithDRG"),
-                HisConnection.S(r, "InvoiceType"), HisConnection.S(r, "MainInvoiceNo"), child);
+                HisConnection.S(r, "InvoiceType"), HisConnection.S(r, "MainInvoiceNo"), child,
+                // Doctor share as HIS holds it: type V = a value, P = a percentage of the line amount.
+                Stored(r, "PrimaryDoctorShare"), HisConnection.S(r, "PrimaryDoctorShareType").Trim().ToUpperInvariant());
         });
-        pack.Note($"Invoice lines with no appointment, admission or ER assessment, not loaded: {noEncounter}.");
+        pack.Note($"Billing encounter-driven: {seenRev.Count} revenue lines ({outsideWindow} with InvoiceDate outside the pack window). No encounter: {noEncounter}.");
         await RefundsAsync(db, s, c, pack);
         await PackageItemsAsync(db, s, c, pack);
     }
 
-    /// <summary>Package components on the period's invoices, as HIS holds them. Not services and not revenue.</summary>
+    /// <summary>Package components on the pack encounters' invoices (any invoice date). Not services and not revenue.</summary>
     private static async Task PackageItemsAsync(HisConnection db, Settings s, Codes c, CsvZipWriter pack)
     {
         using var csv = pack.Create("38_InvoicePackageItem.csv",
@@ -424,28 +465,54 @@ public static class FactsExtract
             "transactionType", "invoiceNo", "lineItemNo", "invoiceDate", "price", "discountedCharge", "patientShare", "patientPaid", "companyShare", "companyPaid",
             "childInvoiceNo", "childInvoiceLineItemNo", "isCompleted", "isRefunded", "sourceSystem", "sourceRef");
         int lines = 0, noEncounter = 0;
-        await db.QueryAsync("""
-            SELECT p.TransactionType, p.InvoiceNo, p.LineItemNo, p.ProcedureID, p.ProcedurePackageID, p.ProcedurePackageLineItemNo, p.ProcedurePackageSequence,
-                   p.Price, p.DiscountedCharge, p.PatientShare, p.PatientPaid, p.CompanyShare, p.CompanyPaid,
-                   p.ChildInvoiceNo, p.ChildInvoiceLineItemNo, p.IsCompleted, p.IsRefunded,
-                   m.InvoiceDate, m.AppointmentNo, m.AdmissionNo, er.AssessmentNo
-            FROM dbo.HIS_InvoiceMain m WITH (NOLOCK)
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        const string cols = """
+            p.TransactionType, p.InvoiceNo, p.LineItemNo, p.ProcedureID, p.ProcedurePackageID, p.ProcedurePackageLineItemNo, p.ProcedurePackageSequence,
+            p.Price, p.DiscountedCharge, p.PatientShare, p.PatientPaid, p.CompanyShare, p.CompanyPaid,
+            p.ChildInvoiceNo, p.ChildInvoiceLineItemNo, p.IsCompleted, p.IsRefunded,
+            m.InvoiceDate, m.AppointmentNo, m.AdmissionNo, er.AssessmentNo
+            """;
+        const string joins = """
             INNER JOIN dbo.HIS_InvoicePackageItem p WITH (NOLOCK)
               ON p.SetupID=m.SetupID AND p.ProjectID=m.ProjectID
              AND p.TransactionType=m.TransactionType AND p.InvoiceNo=m.InvoiceNo
             LEFT JOIN dbo.INP_ERAssessment er WITH (NOLOCK)
               ON er.SetupID=m.SetupID AND er.ProjectID=m.ProjectID AND er.InvoiceNo=m.InvoiceNo
              AND ISNULL(m.AppointmentNo,0)=0 AND ISNULL(m.AdmissionNo,0)=0
-            WHERE m.SetupID=@SetupId AND m.ProjectID=@ProjectId
-              AND m.InvoiceDate >= @From AND m.InvoiceDate < @To
-              AND m.CancelledOn IS NULL
-            """, s.BindPeriod, r =>
+            """;
+        await db.QueryAsync($"""
+            SELECT {cols}
+            FROM #ip i
+            INNER JOIN dbo.HIS_InvoiceMain m WITH (NOLOCK)
+              ON m.SetupID=@SetupId AND m.ProjectID=@ProjectId AND m.AdmissionNo=i.No
+            {joins}
+            WHERE m.CancelledOn IS NULL
+            UNION ALL
+            SELECT {cols}
+            FROM #op o
+            INNER JOIN dbo.HIS_InvoiceMain m WITH (NOLOCK)
+              ON m.SetupID=@SetupId AND m.ProjectID=@ProjectId AND m.AppointmentNo=o.No
+            {joins}
+            WHERE m.CancelledOn IS NULL AND ISNULL(m.AdmissionNo, 0) = 0
+            UNION ALL
+            SELECT {cols}
+            FROM #er e
+            INNER JOIN dbo.INP_ERAssessment a WITH (NOLOCK)
+              ON a.SetupID=@SetupId AND a.ProjectID=@ProjectId AND a.AssessmentNo=e.No AND a.InvoiceNo > 0
+            INNER JOIN dbo.HIS_InvoiceMain m WITH (NOLOCK)
+              ON m.SetupID=a.SetupID AND m.ProjectID=a.ProjectID AND m.InvoiceNo=a.InvoiceNo
+             AND ISNULL(m.AppointmentNo,0)=0 AND ISNULL(m.AdmissionNo,0)=0
+            {joins}
+            WHERE m.CancelledOn IS NULL
+            """, s.BindTenant, r =>
         {
             var enc = EncounterOf(c, HisConnection.Ni(r, "AdmissionNo"), HisConnection.Ni(r, "AppointmentNo"), HisConnection.Ni(r, "AssessmentNo")) ?? "";
             var procId = HisConnection.S(r, "ProcedureID");
             var tt = HisConnection.I(r, "TransactionType");
             var inv = HisConnection.I(r, "InvoiceNo");
             var line = HisConnection.I(r, "LineItemNo");
+            var sourceRef = $"PKG-{tt}-{inv}-{line}";
+            if (!seen.Add(sourceRef)) return;
             lines++;
             if (enc.Length == 0) noEncounter++;
             csv.Write(
@@ -454,12 +521,15 @@ public static class FactsExtract
                 $"{tt}", $"{inv}", Maps.Int(line), When(HisConnection.Dt(r, "InvoiceDate")),
                 Stored(r, "Price"), Stored(r, "DiscountedCharge"), Stored(r, "PatientShare"), Stored(r, "PatientPaid"), Stored(r, "CompanyShare"), Stored(r, "CompanyPaid"),
                 HisConnection.S(r, "ChildInvoiceNo"), HisConnection.S(r, "ChildInvoiceLineItemNo"), Flag(r, "IsCompleted"), Flag(r, "IsRefunded"),
-                "VIDA-HIS", $"PKG-{tt}-{inv}-{line}");
+                "VIDA-HIS", sourceRef);
         });
-        pack.Note($"InvoicePackageItem {lines} lines: {noEncounter} with no encounter. Not written as services or revenue.");
+        pack.Note($"InvoicePackageItem {lines} lines (encounter-driven): {noEncounter} with no encounter. Not written as services or revenue.");
     }
 
-    /// <summary>Every refund in the period as HIS holds it, with its status. These are not revenue lines.</summary>
+    /// <summary>
+    /// Refunds for the pack's encounters (any refund date), plus refunds dated in the window
+    /// that have no encounter link yet. Not revenue lines.
+    /// </summary>
     private static async Task RefundsAsync(HisConnection db, Settings s, Codes c, CsvZipWriter pack)
     {
         using var csv = pack.Create("37_RefundTransaction.csv",
@@ -469,24 +539,21 @@ public static class FactsExtract
             "status", "approvalStatus", "approvedAt", "cancelledAt", "reasonId", "sourceSystem", "sourceRef");
         int lines = 0, cancelled = 0, noEncounter = 0;
         var written = new HashSet<(int RefundNo, int Line)>();
-        await db.QueryAsync("""
-            SELECT r.RefundNo, r.RefundType, r.RefundDate, r.PatientID, r.RefundAmount AS HeaderRefundAmount, r.AmountPaid,
-                   r.OriginalTransactionType, r.OriginalTransactionRef, r.OriginalTransactionDate, r.ReasonID,
-                   r.Status, r.ApprovalStatus, r.ApprovedDate, r.CancelledOn,
-                   d.InvoiceLineItemNo, d.ProcedureID, d.RefundAmount, d.PatientShare, d.CompanyShare, d.PatientPaid, d.TaxAmount,
-                   m.AppointmentNo, m.AdmissionNo, m.CompanyID, m.CancelledOn AS InvoiceCancelledOn, er.AssessmentNo
-            FROM dbo.HIS_RefundMain r WITH (NOLOCK)
+        const string cols = """
+            r.RefundNo, r.RefundType, r.RefundDate, r.PatientID, r.RefundAmount AS HeaderRefundAmount, r.AmountPaid,
+            r.OriginalTransactionType, r.OriginalTransactionRef, r.OriginalTransactionDate, r.ReasonID,
+            r.Status, r.ApprovalStatus, r.ApprovedDate, r.CancelledOn,
+            d.InvoiceLineItemNo, d.ProcedureID, d.RefundAmount, d.PatientShare, d.CompanyShare, d.PatientPaid, d.TaxAmount,
+            m.AppointmentNo, m.AdmissionNo, m.CompanyID, m.CancelledOn AS InvoiceCancelledOn, er.AssessmentNo
+            """;
+        const string detail = """
             LEFT JOIN dbo.HIS_RefundDetail d WITH (NOLOCK)
               ON d.SetupID=r.SetupID AND d.ProjectID=r.ProjectID AND d.RefundNo=r.RefundNo
-            LEFT JOIN dbo.HIS_InvoiceMain m WITH (NOLOCK)
-              ON m.SetupID=r.SetupID AND m.ProjectID=r.ProjectID
-             AND m.TransactionType=r.OriginalTransactionType AND m.InvoiceNo=r.OriginalTransactionRef
             LEFT JOIN dbo.INP_ERAssessment er WITH (NOLOCK)
               ON er.SetupID=m.SetupID AND er.ProjectID=m.ProjectID AND er.InvoiceNo=m.InvoiceNo
              AND ISNULL(m.AppointmentNo,0)=0 AND ISNULL(m.AdmissionNo,0)=0
-            WHERE r.SetupID=@SetupId AND r.ProjectID=@ProjectId
-              AND r.RefundDate >= @From AND r.RefundDate < @To
-            """, s.BindPeriod, r =>
+            """;
+        void WriteRow(Microsoft.Data.SqlClient.SqlDataReader r)
         {
             var enc = EncounterOf(c, HisConnection.Ni(r, "AdmissionNo"), HisConnection.Ni(r, "AppointmentNo"), HisConnection.Ni(r, "AssessmentNo")) ?? "";
             var refundNo = HisConnection.I(r, "RefundNo");
@@ -509,8 +576,50 @@ public static class FactsExtract
                 Money(HisConnection.F(r, "HeaderRefundAmount")), Money(HisConnection.F(r, "AmountPaid")),
                 HisConnection.S(r, "Status"), HisConnection.S(r, "ApprovalStatus"), When(HisConnection.Dt(r, "ApprovedDate")), When(cancelledOn),
                 HisConnection.S(r, "ReasonID"), "VIDA-HIS", $"REF-{refundNo}-{line}");
-        });
-        pack.Note($"RefundTransaction {lines} lines: {cancelled} on cancelled refunds, {noEncounter} with no encounter. Not written as revenue.");
+        }
+
+        await db.QueryAsync($"""
+            SELECT {cols}
+            FROM #ip i
+            INNER JOIN dbo.HIS_InvoiceMain m WITH (NOLOCK)
+              ON m.SetupID=@SetupId AND m.ProjectID=@ProjectId AND m.AdmissionNo=i.No
+            INNER JOIN dbo.HIS_RefundMain r WITH (NOLOCK)
+              ON r.SetupID=m.SetupID AND r.ProjectID=m.ProjectID
+             AND r.OriginalTransactionType=m.TransactionType AND r.OriginalTransactionRef=m.InvoiceNo
+            {detail}
+            UNION ALL
+            SELECT {cols}
+            FROM #op o
+            INNER JOIN dbo.HIS_InvoiceMain m WITH (NOLOCK)
+              ON m.SetupID=@SetupId AND m.ProjectID=@ProjectId AND m.AppointmentNo=o.No
+            INNER JOIN dbo.HIS_RefundMain r WITH (NOLOCK)
+              ON r.SetupID=m.SetupID AND r.ProjectID=m.ProjectID
+             AND r.OriginalTransactionType=m.TransactionType AND r.OriginalTransactionRef=m.InvoiceNo
+            {detail}
+            WHERE ISNULL(m.AdmissionNo, 0) = 0
+            UNION ALL
+            SELECT {cols}
+            FROM #er e
+            INNER JOIN dbo.INP_ERAssessment a WITH (NOLOCK)
+              ON a.SetupID=@SetupId AND a.ProjectID=@ProjectId AND a.AssessmentNo=e.No AND a.InvoiceNo > 0
+            INNER JOIN dbo.HIS_InvoiceMain m WITH (NOLOCK)
+              ON m.SetupID=a.SetupID AND m.ProjectID=a.ProjectID AND m.InvoiceNo=a.InvoiceNo
+             AND ISNULL(m.AppointmentNo,0)=0 AND ISNULL(m.AdmissionNo,0)=0
+            INNER JOIN dbo.HIS_RefundMain r WITH (NOLOCK)
+              ON r.SetupID=m.SetupID AND r.ProjectID=m.ProjectID
+             AND r.OriginalTransactionType=m.TransactionType AND r.OriginalTransactionRef=m.InvoiceNo
+            {detail}
+            UNION ALL
+            SELECT {cols}
+            FROM dbo.HIS_RefundMain r WITH (NOLOCK)
+            LEFT JOIN dbo.HIS_InvoiceMain m WITH (NOLOCK)
+              ON m.SetupID=r.SetupID AND m.ProjectID=r.ProjectID
+             AND m.TransactionType=r.OriginalTransactionType AND m.InvoiceNo=r.OriginalTransactionRef
+            {detail}
+            WHERE r.SetupID=@SetupId AND r.ProjectID=@ProjectId
+              AND r.RefundDate >= @From AND r.RefundDate < @To
+            """, s.BindPeriod, WriteRow);
+        pack.Note($"RefundTransaction {lines} lines (encounter-driven + in-window): {cancelled} on cancelled refunds, {noEncounter} with no encounter. Not written as revenue.");
     }
 
     private static string Stored(Microsoft.Data.SqlClient.SqlDataReader r, string col) => Maps.Money(Maps.Round4(HisConnection.F(r, col)));

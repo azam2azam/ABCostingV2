@@ -7,7 +7,8 @@ import { firstValueFrom } from 'rxjs';
 import { Api, CostingModelsDto, Envelope, RunDetail as RunDetailDto, RunListItem } from '../core/api';
 import { Auth, toApiError } from '../core/auth';
 import { RunContext, runInFlight, runLiveStatus } from '../core/context';
-import { formatMoney } from '../core/decimal';
+import { formatDec, formatMoney } from '../core/decimal';
+import type { components } from '../core/api-types';
 import { apiResource, runResource, catalogueResource } from '../core/resource';
 import { Icon } from '../shared/icon';
 import { Col, UI, matchesNameOrCode, hisProcedureId } from '../shared/ui';
@@ -2070,6 +2071,7 @@ interface PatientEncounterRow {
   id: string; encounterNo: string; mrn: string; patient: string; segment: string; encType: string; department: string; payer: string; insurer?: string | null;
   physician?: string | null; admitAt: string; dischargeAt?: string | null; lengthOfStay: number; services: number;
   gross: string | number; discount: string | number; net: string | number; cost?: string | number | null;
+  doctorFee?: string | number | null; doctorBilled?: string | number; staffMinutes?: string | number; materials?: string | number; medicine?: string | number; claimed?: string | number;
 }
 /** Resource and no-billable type have no dropdown, but the Dashboard's counts still open the list filtered by them. */
 const ENCOUNTER_FILTER_KEYS = ['department', 'resource', 'physician', 'insurer', 'encType', 'segment', 'noBillableType'] as const;
@@ -2103,7 +2105,7 @@ function hisCols(spec: string[]): Col<any>[] {
   });
 }
 
-interface PatientEncounterDetailDto { encounter: PatientEncounterRow; lines: PatientEncounterLine[]; }
+interface PatientEncounterDetailDto { encounter: PatientEncounterRow; lines: PatientEncounterLine[]; charges?: ChargesDto | null; }
 interface InvoiceGroup { key: string; procedure: string; procedureCode: string | null; isPackage: boolean; procedureId: string | null; packageId: string | null; quantity: number; gross: number; discount: number; refunds: number; net: number; cost: number; }
 
 interface HisInvoiceTypeCount { invoiceType: number | null; name: string; invoices: number; encounters: number; patients: number; refunded: number; revenue: number }
@@ -2295,17 +2297,27 @@ export class PatientEncounters {
     const cols: Col<PatientEncounterRow>[] = [
       { key: 'admitAt', label: 'Date', type: 'date' },
       { key: 'encounterNo', label: 'Encounter', link: r => `/patient-encounters/${r.id}`, sub: this.auth.can('phi.view') ? r => r.patient : undefined },
-      { key: 'mrn', label: 'MRN' }, { key: 'encType', label: 'Type' },
-      { key: 'services', label: 'Services', type: 'num', dp: 0, blankZero: true },
+      { key: 'mrn', label: 'MRN' },
     ];
     if (this.canRevenue()) cols.push(
       { key: 'gross', label: 'Gross', type: 'money', blankZero: true }, { key: 'discount', label: 'Discount', type: 'money', blankZero: true },
       { key: 'net', label: 'Net Invoice', type: 'money', blankZero: true },
+      // Totals for the rows on this page (HIS values as billed / claimed): not sortable across the whole list.
+      // As on the detail's Doctors table: billed on the doctors' lines, with the doctors' share (HIS) underneath.
+      { key: 'doctorBilled', label: 'Doctor fee (billed / share)', type: 'money', blankZero: true, sortable: false,
+        sub: r => r.doctorFee == null ? null : `share ${formatMoney(String(r.doctorFee))}` },
     );
-    cols.push({ key: 'cost', label: 'Cost', type: 'money', blankZero: true, bad: r => this.canRevenue() && Number(r.cost ?? 0) > Number(r.net) });
+    cols.push({ key: 'staffMinutes', label: 'Staff min', type: 'num', dp: 0, blankZero: true, sortable: false });
+    if (this.canRevenue()) cols.push(
+      { key: 'materials', label: 'Materials', type: 'money', blankZero: true, sortable: false },
+      { key: 'medicine', label: 'Medicine', type: 'money', blankZero: true, sortable: false },
+      { key: 'claimed', label: 'Claimed', type: 'money', blankZero: true, sortable: false },
+    );
     return cols;
   });
 }
+
+type ChargesDto = components['schemas']['ReadQueriesEncounterCharges'];
 
 @Component({
   selector: 'v-encounter',
@@ -2327,6 +2339,50 @@ export class PatientEncounters {
           <section class="card" style="margin-top:14px"><h2>Invoiced procedures ({{ groups(r.data.lines).length }})</h2>
             <v-table [rows]="groups(r.data.lines)" [columns]="groupCols()" caption="Invoiced procedures" empty="Nothing was invoiced on this encounter." />
           </section>
+          @if (r.data.charges; as c) {
+            <section class="card" style="margin-top:14px">
+              <h2>Resources charged</h2>
+              <p class="muted">Doctors from the lines they billed and from measured time. "Billed on their lines" is what the hospital invoiced for the doctor's services; "Doctor fee (share)" is the doctor's share of it as HIS holds it, blank for facts extracted before the share was added; nursing and other staff time from HIS clocks or standards. Staff fees need payroll rates, which are not loaded yet.</p>
+              <h3>Doctors</h3>
+              <v-table [rows]="c.doctors" [columns]="doctorCols()" caption="Doctors" empty="No doctor on this encounter." />
+              <h3 style="margin-top:14px">Nursing and other staff</h3>
+              <v-table [rows]="c.staff" [columns]="staffCols" caption="Nursing and other staff" empty="No nursing or staff time recorded for this encounter." />
+            </section>
+            <section class="card" style="margin-top:14px">
+              <h2>Materials</h2>
+              <p class="muted">What the patient consumed, per item, as HIS issued or billed it. Amounts are the charge, not cost: cost joins later from pharmacy and ERP on the item or Oracle code.</p>
+              <h3>Consumables and implants</h3>
+              <v-table [rows]="c.consumables" [columns]="itemCols(false)" [total]="itemTotal(c.consumables)" caption="Consumables and implants" empty="No consumables recorded for this encounter." />
+              <h3 style="margin-top:14px">Medicine</h3>
+              <v-table [rows]="c.medicine" [columns]="itemCols(true)" [total]="itemTotal(c.medicine)" caption="Medicine" empty="No medicine recorded for this encounter." />
+            </section>
+            @if (c.showsMoney && c.billed; as b) {
+              <section class="card" style="margin-top:14px">
+                <h2>Amount billed</h2>
+                <div class="grid tiles">
+                  <v-tile label="Gross" [value]="b.gross" />
+                  <v-tile label="Discount" [value]="b.discount" blankZero />
+                  <v-tile label="Refunded" [value]="b.refunded" blankZero />
+                  <v-tile label="Net billed" [value]="b.net" [note]="b.lines + ' invoice lines'" />
+                  <v-tile label="Patient share" [value]="b.patientShare" blankZero />
+                  <v-tile label="Company share" [value]="b.companyShare" blankZero />
+                  <v-tile label="Tax" [value]="b.tax" blankZero />
+                </div>
+              </section>
+            }
+            @if (c.showsMoney && c.claims; as cl) {
+              <section class="card" style="margin-top:14px">
+                <h2>Claims received</h2>
+                <p class="muted">What was claimed from the payer on this encounter's lines, and what came back, as HIS holds it.</p>
+                <div class="grid tiles">
+                  <v-tile label="Claimed" [value]="cl.claimed" [note]="cl.linesClaimed + ' lines claimed'" />
+                  <v-tile label="Settled" [value]="cl.settled" />
+                  <v-tile label="Rejected" [value]="cl.rejected" [note]="cl.linesRejected ? cl.linesRejected + ' lines with a rejection' : null" />
+                  <v-tile label="Outstanding" [value]="cl.outstanding" note="Claimed − settled − rejected" />
+                </div>
+              </section>
+            }
+          }
           <section class="card his-source" style="margin-top:14px">
             <h2>HIS source</h2>
             <p class="muted">The values loaded from HIS for this encounter, under the HIS table and column each came from, for checking against HIS.</p>
@@ -2354,6 +2410,39 @@ export class EncounterDetail {
   canPhi = computed(() => this.auth.can('phi.view'));
   res = catalogueResource<PatientEncounterDetailDto>(() => `patient-encounters/${this.id()}`);
   his = catalogueResource<HisEncounterSource>(() => `patient-encounters/${this.id()}/his-source`);
+  doctorCols = computed<Col<ChargesDto['doctors'][number]>[]>(() => {
+    const cols: Col<ChargesDto['doctors'][number]>[] = [
+      { key: 'doctor', label: 'Doctor', link: r => r.providerId ? `/doctors/${r.providerId}` : null, sub: r => r.roles },
+      { key: 'lines', label: 'Lines billed', type: 'num', dp: 0, blankZero: true },
+    ];
+    if (this.canRevenue()) cols.push(
+      { key: 'billed', label: 'Billed on their lines', type: 'money', blankZero: true },
+      { key: 'share', label: 'Doctor fee (share)', value: r => r.share == null ? '—' : formatMoney(String(r.share)) },
+    );
+    cols.push({ key: 'minutes', label: 'Minutes', type: 'num', dp: 0, blankZero: true });
+    return cols;
+  });
+  staffCols: Col<ChargesDto['staff'][number]>[] = [
+    { key: 'role', label: 'Role' },
+    { key: 'minutes', label: 'Minutes', type: 'num', dp: 0 },
+    { key: 'basis', label: 'Basis', value: r => r.basis === 'STANDARD' ? 'Standard' : 'Measured',
+      sub: r => r.basis === 'STANDARD' && r.volume != null ? `${formatDec(String(r.volume), 2)} ${(r.volumeUom ?? '').toLowerCase().replace('_', '-')}s × standard` : null },
+    { key: 'fee', label: 'Fee', value: () => 'Rate not loaded', sortable: false },
+  ];
+  itemCols(medicine: boolean): Col<ChargesDto['consumables'][number]>[] {
+    const cols: Col<ChargesDto['consumables'][number]>[] = [
+      { key: 'description', label: 'Item', value: r => r.description || r.itemKey, sub: r => [r.itemKey, r.oracleItemCode ? 'Oracle ' + r.oracleItemCode : null].filter(Boolean).join(' · ') },
+    ];
+    if (!medicine) cols.push({ key: 'category', label: 'Type', type: 'chip', value: r => r.category === 'IMPLANT' ? 'Implant' : 'Consumable' });
+    cols.push({ key: 'quantity', label: 'Quantity', type: 'num', dp: 2, sub: r => r.uom.toLowerCase() });
+    if (medicine) cols.push({ key: 'prescribedQty', label: 'Prescribed', type: 'num', dp: 2, blankZero: true });
+    if (this.canRevenue()) cols.push({ key: 'billed', label: 'Billed', type: 'money', blankZero: true });
+    cols.push({ key: 'linkedTo', label: 'Charged to' });
+    return cols;
+  }
+  itemTotal(rows: ChargesDto['consumables']): Record<string, number> | null {
+    return rows.length ? { quantity: rows.reduce((t, r) => t + Number(r.quantity), 0), billed: rows.reduce((t, r) => t + Number(r.billed ?? 0), 0) } : null;
+  }
   hisFieldCols: Col<HisEncounterSource['fields'][number]>[] = [
     { key: 'label', label: 'Field', sortable: false }, { key: 'hisColumn', label: 'HIS table and column', sortable: false }, { key: 'value', label: 'Value', sortable: false, value: r => isZero(r.value) ? '' : r.value ?? '' },
   ];

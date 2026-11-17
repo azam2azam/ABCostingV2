@@ -104,7 +104,7 @@ public static class EntitySpecs
         new("EncounterService", typeof(EncounterService), "Monthly data", "Service delivered in an encounter.", ["EncounterId", "SourceRef"],
             [R("encounterNo", "EncounterId", typeof(Encounter), "EncounterNo"), R("procedureCode", "ProcedureId", typeof(Procedure)),
              R("costCentreCode", "CostCenterId", typeof(CostCenter)), R("providerCode", "ProviderId", typeof(Provider), opt: true)]),
-        new("ActivityTransaction", typeof(ActivityTransaction), "Monthly data", "Measured consumption. sourceRef must include the activity (CR-10).", ["EncounterId", "SourceSystem", "SourceRef"],
+        new("ActivityTransaction", typeof(ActivityTransaction), "Monthly data", "Optional measured Activity×Resource volume. HIS extract no longer invents these from clocks — prefer StaffTime, EncounterTransfer and ConsumptionItem.", ["EncounterId", "SourceSystem", "SourceRef"],
             [R("encounterNo", "EncounterId", typeof(Encounter), "EncounterNo"), R("serviceRef", "EncounterServiceId", typeof(EncounterService), "SourceRef", opt: true),
              R("activityCode", "ActivityId", typeof(Activity)), R("resourceCode", "ResourceId", typeof(Resource)), R("costCentreCode", "CostCenterId", typeof(CostCenter))]),
         new("RevenueTransaction", typeof(RevenueTransaction), "Monthly data", "Billed line from RCM.", ["EncounterId", "SourceRef"],
@@ -113,9 +113,11 @@ public static class EntitySpecs
             [Hosp, R("encounterNo", "EncounterId", typeof(Encounter), "EncounterNo", opt: true), R("procedureCode", "ProcedureId", typeof(Procedure), opt: true), R("payerCode", "PayerId", typeof(Payer), opt: true)]),
         new("InvoicePackageItem", typeof(InvoicePackageItem), "Monthly data", "Package component on a HIS invoice. For reference; not part of cost or revenue.", ["HospitalId", "SourceRef"],
             [Hosp, R("encounterNo", "EncounterId", typeof(Encounter), "EncounterNo", opt: true), R("procedureCode", "ProcedureId", typeof(Procedure), opt: true)]),
-        new("ConsumptionItem", typeof(ConsumptionItem), "Monthly data", "Consumable, implant or medicine a patient used, by item (HIS). Quantities only; cost joins later on itemKey / oracleItemCode.", ["HospitalId", "SourceRef"],
+        new("ConsumptionItem", typeof(ConsumptionItem), "Monthly data", "Consumable, implant or medicine a patient used, by item (HIS), including floor TransType/prices and order keys as received. Quantities only; cost joins later on itemKey / oracleItemCode.", ["HospitalId", "SourceRef"],
             [Hosp, R("encounterNo", "EncounterId", typeof(Encounter), "EncounterNo", opt: true)]),
-        new("StaffTime", typeof(StaffTime), "Monthly data", "Minutes of doctors, nurses and technicians on a case: measured from HIS clocks or volume × standard.", ["HospitalId", "SourceRef"],
+        new("EncounterTransfer", typeof(EncounterTransfer), "Monthly data", "HIS INP_Transfer bed/ward placement as stored (TransferDate, StartTime, EndTime, Duration, RoomId, BedId, …) — no minutes conversion.", ["HospitalId", "SourceRef"],
+            [Hosp, R("encounterNo", "EncounterId", typeof(Encounter), "EncounterNo", opt: true)]),
+        new("StaffTime", typeof(StaffTime), "Monthly data", "Measured HIS staff clocks and named OR/ER/OP nurses/doctors (plus raw start/end strings). Ward nursing standards are not invented here (see EncounterTransfer).", ["HospitalId", "SourceRef"],
             [Hosp, R("encounterNo", "EncounterId", typeof(Encounter), "EncounterNo", opt: true), R("providerCode", "ProviderId", typeof(Provider), opt: true)]),
 
         // ── Access ───────────────────────────────────────────────────────────────

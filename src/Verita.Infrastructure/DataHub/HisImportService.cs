@@ -24,11 +24,17 @@ public sealed class HisImportService(IDbContextFactory<VeritaDbContext> factory,
         if (unknown.Length > 0)
             throw AppError.Invalid($"These files do not match a table: {string.Join(", ", unknown)}. Name each file after its table, as in the templates.");
 
-        var tables = files.Select(f => new ImportPreviewTable(f.Spec!.Name, f.FileName, f.Rows.Count)).ToArray();
         var notices = new List<string>();
         var warnings = new List<string>();
         if (skipped.Length > 0)
             notices.Add($"Skipped {string.Join(", ", skipped)}.");
+        if (HisImportPack.IsFactsPack(identity, files))
+        {
+            files = HisImportPack.WithoutHisInventedActivityTransactions(files, out var droppedTxn);
+            if (droppedTxn > 0)
+                notices.Add($"Skipped {droppedTxn:N0} ActivityTransaction row(s). HIS packs use StaffTime, EncounterTransfer and ConsumptionItem — not invented ACT/RES volumes.");
+        }
+        var tables = files.Select(f => new ImportPreviewTable(f.Spec!.Name, f.FileName, f.Rows.Count)).ToArray();
 
         int? project = null;
         if (identity is not null && HisImportPack.TryProjectId(identity.ProjectId, out var pid)) project = pid;
@@ -91,6 +97,13 @@ public sealed class HisImportService(IDbContextFactory<VeritaDbContext> factory,
             if (!fileName.EndsWith(".zip", StringComparison.OrdinalIgnoreCase))
                 throw AppError.Invalid("Name the file after its table (for example Resource.csv), or upload a HIS pack zip.");
             throw AppError.Invalid("The file has a header but no data rows.");
+        }
+
+        if (HisImportPack.IsFactsPack(identity, files))
+        {
+            files = HisImportPack.WithoutHisInventedActivityTransactions(files, out var droppedTxn);
+            if (droppedTxn > 0)
+                log.LogInformation("Import {File}: skipped {Count} ActivityTransaction row(s) (HIS packs use StaffTime / EncounterTransfer / ConsumptionItem)", fileName, droppedTxn);
         }
 
         if (identity is not null)

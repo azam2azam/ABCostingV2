@@ -100,7 +100,11 @@ public sealed partial class ReadQueries
 
     /// <summary>Catalogue doctors for the hospital. A run, when present, adds cases/revenue/cost.</summary>
     public sealed record DoctorRow(Guid Id, string Code, string Name, string Specialty, string Grade, Guid DepartmentId, string? Department,
-        int Departments, bool IsDummy, int Cases, decimal Revenue, decimal Cost);
+        int Departments, bool IsDummy, int Cases, decimal Revenue, decimal Cost,
+        /// <summary>Staff minutes (doctors, nurses, technicians) on the period's encounters the doctor attended.</summary>
+        decimal StaffMinutes = 0,
+        /// <summary>Billed consumables, implants and medicine on those encounters (charge, not cost).</summary>
+        decimal Materials = 0);
 
     public async Task<DoctorRow[]> DoctorsAsync(ScopedRun s, Principal p, CancellationToken ct)
     {
@@ -117,6 +121,23 @@ public sealed partial class ReadQueries
         var figures = await db.RunDimensionCosts.AsNoTracking()
             .Where(x => x.RunId == s.Run.Id && x.Dimension == "physician" && x.Key != "")
             .ToDictionaryAsync(x => x.Key, ct);
+        // Staff time and materials on the period's encounters, by attending doctor (the same encounters Cases counts).
+        var start = s.Period.StartDate.ToDateTime(TimeOnly.MinValue);
+        var end = s.Period.EndDate.AddDays(1).ToDateTime(TimeOnly.MinValue);
+        var counted = CountedRevenue(s);
+        var periodEncounters = FromHis(s)
+            ? db.Encounters.AsNoTracking().Where(e => e.HospitalId == s.Hospital.Id && e.ProviderId != null && counted.Any(r => r.EncounterId == e.Id))
+            : db.Encounters.AsNoTracking().Where(e => e.HospitalId == s.Hospital.Id && e.ProviderId != null && e.AdmitAt >= start && e.AdmitAt < end);
+        var staffByDoctor = await (from t in db.StaffTimes.AsNoTracking()
+                                   join e in periodEncounters on t.EncounterId equals e.Id
+                                   group t by e.ProviderId!.Value into g
+                                   select new { g.Key, Minutes = g.Sum(x => x.Minutes) }).ToDictionaryAsync(x => x.Key, x => x.Minutes, ct);
+        var materialsByDoctor = showRevenue
+            ? await (from c in db.ConsumptionItems.AsNoTracking()
+                     join e in periodEncounters on c.EncounterId equals e.Id
+                     group c by e.ProviderId!.Value into g
+                     select new { g.Key, Billed = g.Sum(x => x.BilledAmount ?? 0m) }).ToDictionaryAsync(x => x.Key, x => x.Billed, ct)
+            : [];
         return providers.Select(x =>
         {
             var all = deptsOf.GetValueOrDefault(x.Id) ?? [];
@@ -130,7 +151,8 @@ public sealed partial class ReadQueries
             figures.TryGetValue(x.Id.ToString(), out var f);
             return new DoctorRow(x.Id, x.Code, x.Name, x.Specialty, x.Grade, x.DepartmentId,
                 depts.GetValueOrDefault(x.DepartmentId)?.Name, t.all.Count, x.IsDummy,
-                f?.Encounters ?? 0, showRevenue ? f?.Revenue ?? 0m : 0m, f?.TotalCost ?? 0m);
+                f?.Encounters ?? 0, showRevenue ? f?.Revenue ?? 0m : 0m, f?.TotalCost ?? 0m,
+                Money.R4(staffByDoctor.GetValueOrDefault(x.Id)), Money.R4(materialsByDoctor.GetValueOrDefault(x.Id)));
         })
         .OrderBy(x => x.IsDummy).ThenBy(x => x.Name).ToArray();
     }

@@ -216,6 +216,26 @@ public static class HisImportPack
         "CostingVersion", "CostingDefinition", "ProcedureActivityLine", "ProcedureResourceLine",
     };
 
+    /// <summary>
+    /// HIS facts packs must not load invented Activity×Resource volumes.
+    /// People → StaffTime; bed timing → EncounterTransfer; materials → ConsumptionItem.
+    /// </summary>
+    public static List<ParsedFile> WithoutHisInventedActivityTransactions(IEnumerable<ParsedFile> files, out int skippedRows)
+    {
+        skippedRows = 0;
+        var kept = new List<ParsedFile>();
+        foreach (var f in files)
+        {
+            if (f.Spec?.Name == "ActivityTransaction")
+            {
+                skippedRows += f.Rows.Count;
+                continue;
+            }
+            kept.Add(f);
+        }
+        return kept;
+    }
+
     public static (List<ParsedFile> Files, Identity? His, string[] Skipped) Read(string fileName, Stream stream, string? entityHint = null)
     {
         if (fileName.EndsWith(".zip", StringComparison.OrdinalIgnoreCase))
@@ -342,7 +362,8 @@ public static class HisImportPack
     public static bool IsFactsPack(Identity? id, IReadOnlyList<ParsedFile> files) =>
         id is not null && (
             string.Equals(id.Pack, "facts", StringComparison.OrdinalIgnoreCase)
-            || files.Any(f => f.Spec?.Name is "Encounter" or "EncounterService" or "Patient" or "RevenueTransaction"));
+            || files.Any(f => f.Spec?.Name is "Encounter" or "EncounterService" or "Patient" or "RevenueTransaction"
+                or "ConsumptionItem" or "StaffTime" or "EncounterTransfer"));
 
     public static bool TryFactRange(Identity? id, string? fileName, out DateOnly from, out DateOnly toInclusive)
     {

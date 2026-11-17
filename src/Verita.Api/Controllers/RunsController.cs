@@ -131,6 +131,15 @@ public sealed class RunsController(RunService runs, RunQueue queue, VeritaDbCont
     public async Task<StorageDto> Storage([FromQuery] string hospital, [FromServices] PeriodFactsService facts, CancellationToken ct) =>
         await facts.StorageAsync(await Me(), hospital, ct);
 
+    /// <summary>
+    /// Wipe one hospital-scoped storage group (catalogue, facts, calculation results, import files, history).
+    /// Catalogue keeps the hospital entry. Refused while dependents remain (facts before catalogue; runs before facts).
+    /// </summary>
+    [HttpDelete("storage")]
+    [Authorize(Policy = "masterdata.edit")]
+    public async Task<StorageGroupDeleted[]> DeleteStorageGroup([FromQuery] string hospital, [FromQuery] string group, [FromServices] PeriodFactsService facts, CancellationToken ct) =>
+        await facts.DeleteGroupAsync(await Me(), hospital, group, ct);
+
     public sealed record TransitionRequest(string To);
 
     [HttpPost("runs/{run}/transition")]

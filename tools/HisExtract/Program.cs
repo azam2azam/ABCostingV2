@@ -43,6 +43,15 @@ static class App
             Console.WriteLine("Note: --hospital is ignored. Identity is SetupID + ProjectID. Choose the VERITA hospital on import.");
         s.OutDir = Flag(args, "--out") ?? s.OutDir;
         s.CcMapPath = Flag(args, "--cc-map");
+        if (Flag(args, "--pharmacy-db") is { } phrDb)
+        {
+            if (phrDb.Length > 0 && !phrDb.All(ch => char.IsLetterOrDigit(ch) || ch == '_'))
+            {
+                Console.Error.WriteLine($"--pharmacy-db '{phrDb}' must be a database name (letters, digits, _), or empty to skip item names.");
+                return 1;
+            }
+            s.PharmacyDb = phrDb;
+        }
         if (Flag(args, "--query-timeout") is { } qt)
         {
             if (!int.TryParse(qt, out var qts) || qts < 0)
@@ -204,12 +213,13 @@ static class App
         Identity is SetupID + ProjectID (every CSV + zip name). Do not treat the zip
         filename as a VERITA hospital. Inner CSV names stay NN_Table.csv.
 
-        Facts are one zip per day. They include 35_ActivityTransaction.csv from measured HIS
-        clocks and quantities, 39_ConsumptionItem.csv (consumables, implants, medicine by item)
-        and 40_StaffTime.csv (OR team, OP/ER doctor, ward nursing minutes). Quantities only:
-        invoice price is not cost. Each day carries every item and minute of the encounters
-        admitted or invoiced that day; rows are keyed by sourceRef, so re-sent rows update.
-        Import remaps SetupID-ProjectID codes onto the VERITA hospital you pick.
+        Facts are one zip per day. Utilization is raw/measured — not invented Activity×Resource:
+        39_ConsumptionItem.csv (item quantities), 40_StaffTime.csv (OR/OP/ER staff minutes),
+        41_EncounterTransfer.csv (INP_Transfer timing as stored). 35_ActivityTransaction.csv
+        is omitted (no ACT-/RES- invent from HIS clocks). Invoice price is not cost. Each day
+        carries every invoice (incl. claimed/settled/rejected), item and minute of the
+        encounters admitted or invoiced that day — encounter-driven, not only rows dated in
+        the window. Rows are keyed by sourceRef. Import remaps SetupID-ProjectID onto VERITA.
         """;
 
     private static int SelfTest()
@@ -420,10 +430,10 @@ static class App
               HIS-010266-15-2026-07-02-facts.zip
               ...
 
-            Facts include 35_ActivityTransaction.csv (measured HIS clocks and quantities),
-            39_ConsumptionItem.csv (consumables, implants, medicine by item) and
-            40_StaffTime.csv (staff minutes). Quantities only: invoice / floor UnitPrice
-            is never written as cost.
+            Facts: encounter-driven billing (claims on every invoice of pack encounters),
+            39_ConsumptionItem, 40_StaffTime, 41_EncounterTransfer (raw/measured).
+            35_ActivityTransaction is omitted — no invented ACT-/RES- from HIS clocks.
+            Quantities only: invoice / floor UnitPrice is never written as cost.
             Tables over 50,000 rows split to NN_Entity.csv, NN_Entity_p2.csv, … — import
             concatenates every page. Queries use NOLOCK / READ UNCOMMITTED.
 
@@ -438,6 +448,8 @@ static class App
               --cc-map     reviewed CSV (costCentreCode, departmentCode) that overrides
                            the derived cost centre → department link (catalogue)
               --ward-nurse-min  ward nursing minutes per patient-day   default 260
+              --pharmacy-db     pharmacy database with the item master (PHR_Item), for
+                                item names; "" to skip                    default PHARMAKON
               --query-timeout   seconds one HIS query may run, 0 = no limit   default 1800
                                 (a step that times out is skipped and noted in extract-log.txt)
 

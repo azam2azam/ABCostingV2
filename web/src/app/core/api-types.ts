@@ -3129,7 +3129,9 @@ export interface paths {
         };
         get: {
             parameters: {
-                query?: never;
+                query?: {
+                    hospital?: string;
+                };
                 header?: never;
                 path?: never;
                 cookie?: never;
@@ -3175,6 +3177,43 @@ export interface paths {
                 };
             };
         };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/data/catalogue-status": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: {
+            parameters: {
+                query?: {
+                    hospital?: string;
+                };
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Verita.Infrastructure.DataHub.CatalogueStatus"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -3865,6 +3904,43 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/storage": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: {
+            parameters: {
+                query?: {
+                    hospital?: string;
+                };
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Verita.Infrastructure.Runs.StorageDto"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/runs/{run}/transition": {
         parameters: {
             query?: never;
@@ -4534,6 +4610,79 @@ export interface components {
             overheadSources: components["schemas"]["ReadQueriesAllocationDto"][];
             resources: components["schemas"]["ReadQueriesRecipeLineDto"][];
         };
+        ReadQueriesChargeBilled: {
+            /** Format: decimal */
+            gross: string;
+            /** Format: decimal */
+            discount: string;
+            /** Format: decimal */
+            net: string;
+            /** Format: decimal */
+            refunded: string;
+            /** Format: decimal */
+            patientShare: string;
+            /** Format: decimal */
+            companyShare: string;
+            /** Format: decimal */
+            tax: string;
+            /** Format: int32 */
+            lines: number;
+        };
+        ReadQueriesChargeClaims: {
+            /** Format: decimal */
+            claimed: string;
+            /** Format: decimal */
+            settled: string;
+            /** Format: decimal */
+            rejected: string;
+            /** Format: decimal */
+            outstanding: string;
+            /** Format: int32 */
+            linesClaimed: number;
+            /** Format: int32 */
+            linesRejected: number;
+        };
+        ReadQueriesChargeDoctor: {
+            /** Format: uuid */
+            providerId: string | null;
+            doctor: string;
+            /** Format: int32 */
+            lines: number;
+            /** Format: decimal */
+            billed: string;
+            /** Format: decimal */
+            share: string | null;
+            /** Format: decimal */
+            minutes: string;
+            roles: string;
+        };
+        ReadQueriesChargeItem: {
+            category: string;
+            itemKey: string;
+            description: string | null;
+            oracleItemCode: string | null;
+            /** Format: decimal */
+            quantity: string;
+            uom: string;
+            /** Format: decimal */
+            billed: string | null;
+            /** Format: decimal */
+            prescribedQty: string | null;
+            linkedTo: string;
+            /** Format: int32 */
+            rows: number;
+        };
+        ReadQueriesChargeStaff: {
+            role: string;
+            /** Format: decimal */
+            minutes: string;
+            basis: string;
+            /** Format: decimal */
+            volume: string | null;
+            volumeUom: string | null;
+            /** Format: int32 */
+            rows: number;
+        };
         ReadQueriesCheckDto: {
             code: string;
             name: string;
@@ -4916,6 +5065,15 @@ export interface components {
             share: string;
             sourceSystem: string;
         };
+        ReadQueriesEncounterCharges: {
+            doctors: components["schemas"]["ReadQueriesChargeDoctor"][];
+            staff: components["schemas"]["ReadQueriesChargeStaff"][];
+            consumables: components["schemas"]["ReadQueriesChargeItem"][];
+            medicine: components["schemas"]["ReadQueriesChargeItem"][];
+            billed: components["schemas"]["ReadQueriesChargeBilled"];
+            claims: components["schemas"]["ReadQueriesChargeClaims"];
+            showsMoney: boolean;
+        };
         ReadQueriesEncounterDetail: {
             encounter: components["schemas"]["ReadQueriesEncounterRow"];
             components: components["schemas"]["ReadQueriesComponentDto"][];
@@ -5259,6 +5417,24 @@ export interface components {
             quantity: string;
             /** Format: decimal */
             sharePct: string;
+            /** Format: decimal */
+            feeBilled: string;
+            /** Format: decimal */
+            doctorShare: string | null;
+            /** Format: decimal */
+            consumablesBilled: string;
+            /** Format: int32 */
+            consumableItems: number;
+            /** Format: decimal */
+            medicineBilled: string;
+            /** Format: decimal */
+            medicineQuantity: string;
+            /** Format: decimal */
+            claimed: string;
+            /** Format: decimal */
+            settled: string;
+            /** Format: decimal */
+            rejectedClaims: string;
         };
         ReadQueriesPackageRow: {
             /** Format: uuid */
@@ -5301,6 +5477,7 @@ export interface components {
         ReadQueriesPatientEncounterDetail: {
             encounter: components["schemas"]["ReadQueriesPatientEncounterRow"];
             lines: components["schemas"]["ReadQueriesPatientEncounterLine"][];
+            charges: components["schemas"]["ReadQueriesEncounterCharges"];
         };
         ReadQueriesPatientEncounterFilters: {
             serviceLines: components["schemas"]["ReadQueriesFilterOption"][];
@@ -5378,6 +5555,14 @@ export interface components {
             net: string;
             /** Format: decimal */
             cost: string | null;
+            /** Format: decimal */
+            doctorFee: string | null;
+            /** Format: decimal */
+            staffMinutes: string;
+            /** Format: decimal */
+            materials: string;
+            /** Format: decimal */
+            claimed: string;
         };
         ReadQueriesPeriodDto: {
             /** Format: uuid */
@@ -6099,6 +6284,17 @@ export interface components {
             items: components["schemas"]["Verita.Infrastructure.CostingSeed.RecipeSuggestion"][];
             notices: string[];
         };
+        "Verita.Infrastructure.DataHub.CatalogueStatus": {
+            hospital: string;
+            hasCatalogue: boolean;
+            /** Format: int32 */
+            procedures: number;
+            /** Format: int32 */
+            departments: number;
+            catalogueQueued: boolean;
+            /** Format: date-time */
+            lastCatalogueImport: string | null;
+        };
         "Verita.Infrastructure.DataHub.ColumnSpec": {
             name: string;
             kind: string;
@@ -6297,6 +6493,66 @@ export interface components {
             totalEstimatedBytes: number;
             runs: components["schemas"]["Verita.Infrastructure.Runs.PeriodFactRun"][];
             blocker: string | null;
+        };
+        "Verita.Infrastructure.Runs.StorageDto": {
+            hospital: string;
+            /** Format: int64 */
+            databaseBytes: number;
+            /** Format: int64 */
+            usedBytes: number;
+            tables: components["schemas"]["Verita.Infrastructure.Runs.StorageTable"][];
+            factEntities: components["schemas"]["Verita.Infrastructure.Runs.StorageFactEntity"][];
+            periods: components["schemas"]["Verita.Infrastructure.Runs.StoragePeriod"][];
+        };
+        "Verita.Infrastructure.Runs.StorageFactEntity": {
+            entity: string;
+            label: string;
+            group: string;
+        };
+        "Verita.Infrastructure.Runs.StoragePeriod": {
+            /** Format: uuid */
+            id: string;
+            code: string;
+            /** Format: date */
+            startDate: string;
+            /** Format: date */
+            endDate: string;
+            status: string;
+            run: string | null;
+            runStatus: string | null;
+            entities: components["schemas"]["Verita.Infrastructure.Runs.StoragePeriodEntity"][];
+            /** Format: int64 */
+            factRows: number;
+            /** Format: int64 */
+            factBytes: number;
+            /** Format: int64 */
+            resultRows: number;
+            /** Format: int64 */
+            resultBytes: number;
+        };
+        "Verita.Infrastructure.Runs.StoragePeriodEntity": {
+            entity: string;
+            /** Format: int64 */
+            rows: number;
+            /** Format: int64 */
+            estimatedBytes: number;
+        };
+        "Verita.Infrastructure.Runs.StorageTable": {
+            table: string;
+            group: string;
+            /** Format: int64 */
+            rows: number;
+            /** Format: int64 */
+            bytes: number;
+            /** Format: int64 */
+            dataBytes: number;
+            /** Format: int64 */
+            indexBytes: number;
+            shared: boolean;
+            /** Format: int64 */
+            hospitalRows: number;
+            /** Format: int64 */
+            hospitalBytes: number;
         };
     };
     responses: never;

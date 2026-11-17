@@ -127,9 +127,16 @@ public sealed class DataController(DataHubService hub, RecipeSuggestionService r
         return await files.UploadAsync(p, file.FileName, stream, ct);
     }
 
+    /// <summary>Whether the hospital's catalogue is loaded (or queued), which facts packs need first.</summary>
+    [HttpGet("catalogue-status")]
+    [Authorize(Policy = "masterdata.view")]
+    public async Task<CatalogueStatus> CatalogueStatus([FromQuery] string hospital, [FromServices] ImportFileService files, CancellationToken ct) =>
+        await files.CatalogueStatusAsync(await Me(), hospital, ct);
+
     [HttpGet("files")]
     [Authorize(Policy = "masterdata.view")]
-    public async Task<ImportFileDto[]> Files([FromServices] ImportFileService files, CancellationToken ct) => await files.ListAsync(await Me(), ct);
+    public async Task<ImportFileDto[]> Files([FromQuery] string? hospital, [FromServices] ImportFileService files, CancellationToken ct) =>
+        await files.ListAsync(await Me(), hospital, ct);
 
     [HttpGet("files/{id:guid}")]
     [Authorize(Policy = "masterdata.view")]

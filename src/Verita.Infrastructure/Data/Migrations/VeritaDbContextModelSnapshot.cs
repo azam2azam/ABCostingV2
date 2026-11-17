@@ -979,6 +979,10 @@ namespace Verita.Infrastructure.Data.Migrations
                         .HasPrecision(19, 4)
                         .HasColumnType("decimal(19,4)");
 
+                    b.Property<decimal?>("BillingPrice")
+                        .HasPrecision(19, 6)
+                        .HasColumnType("decimal(19,6)");
+
                     b.Property<string>("Category")
                         .IsRequired()
                         .HasMaxLength(200)
@@ -1004,12 +1008,25 @@ namespace Verita.Infrastructure.Data.Migrations
                         .HasMaxLength(200)
                         .HasColumnType("nvarchar(200)");
 
+                    b.Property<decimal?>("HisGrossAmount")
+                        .HasPrecision(19, 6)
+                        .HasColumnType("decimal(19,6)");
+
+                    b.Property<int?>("HisSource")
+                        .HasColumnType("int");
+
+                    b.Property<int?>("HisTransType")
+                        .HasColumnType("int");
+
                     b.Property<decimal?>("HisUnitPrice")
                         .HasPrecision(19, 6)
                         .HasColumnType("decimal(19,6)");
 
                     b.Property<Guid>("HospitalId")
                         .HasColumnType("uniqueidentifier");
+
+                    b.Property<int?>("ItemCategoryId")
+                        .HasColumnType("int");
 
                     b.Property<string>("ItemKey")
                         .IsRequired()
@@ -1030,12 +1047,25 @@ namespace Verita.Infrastructure.Data.Migrations
                         .HasMaxLength(200)
                         .HasColumnType("nvarchar(200)");
 
+                    b.Property<decimal?>("MarkUp")
+                        .HasPrecision(19, 6)
+                        .HasColumnType("decimal(19,6)");
+
+                    b.Property<int?>("NursingStationId")
+                        .HasColumnType("int");
+
                     b.Property<DateTime>("OccurredAt")
                         .HasColumnType("datetime2(3)");
 
                     b.Property<string>("OracleItemCode")
                         .HasMaxLength(200)
                         .HasColumnType("nvarchar(200)");
+
+                    b.Property<int?>("OrderLineItemNo")
+                        .HasColumnType("int");
+
+                    b.Property<int?>("OrderNo")
+                        .HasColumnType("int");
 
                     b.Property<int?>("OtReservationId")
                         .HasColumnType("int");
@@ -1045,6 +1075,14 @@ namespace Verita.Infrastructure.Data.Migrations
                         .HasColumnType("decimal(19,6)");
 
                     b.Property<decimal>("Quantity")
+                        .HasPrecision(19, 6)
+                        .HasColumnType("decimal(19,6)");
+
+                    b.Property<decimal?>("RefundableQty")
+                        .HasPrecision(19, 6)
+                        .HasColumnType("decimal(19,6)");
+
+                    b.Property<decimal?>("SellingPrice")
                         .HasPrecision(19, 6)
                         .HasColumnType("decimal(19,6)");
 
@@ -1066,6 +1104,13 @@ namespace Verita.Infrastructure.Data.Migrations
                         .IsRequired()
                         .HasMaxLength(200)
                         .HasColumnType("nvarchar(200)");
+
+                    b.Property<decimal?>("StockQtySnapshot")
+                        .HasPrecision(19, 6)
+                        .HasColumnType("decimal(19,6)");
+
+                    b.Property<int?>("SubCategoryId")
+                        .HasColumnType("int");
 
                     b.Property<string>("Uom")
                         .IsRequired()
@@ -2266,6 +2311,113 @@ namespace Verita.Infrastructure.Data.Migrations
                     b.HasIndex("ProviderId");
 
                     b.ToTable("EncounterService", (string)null);
+                });
+
+            modelBuilder.Entity("Verita.Domain.Entities.EncounterTransfer", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<string>("BedId")
+                        .HasMaxLength(20)
+                        .HasColumnType("nvarchar(20)");
+
+                    b.Property<int?>("CategoryId")
+                        .HasColumnType("int");
+
+                    b.Property<decimal?>("Charges")
+                        .HasPrecision(19, 6)
+                        .HasColumnType("decimal(19,6)");
+
+                    b.Property<string>("CostCentreCode")
+                        .HasMaxLength(200)
+                        .HasColumnType("nvarchar(200)");
+
+                    b.Property<int?>("DoctorId")
+                        .HasColumnType("int");
+
+                    b.Property<int?>("Duration")
+                        .HasColumnType("int");
+
+                    b.Property<Guid?>("EncounterId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<string>("EndTime")
+                        .HasMaxLength(50)
+                        .HasColumnType("nvarchar(50)");
+
+                    b.Property<int?>("HisClinicId")
+                        .HasColumnType("int");
+
+                    b.Property<string>("HisEncounterNo")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("nvarchar(200)");
+
+                    b.Property<Guid>("HospitalId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<int?>("NursingStationId")
+                        .HasColumnType("int");
+
+                    b.Property<int?>("PatientStatus")
+                        .HasColumnType("int");
+
+                    b.Property<int?>("PerformingClinicId")
+                        .HasColumnType("int");
+
+                    b.Property<int?>("PerformingDoctorId")
+                        .HasColumnType("int");
+
+                    b.Property<string>("Remarks")
+                        .HasMaxLength(500)
+                        .HasColumnType("nvarchar(500)");
+
+                    b.Property<string>("RoomId")
+                        .HasMaxLength(20)
+                        .HasColumnType("nvarchar(20)");
+
+                    b.Property<string>("SourceRef")
+                        .IsRequired()
+                        .HasMaxLength(120)
+                        .HasColumnType("nvarchar(120)");
+
+                    b.Property<string>("SourceSystem")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("nvarchar(200)");
+
+                    b.Property<string>("SourceTable")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("nvarchar(200)");
+
+                    b.Property<string>("StartTime")
+                        .HasMaxLength(50)
+                        .HasColumnType("nvarchar(50)");
+
+                    b.Property<int?>("Status")
+                        .HasColumnType("int");
+
+                    b.Property<DateTime>("TransferDate")
+                        .HasColumnType("datetime2(3)");
+
+                    b.Property<int>("TransferNo")
+                        .HasColumnType("int");
+
+                    b.Property<int?>("TransferType")
+                        .HasColumnType("int");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("EncounterId");
+
+                    b.HasIndex("HospitalId", "HisEncounterNo");
+
+                    b.HasIndex("HospitalId", "SourceRef")
+                        .IsUnique();
+
+                    b.ToTable("EncounterTransfer", (string)null);
                 });
 
             modelBuilder.Entity("Verita.Domain.Entities.Facility", b =>
@@ -4313,6 +4465,14 @@ namespace Verita.Infrastructure.Data.Migrations
                         .HasMaxLength(200)
                         .HasColumnType("nvarchar(200)");
 
+                    b.Property<decimal?>("DoctorShare")
+                        .HasPrecision(19, 6)
+                        .HasColumnType("decimal(19,6)");
+
+                    b.Property<string>("DoctorShareType")
+                        .HasMaxLength(1)
+                        .HasColumnType("nvarchar(1)");
+
                     b.Property<Guid>("EncounterId")
                         .HasColumnType("uniqueidentifier");
 
@@ -4861,12 +5021,19 @@ namespace Verita.Infrastructure.Data.Migrations
                         .HasMaxLength(200)
                         .HasColumnType("nvarchar(200)");
 
+                    b.Property<int?>("ClinicId")
+                        .HasColumnType("int");
+
                     b.Property<string>("CostCentreCode")
                         .HasMaxLength(200)
                         .HasColumnType("nvarchar(200)");
 
                     b.Property<Guid?>("EncounterId")
                         .HasColumnType("uniqueidentifier");
+
+                    b.Property<string>("EndTime")
+                        .HasMaxLength(50)
+                        .HasColumnType("nvarchar(50)");
 
                     b.Property<string>("HisEncounterNo")
                         .IsRequired()
@@ -4887,6 +5054,9 @@ namespace Verita.Infrastructure.Data.Migrations
 
                     b.Property<DateTime>("OccurredAt")
                         .HasColumnType("datetime2(3)");
+
+                    b.Property<int?>("OtId")
+                        .HasColumnType("int");
 
                     b.Property<int?>("OtReservationId")
                         .HasColumnType("int");
@@ -4925,6 +5095,10 @@ namespace Verita.Infrastructure.Data.Migrations
                     b.Property<string>("StaffType")
                         .HasMaxLength(200)
                         .HasColumnType("nvarchar(200)");
+
+                    b.Property<string>("StartTime")
+                        .HasMaxLength(50)
+                        .HasColumnType("nvarchar(50)");
 
                     b.Property<decimal?>("Volume")
                         .HasPrecision(19, 6)
@@ -5637,6 +5811,20 @@ namespace Verita.Infrastructure.Data.Migrations
                         .WithMany()
                         .HasForeignKey("ProviderId")
                         .OnDelete(DeleteBehavior.NoAction);
+                });
+
+            modelBuilder.Entity("Verita.Domain.Entities.EncounterTransfer", b =>
+                {
+                    b.HasOne("Verita.Domain.Entities.Encounter", null)
+                        .WithMany()
+                        .HasForeignKey("EncounterId")
+                        .OnDelete(DeleteBehavior.NoAction);
+
+                    b.HasOne("Verita.Domain.Entities.Hospital", null)
+                        .WithMany()
+                        .HasForeignKey("HospitalId")
+                        .OnDelete(DeleteBehavior.NoAction)
+                        .IsRequired();
                 });
 
             modelBuilder.Entity("Verita.Domain.Entities.Facility", b =>
