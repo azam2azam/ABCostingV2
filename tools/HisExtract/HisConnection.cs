@@ -9,6 +9,9 @@ public sealed class HisConnection : IAsyncDisposable
     public HisConnection(string connectionString) =>
         _conn = new SqlConnection(connectionString);
 
+    /// <summary>Seconds a single query may run before it fails (0 = no limit). A failed step is skipped and logged, not hung.</summary>
+    public int QueryTimeoutSeconds { get; set; } = 1800;
+
     public async Task OpenAsync()
     {
         await _conn.OpenAsync();
@@ -24,11 +27,19 @@ public sealed class HisConnection : IAsyncDisposable
         await cmd.ExecuteNonQueryAsync();
     }
 
+    /// <summary>The last query sent, for the progress log when a step fails or hangs.</summary>
+    public static string? LastSql { get; private set; }
+
     public SqlCommand Cmd(string sql)
     {
+        LastSql = sql;
         var cmd = _conn.CreateCommand();
-        cmd.CommandTimeout = 0;
-        cmd.CommandText = sql;
+        cmd.CommandTimeout = QueryTimeoutSeconds;
+        // Date-window queries get a plan for this window's dates: a plan compiled for one day (or one month)
+        // reused for another can scan millions of rows per row and look like a hang.
+        cmd.CommandText = sql.Contains("@From", StringComparison.Ordinal) && !sql.Contains("OPTION (", StringComparison.OrdinalIgnoreCase)
+            ? sql.TrimEnd().TrimEnd(';') + "\nOPTION (RECOMPILE)"
+            : sql;
         return cmd;
     }
 
@@ -42,6 +53,14 @@ public sealed class HisConnection : IAsyncDisposable
         s.BindTenant(cmd);
         var v = await cmd.ExecuteScalarAsync();
         return v is long l ? l : Convert.ToInt64(v);
+    }
+
+    public async Task<int> ExecAsync(string sql, Action<SqlCommand> bind)
+    {
+        await DirtyReadAsync();
+        await using var cmd = Cmd(sql);
+        bind(cmd);
+        return await cmd.ExecuteNonQueryAsync();
     }
 
     public async Task ScalarAsync(string sql, Action<SqlCommand> bind, Action<object?> use)

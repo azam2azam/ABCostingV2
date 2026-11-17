@@ -20,7 +20,9 @@ public sealed record PeriodFactsDto(
 
 public sealed record PeriodFactsDeleted(string Entity, long Rows);
 
-public sealed record StorageTable(string Table, string Group, long Rows, long Bytes, long DataBytes, long IndexBytes);
+/// <summary>Rows / Bytes: the whole table. HospitalRows / HospitalBytes: the selected hospital's share (estimated bytes); Shared tables have none.</summary>
+public sealed record StorageTable(string Table, string Group, long Rows, long Bytes, long DataBytes, long IndexBytes,
+    bool Shared, long HospitalRows, long HospitalBytes);
 public sealed record StoragePeriodEntity(string Entity, long Rows, long EstimatedBytes);
 public sealed record StoragePeriod(Guid Id, string Code, DateOnly StartDate, DateOnly EndDate, string Status, string? Run, string? RunStatus,
     StoragePeriodEntity[] Entities, long FactRows, long FactBytes, long ResultRows, long ResultBytes);
@@ -161,6 +163,53 @@ public sealed class PeriodFactsService(IDbContextFactory<VeritaDbContext> factor
         return deleted.ToArray();
     }
 
+    /// <summary>
+    /// For each table, a WHERE (alias t, parameters @h / @code) selecting one hospital's rows: its own HospitalId column,
+    /// else a foreign key to a table that has one, else two keys away. Tables with neither are shared and get no filter.
+    /// </summary>
+    private static async Task<Dictionary<string, string>> HospitalFiltersAsync(DbConnection conn, CancellationToken ct)
+    {
+        var hospitalCol = new Dictionary<string, bool>(StringComparer.OrdinalIgnoreCase); // table -> HospitalId is nullable
+        var fks = new List<(string Table, string Column, string Ref)>();
+        await using (var cmd = conn.CreateCommand())
+        {
+            cmd.CommandText = """
+                SELECT t.name, c.is_nullable FROM sys.columns c JOIN sys.tables t ON t.object_id = c.object_id
+                WHERE c.name = 'HospitalId' AND t.is_ms_shipped = 0;
+                SELECT pt.name, pc.name, rt.name
+                FROM sys.foreign_key_columns k
+                JOIN sys.tables pt ON pt.object_id = k.parent_object_id
+                JOIN sys.columns pc ON pc.object_id = k.parent_object_id AND pc.column_id = k.parent_column_id
+                JOIN sys.tables rt ON rt.object_id = k.referenced_object_id
+                JOIN sys.columns rc ON rc.object_id = k.referenced_object_id AND rc.column_id = k.referenced_column_id
+                WHERE rc.name = 'Id' AND rt.name <> 'Hospital';
+                """;
+            await using var r = await cmd.ExecuteReaderAsync(ct);
+            while (await r.ReadAsync(ct)) hospitalCol[r.GetString(0)] = r.GetBoolean(1);
+            await r.NextResultAsync(ct);
+            while (await r.ReadAsync(ct)) fks.Add((r.GetString(0), r.GetString(1), r.GetString(2)));
+        }
+        // Prefer the link that says most about ownership: the encounter or run, then anything else.
+        static int Rank(string table) => table switch { "Encounter" => 0, "CalculationRun" => 1, _ => 2 };
+        var filters = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var (table, _) in hospitalCol) filters[table] = "t.HospitalId = @h";
+        var oneHop = fks.Where(f => hospitalCol.ContainsKey(f.Ref) && !filters.ContainsKey(f.Table))
+            .GroupBy(f => f.Table).ToDictionary(g => g.Key, g => g.OrderBy(f => Rank(f.Ref)).First());
+        foreach (var (table, f) in oneHop)
+            filters[table] = $"t.[{f.Column}] IN (SELECT x.Id FROM [{f.Ref}] x WHERE x.HospitalId = @h)";
+        foreach (var g in fks.Where(f => !filters.ContainsKey(f.Table) && oneHop.ContainsKey(f.Ref)).GroupBy(f => f.Table))
+        {
+            var f = g.OrderBy(x => Rank(oneHop[x.Ref].Ref)).First();
+            var mid = oneHop[f.Ref];
+            filters[g.Key] = $"t.[{f.Column}] IN (SELECT y.Id FROM [{f.Ref}] y WHERE y.[{mid.Column}] IN (SELECT x.Id FROM [{mid.Ref}] x WHERE x.HospitalId = @h))";
+        }
+        // Uploaded files carry the hospital's code, not its id.
+        filters["ImportFile"] = "t.Hospital = @code";
+        filters["ImportFileContent"] = "t.Id IN (SELECT x.Id FROM [ImportFile] x WHERE x.Hospital = @code)";
+        filters["Hospital"] = "t.Id = @h";
+        return filters;
+    }
+
     // Calculation output: one run's results, deleted with the run.
     private static readonly HashSet<string> ResultTables = new(StringComparer.OrdinalIgnoreCase)
     {
@@ -173,6 +222,7 @@ public sealed class PeriodFactsService(IDbContextFactory<VeritaDbContext> factor
 
     private static string GroupOf(string table)
     {
+        if (table.StartsWith("__", StringComparison.Ordinal)) return "System";
         if (table.EndsWith("History", StringComparison.OrdinalIgnoreCase)) return "History";
         if (ResultTables.Contains(table)) return "Calculation results";
         if (ImportTables.Contains(table)) return "Import files";
@@ -214,7 +264,7 @@ public sealed class PeriodFactsService(IDbContextFactory<VeritaDbContext> factor
             {
                 var name = r.GetString(0);
                 var (data, index) = (r.GetInt64(2), r.GetInt64(3));
-                tables.Add(new StorageTable(name, GroupOf(name), r.GetInt64(1), data + index, data, index));
+                tables.Add(new StorageTable(name, GroupOf(name), r.GetInt64(1), data + index, data, index, true, 0, 0));
             }
         }
         long dbBytes = 0, usedBytes = 0;
@@ -226,6 +276,21 @@ public sealed class PeriodFactsService(IDbContextFactory<VeritaDbContext> factor
         }
         var bytesPerRow = tables.ToDictionary(t => t.Table, t => t.Rows > 0 ? (double)t.Bytes / t.Rows : 0, StringComparer.OrdinalIgnoreCase);
         long Est(string table, long rows) => (long)Math.Round(bytesPerRow.GetValueOrDefault(table) * rows);
+
+        // The hospital's rows in every table it owns: by HospitalId, or one or two foreign keys away from it.
+        var filters = await HospitalFiltersAsync(conn, ct);
+        for (var i = 0; i < tables.Count; i++)
+        {
+            var t = tables[i];
+            if (t.Rows == 0 || !filters.TryGetValue(t.Table, out var where)) continue;
+            await using var cmd = conn.CreateCommand();
+            cmd.CommandTimeout = 600;
+            cmd.CommandText = $"SELECT COUNT_BIG(*) FROM [{t.Table}] t WHERE {where}";
+            cmd.Parameters.Add(new SqlParameter("@h", SqlDbType.UniqueIdentifier) { Value = h.Id });
+            cmd.Parameters.Add(new SqlParameter("@code", SqlDbType.NVarChar, 200) { Value = h.Code });
+            var n = Convert.ToInt64(await cmd.ExecuteScalarAsync(ct));
+            tables[i] = t with { Shared = false, HospitalRows = n, HospitalBytes = Est(t.Table, n) };
+        }
 
         var periods = await db.Periods.AsNoTracking().Where(x => x.HospitalId == h.Id || x.HospitalId == null).OrderByDescending(x => x.StartDate).ToListAsync(ct);
         var counts = new Dictionary<(Guid, string), long>();

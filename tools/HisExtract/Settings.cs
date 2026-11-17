@@ -16,6 +16,8 @@ public sealed class Settings
     public string? CcMapPath { get; set; }
     /// <summary>Ward nursing minutes per patient-day until nursing supplies a standard per ward (StaffTime, STANDARD).</summary>
     public decimal WardNurseMinutesPerDay { get; set; } = 260m;
+    /// <summary>Seconds one HIS query may run (0 = no limit). A step that times out is skipped and noted in extract-log.txt.</summary>
+    public int QueryTimeoutSeconds { get; set; } = 1800;
 
     /// <summary>HIS tenant token used in row codes. Not a VERITA Hospital.Code — import maps that.</summary>
     public string H => $"{SetupId}-{ProjectId}";

@@ -24,6 +24,50 @@ public sealed class CsvZipWriter : IDisposable
         _readme = readme;
         _setupId = s.SetupId;
         _projectId = s.ProjectId.ToString();
+        // Investigation log: steps, warnings and errors only, flushed as written so it survives a hang or crash.
+        // Deleted when the pack zips; a failed pack keeps it in this folder.
+        _progress = new StreamWriter(new FileStream(Path.Combine(Dir, ProgressLogName), FileMode.Append, FileAccess.Write, FileShare.ReadWrite), Utf8) { AutoFlush = true };
+        Log("INFO", $"Pack {Path.GetFileName(ZipPath)} started. HisExtract {typeof(CsvZipWriter).Assembly.GetName().Version}, {Environment.MachineName}, query timeout {s.QueryTimeoutSeconds} s.");
+    }
+
+    public const string ProgressLogName = "progress-log.txt";
+    private readonly StreamWriter _progress;
+
+    private void Log(string level, string text)
+    {
+        try { _progress.WriteLine($"{DateTime.Now:yyyy-MM-dd HH:mm:ss.fff} {level,-5} {text}"); }
+        catch (IOException) { /* the log must never stop the extract */ }
+    }
+
+    /// <summary>A step is starting: console and progress log. A hang leaves this as the last line.</summary>
+    public void Step(string label)
+    {
+        Console.WriteLine($"    {DateTime.Now:HH:mm:ss}  {label} ...");
+        Log("INFO", $"START {label}");
+    }
+
+    /// <summary>A step failed and was skipped: console note, and the error with its SQL in the progress log.</summary>
+    public void Warn(string label, Exception ex)
+    {
+        Note($"{label} skipped: {ex.Message}");
+        Log("WARN", $"{label} skipped. {Describe(ex)}");
+    }
+
+    /// <summary>The pack failed: everything needed to investigate goes to the progress log.</summary>
+    public void Fail(Exception ex)
+    {
+        Log("ERROR", $"Pack failed. {Describe(ex)}\n{ex}");
+    }
+
+    private static string Describe(Exception ex)
+    {
+        var sb = new StringBuilder($"{ex.GetType().Name}: {ex.Message}");
+        if (ex is Microsoft.Data.SqlClient.SqlException sql)
+            sb.Append($" (SQL error {sql.Number}, severity {sql.Class}, line {sql.LineNumber})");
+        if (ex.InnerException is { } inner) sb.Append($" Inner: {inner.GetType().Name}: {inner.Message}");
+        if (HisConnection.LastSql is { } q)
+            sb.Append("\n    Last query:\n    ").Append(q.Trim().Replace("\n", "\n    "));
+        return sb.ToString();
     }
 
     public string ZipPath { get; }
@@ -53,6 +97,7 @@ public sealed class CsvZipWriter : IDisposable
     {
         _log.Add(line);
         Console.WriteLine("  " + line);
+        Log("INFO", line);
     }
 
     internal void NoteInternal(string line) => _log.Add(line);
@@ -66,12 +111,18 @@ public sealed class CsvZipWriter : IDisposable
 
     public void Dispose()
     {
+        Log("INFO", Completed ? "Pack finished; zipping." : "Pack did not finish; folder and this log are kept.");
+        _progress.Dispose();
+        if (Completed)
+        {
+            try { File.Delete(Path.Combine(Dir, ProgressLogName)); } catch (IOException) { }
+        }
         var logText = string.Join("\r\n", _log) + "\r\n";
         File.WriteAllText(Path.Combine(Dir, "extract-log.txt"), logText, Utf8);
         File.WriteAllText(Path.Combine(Dir, "README.txt"), _readme + "\r\n\r\n" + logText, Utf8);
         if (!Completed)
         {
-            Console.WriteLine($"  CSV folder left at {Dir} (zip not written because the extract failed).");
+            Console.WriteLine($"  CSV folder left at {Dir} (zip not written because the extract failed). See {ProgressLogName} there.");
             return;
         }
         if (File.Exists(ZipPath)) File.Delete(ZipPath);

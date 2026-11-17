@@ -749,7 +749,7 @@ function formatBytes(n: number): string {
 
 // ── Storage ─────────────────────────────────────────────────────────────────────
 
-interface StorageTable { table: string; group: string; rows: number; bytes: number; dataBytes: number; indexBytes: number; }
+interface StorageTable { table: string; group: string; rows: number; bytes: number; dataBytes: number; indexBytes: number; shared: boolean; hospitalRows: number; hospitalBytes: number; }
 interface StoragePeriodEntity { entity: string; rows: number; estimatedBytes: number; }
 interface StoragePeriod {
   id: string; code: string; startDate: string; endDate: string; status: string; run?: string | null; runStatus?: string | null;
@@ -776,18 +776,18 @@ const GROUP_NOTE: Record<string, string> = {
   selector: 'v-storage',
   imports: [...UI],
   template: `
-    <v-page title="Storage" purpose="How much the database holds. Storage by group covers every hospital; the period summary is for the selected hospital and is estimated from each table's average row size.">
+    <v-page title="Storage" purpose="How much the selected hospital holds in the database. Storage is estimated from each table's average row size; shared tables (users, audit, payers and other group-wide lists) are not counted.">
       <v-state [loading]="res.isLoading() && !res.value()" [error]="res.error()">
         @if (res.value(); as d) {
           <div class="grid tiles">
-            <v-tile label="Database size" [value]="size(d.databaseBytes)" unit="id" [note]="size(d.usedBytes) + ' used'" />
+            <v-tile [label]="d.hospital + ' total'" [value]="size(totalBytes())" unit="id" [note]="fmt(totalRows()) + ' rows'" />
             @for (g of groupTiles(); track g.group) {
-              <v-tile [label]="g.group" [value]="size(g.bytes)" unit="id" [note]="fmt(g.rows) + ' rows in ' + g.tables + ' tables'" />
+              <v-tile [label]="g.group" [value]="size(g.bytes)" unit="id" [note]="fmt(g.rows) + ' rows in ' + g.tables + ' table' + (g.tables === 1 ? '' : 's')" />
             }
           </div>
 
           <section class="card" style="margin-top:14px">
-            <h2>By group</h2>
+            <h2>By group · {{ d.hospital }}</h2>
             <v-table [rows]="groups()" [columns]="groupCols" caption="Storage by group" />
           </section>
 
@@ -810,15 +810,19 @@ export class Storage {
 
   constructor() { void this.ctx.load(); }
 
+  /** The selected hospital's own tables only: shared tables are left out. */
+  private own = computed(() => (this.res.value()?.tables ?? []).filter(t => !t.shared));
+  totalBytes = computed(() => this.own().reduce((s, x) => s + x.hospitalBytes, 0));
+  totalRows = computed(() => this.own().reduce((s, x) => s + x.hospitalRows, 0));
   groups = computed<StorageGroupRow[]>(() => {
-    const t = this.res.value()?.tables ?? [];
-    const total = t.reduce((s, x) => s + x.bytes, 0) || 1;
+    const t = this.own();
+    const total = this.totalBytes() || 1;
     const names = [...new Set(t.map(x => x.group))].sort((a, b) => GROUP_ORDER.indexOf(a) - GROUP_ORDER.indexOf(b));
     return names.map(g => {
       const rows = t.filter(x => x.group === g);
-      const bytes = rows.reduce((s, x) => s + x.bytes, 0);
-      return { group: g, tables: rows.length, rows: rows.reduce((s, x) => s + x.rows, 0), bytes, share: bytes / total * 100 };
-    });
+      const bytes = rows.reduce((s, x) => s + x.hospitalBytes, 0);
+      return { group: g, tables: rows.filter(x => x.hospitalRows > 0).length, rows: rows.reduce((s, x) => s + x.hospitalRows, 0), bytes, share: bytes / total * 100 };
+    }).filter(g => g.rows > 0 || ['Facts', 'Catalogue', 'Calculation results'].includes(g.group));
   });
   groupTiles = computed(() => this.groups().filter(g => ['Facts', 'Catalogue', 'Calculation results'].includes(g.group)));
 

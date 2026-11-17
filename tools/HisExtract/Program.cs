@@ -43,6 +43,15 @@ static class App
             Console.WriteLine("Note: --hospital is ignored. Identity is SetupID + ProjectID. Choose the VERITA hospital on import.");
         s.OutDir = Flag(args, "--out") ?? s.OutDir;
         s.CcMapPath = Flag(args, "--cc-map");
+        if (Flag(args, "--query-timeout") is { } qt)
+        {
+            if (!int.TryParse(qt, out var qts) || qts < 0)
+            {
+                Console.Error.WriteLine($"Could not parse --query-timeout '{qt}'. Use seconds, e.g. 1800 (0 = no limit).");
+                return 1;
+            }
+            s.QueryTimeoutSeconds = qts;
+        }
         if (Flag(args, "--ward-nurse-min") is { } wn)
         {
             if (!decimal.TryParse(wn, System.Globalization.NumberStyles.Number, System.Globalization.CultureInfo.InvariantCulture, out var wardMin) || wardMin < 0)
@@ -94,7 +103,7 @@ static class App
 
         try
         {
-            await using var db = new HisConnection(s.ConnectionString);
+            await using var db = new HisConnection(s.ConnectionString) { QueryTimeoutSeconds = s.QueryTimeoutSeconds };
             await db.OpenAsync();
             Console.WriteLine("Connected.");
 
@@ -135,7 +144,15 @@ static class App
         Console.WriteLine();
         Console.WriteLine($"Catalogue pack  {s.PackPrefix}");
         using var pack = new CsvZipWriter(zip, Readme(s, "catalogue", null, null), s);
-        await CatalogueExtract.RunAsync(db, s, pack);
+        try
+        {
+            await CatalogueExtract.RunAsync(db, s, pack);
+        }
+        catch (Exception ex)
+        {
+            pack.Fail(ex);
+            throw;
+        }
         pack.Completed = true;
     }
 
@@ -156,7 +173,15 @@ static class App
                 Console.WriteLine();
                 Console.WriteLine($"  Day {slice.Day}");
                 using var pack = new CsvZipWriter(zip, Readme(s, "facts", slice.From, slice.ToExclusive), s);
-                await FactsExtract.RunAsync(db, s, pack);
+                try
+                {
+                    await FactsExtract.RunAsync(db, s, pack);
+                }
+                catch (Exception ex)
+                {
+                    pack.Fail(ex);
+                    throw;
+                }
                 pack.Completed = true;
             }
         }
@@ -256,6 +281,27 @@ static class App
             var mh = mr.ReadLine();
             Check("manifest has HIS + pack columns", mh is not null && mh.StartsWith("setupId,projectId,pack,"));
         }
+
+        // Progress log: removed when the pack zips, kept (with the error) when it fails.
+        var okZip = Path.Combine(tmp, $"{s.PackPrefix}-2026-09-01-facts.zip");
+        using (var pack = new CsvZipWriter(okZip, "selftest-log", s))
+        {
+            pack.Step("Step one");
+            pack.Completed = true;
+        }
+        using (var z = System.IO.Compression.ZipFile.OpenRead(okZip))
+            Check("finished pack: no progress log in the zip", z.GetEntry(CsvZipWriter.ProgressLogName) is null);
+        Check("finished pack: progress log deleted from the folder", !File.Exists(Path.Combine(tmp, $"{s.PackPrefix}-2026-09-01-facts", CsvZipWriter.ProgressLogName)));
+        var badZip = Path.Combine(tmp, $"{s.PackPrefix}-2026-09-02-facts.zip");
+        using (var pack = new CsvZipWriter(badZip, "selftest-log", s))
+        {
+            pack.Step("Floor consumption qty");
+            pack.Fail(new TimeoutException("simulated hang"));
+        }
+        var badLog = Path.Combine(tmp, $"{s.PackPrefix}-2026-09-02-facts", CsvZipWriter.ProgressLogName);
+        var badText = File.Exists(badLog) ? File.ReadAllText(badLog) : "";
+        Check("failed pack: progress log kept with the step and the error",
+            !File.Exists(badZip) && badText.Contains("START Floor consumption qty") && badText.Contains("ERROR") && badText.Contains("simulated hang"));
 
         var prevPage = CsvZipWriter.PageRows;
         CsvZipWriter.PageRows = 2;
@@ -392,6 +438,8 @@ static class App
               --cc-map     reviewed CSV (costCentreCode, departmentCode) that overrides
                            the derived cost centre → department link (catalogue)
               --ward-nurse-min  ward nursing minutes per patient-day   default 260
+              --query-timeout   seconds one HIS query may run, 0 = no limit   default 1800
+                                (a step that times out is skipped and noted in extract-log.txt)
 
             Defaults (UAT):
               Connection string  ****

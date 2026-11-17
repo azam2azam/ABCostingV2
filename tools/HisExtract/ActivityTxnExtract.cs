@@ -31,15 +31,17 @@ public static class ActivityTxnExtract
         }
         catch (Exception ex)
         {
-            pack.Note($"{label} skipped: {ex.Message}");
+            pack.Warn(label, ex);
         }
     }
 
     private static async Task Counted(CsvZipWriter pack, string label, Writer o, Func<Task> body)
     {
         var before = o.Written;
+        pack.Step(label);
+        var sw = System.Diagnostics.Stopwatch.StartNew();
         await body();
-        pack.Note($"{label}: {o.Written - before} rows");
+        pack.Note($"{label}: {o.Written - before} rows ({sw.Elapsed.TotalSeconds:N0} s)");
     }
 
     private static async Task OpAsync(HisConnection db, Settings s, Codes c, Writer o)

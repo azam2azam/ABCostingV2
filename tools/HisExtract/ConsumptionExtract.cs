@@ -48,8 +48,24 @@ public static class ConsumptionExtract
 
     public static async Task RunAsync(HisConnection db, Settings s, Codes c, CsvZipWriter pack)
     {
-        var lines = await LinesAsync(db, s, c);
-        pack.Note($"Consumption: {lines.Count} counted invoice lines on the pack's encounters to link items to.");
+        pack.Step("Consumption: the pack's encounters");
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        LineIndex lines;
+        try
+        {
+            var (ipN, opN, erN) = await EncounterSetsAsync(db, s);
+            pack.Note($"Consumption: {ipN} admissions, {opN} appointments, {erN} ER assessments in scope ({sw.Elapsed.TotalSeconds:N0} s)");
+            pack.Step("Consumption: invoice lines to link items to");
+            sw.Restart();
+            lines = new LineIndex(await LinesAsync(db, s, c));
+        }
+        catch (SqlException ex)
+        {
+            // e.g. a timeout, or a login that may not create temp tables: the rest of the pack is still good.
+            pack.Warn("Consumption and staff time", ex);
+            return;
+        }
+        pack.Note($"Consumption: {lines.All.Count} counted invoice lines on the pack's encounters to link items to ({sw.Elapsed.TotalSeconds:N0} s)");
 
         using (var csv = pack.Create("39_ConsumptionItem.csv",
             "hospitalCode", "encounterNo", "hisEncounterNo", "serviceRef", "linkMethod", "otReservationId", "category", "itemKey", "itemKeySystem",
@@ -86,20 +102,31 @@ public static class ConsumptionExtract
     private static async Task<List<Line>> LinesAsync(HisConnection db, Settings s, Codes c)
     {
         var list = new List<Line>();
-        await db.QueryAsync($"""
-            WITH ip AS ({IpSet}), op AS ({OpSet})
-            SELECT m.TransactionType, m.InvoiceNo, m.AdmissionNo, m.AppointmentNo, m.ClinicID,
-                   m.InvoiceDate, d.PerformDate, d.LineItemNo, d.ProcedureID, d.OrderNo, d.OrderLineItemNo, d.Price, d.Quantity, d.PrimaryClinicID,
-                   hp.IsMedicine, hp.MedicineId, hp.OracleItemCode, hp.ProcedureName
-            FROM dbo.HIS_InvoiceMain m WITH (NOLOCK)
+        // Two branches, each driven by the day's small set of encounters, so HIS_InvoiceMain / HIS_InvoiceDetail are sought, not scanned.
+        const string cols = """
+            m.TransactionType, m.InvoiceNo, m.AdmissionNo, m.AppointmentNo, m.ClinicID,
+            m.InvoiceDate, d.PerformDate, d.LineItemNo, d.ProcedureID, d.OrderNo, d.OrderLineItemNo, d.Price, d.Quantity, d.PrimaryClinicID,
+            hp.IsMedicine, hp.MedicineId, hp.OracleItemCode, hp.ProcedureName
+            """;
+        const string joins = """
             INNER JOIN dbo.HIS_InvoiceDetail d WITH (NOLOCK)
               ON d.SetupID=m.SetupID AND d.ProjectID=m.ProjectID AND d.TransactionType=m.TransactionType AND d.InvoiceNo=m.InvoiceNo
             LEFT JOIN dbo.HIS_Procedure hp WITH (NOLOCK)
               ON hp.SetupID=d.SetupID AND hp.ProjectID=d.ProjectID AND hp.ProcedureID=d.ProcedureID
-            WHERE m.SetupID=@SetupId AND m.ProjectID=@ProjectId AND m.CancelledOn IS NULL
-              AND d.Status = 2 AND m.InvoiceType IN (1, 75)
-              AND ((m.AdmissionNo > 0 AND m.AdmissionNo IN (SELECT No FROM ip)) OR (m.AppointmentNo > 0 AND m.AppointmentNo IN (SELECT No FROM op)))
-            """, s.BindPeriod, r =>
+            """;
+        await db.QueryAsync($"""
+            SELECT {cols}
+            FROM #ip i
+            INNER JOIN dbo.HIS_InvoiceMain m WITH (NOLOCK) ON m.SetupID=@SetupId AND m.ProjectID=@ProjectId AND m.AdmissionNo=i.No
+            {joins}
+            WHERE m.CancelledOn IS NULL AND d.Status = 2 AND m.InvoiceType IN (1, 75)
+            UNION ALL
+            SELECT {cols}
+            FROM #op o
+            INNER JOIN dbo.HIS_InvoiceMain m WITH (NOLOCK) ON m.SetupID=@SetupId AND m.ProjectID=@ProjectId AND m.AppointmentNo=o.No
+            {joins}
+            WHERE m.CancelledOn IS NULL AND d.Status = 2 AND m.InvoiceType IN (1, 75) AND ISNULL(m.AdmissionNo, 0) = 0
+            """, s.BindTenant, r =>
         {
             var adm = HisConnection.Ni(r, "AdmissionNo");
             var enc = adm is > 0 ? c.IpEncounter(adm.Value) : c.OpEncounter(HisConnection.I(r, "AppointmentNo"));
@@ -115,11 +142,41 @@ public static class ConsumptionExtract
         return list;
     }
 
+    /// <summary>
+    /// The pack's encounters into session temp tables (#ip admissions, #op appointments, #er assessments), once per pack.
+    /// Every consumption and staff query then starts from these few thousand keys instead of filtering the big HIS tables.
+    /// </summary>
+    private static async Task<(int Ip, int Op, int Er)> EncounterSetsAsync(HisConnection db, Settings s)
+    {
+        async Task<int> Fill(string table, string set)
+        {
+            await db.ExecAsync($"IF OBJECT_ID('tempdb..{table}') IS NOT NULL DROP TABLE {table}; CREATE TABLE {table} (No int NOT NULL PRIMARY KEY);", _ => { });
+            return await db.ExecAsync($"INSERT INTO {table} (No) SELECT DISTINCT x.No FROM ({set}) x WHERE x.No > 0", s.BindPeriod);
+        }
+        return (await Fill("#ip", IpSet), await Fill("#op", OpSet), await Fill("#er", ErSet));
+    }
+
+    /// <summary>The link targets, indexed so each item finds its lines without scanning them all.</summary>
+    private sealed class LineIndex
+    {
+        public LineIndex(List<Line> all)
+        {
+            All = all;
+            ByOrder = all.Where(l => l.OrderNo is > 0).ToLookup(l => (l.Encounter, l.OrderNo!.Value));
+            ByInvoice = all.ToLookup(l => (l.Tt, l.Inv));
+            ByEncounter = all.ToLookup(l => l.Encounter);
+        }
+        public List<Line> All { get; }
+        public ILookup<(string, int), Line> ByOrder { get; }
+        public ILookup<(int, int), Line> ByInvoice { get; }
+        public ILookup<string, Line> ByEncounter { get; }
+    }
+
     /// <summary>Rules 1–2 of the spec §7: order line, then a single procedure line on the order.</summary>
-    private static (string? Ref, string Method, decimal? Billed) ByOrder(List<Line> lines, string enc, int? order, int? orderLine)
+    private static (string? Ref, string Method, decimal? Billed) ByOrder(LineIndex lines, string enc, int? order, int? orderLine)
     {
         if (order is not > 0) return (null, "NONE", null);
-        var onEnc = lines.Where(l => l.Encounter == enc && l.OrderNo == order).ToList();
+        var onEnc = lines.ByOrder[(enc, order.Value)].ToList();
         if (orderLine is > 0 && onEnc.FirstOrDefault(l => l.OrderLine == orderLine) is { } exact)
             return (exact.Ref, "ORDER_LINE", exact.Amount);
         var procs = onEnc.Where(l => !l.IsMedicine).ToList();
@@ -127,26 +184,33 @@ public static class ConsumptionExtract
     }
 
     /// <summary>Rule 6: a billed item's anchor is the first procedure line on the same invoice.</summary>
-    private static string? AnchorOnInvoice(List<Line> lines, Line item) =>
-        lines.Where(l => l.Tt == item.Tt && l.Inv == item.Inv && !l.IsMedicine && l.Ref != item.Ref).OrderBy(l => l.LineNo).FirstOrDefault()?.Ref;
+    private static string? AnchorOnInvoice(LineIndex lines, Line item) =>
+        lines.ByInvoice[(item.Tt, item.Inv)].Where(l => !l.IsMedicine && l.Ref != item.Ref).OrderBy(l => l.LineNo).FirstOrDefault()?.Ref;
 
     // ── Items ────────────────────────────────────────────────────────────────────
 
-    private static async Task FloorAsync(HisConnection db, Settings s, Codes c, ItemWriter o, List<Line> lines)
+    private static async Task FloorAsync(HisConnection db, Settings s, Codes c, ItemWriter o, LineIndex lines)
     {
         await db.QueryAsync($"""
-            WITH ip AS ({IpSet}), op AS ({OpSet}), er AS ({ErSet})
+            WITH f AS (
+                SELECT f.* FROM #ip i INNER JOIN dbo.HIS_FloorConsumption f WITH (NOLOCK)
+                  ON f.SetupID=@SetupId AND f.ProjectID=@ProjectId AND f.EncounterType=2 AND f.EncounterNo=i.No
+                UNION ALL
+                SELECT f.* FROM #op o INNER JOIN dbo.HIS_FloorConsumption f WITH (NOLOCK)
+                  ON f.SetupID=@SetupId AND f.ProjectID=@ProjectId AND f.EncounterType=1 AND f.EncounterNo=o.No
+                UNION ALL
+                SELECT f.* FROM #er e INNER JOIN dbo.HIS_FloorConsumption f WITH (NOLOCK)
+                  ON f.SetupID=@SetupId AND f.ProjectID=@ProjectId AND f.EncounterType=3 AND f.EncounterNo=e.No
+            ), bb AS (
+                SELECT b.ItemID, MIN(b.OracleItemCode) AS OracleItemCode FROM dbo.BBraun_ItemIntegrationMapping b WITH (NOLOCK)
+                WHERE b.SetupID=@SetupId AND b.ProjectID=@ProjectId AND ISNULL(b.IsActive,1)=1 GROUP BY b.ItemID
+            )
             SELECT f.SQL_ID, f.EncounterType, f.EncounterNo, f.NursingStationID, f.InventoryLocationID, f.ItemCategoryId, f.ItemId, f.Barcode,
                    f.UnitQty, f.ConversionFactor, f.RefundableQty, f.UnitPrice, f.GrossAmount, f.OrderNo, f.OrderLineItemNo, f.TransType, f.CreatedOn,
                    bb.OracleItemCode
-            FROM dbo.HIS_FloorConsumption f WITH (NOLOCK)
-            OUTER APPLY (SELECT TOP 1 b.OracleItemCode FROM dbo.BBraun_ItemIntegrationMapping b WITH (NOLOCK)
-                         WHERE b.SetupID=f.SetupID AND b.ProjectID=f.ProjectID AND b.ItemID=f.ItemId AND ISNULL(b.IsActive,1)=1) bb
-            WHERE f.SetupID=@SetupId AND f.ProjectID=@ProjectId AND f.UnitQty > 0
-              AND ((f.EncounterType=2 AND f.EncounterNo IN (SELECT No FROM ip))
-                OR (f.EncounterType=1 AND f.EncounterNo IN (SELECT No FROM op))
-                OR (f.EncounterType=3 AND f.EncounterNo IN (SELECT No FROM er)))
-            """, s.BindPeriod, r =>
+            FROM f LEFT JOIN bb ON bb.ItemID = f.ItemId
+            WHERE f.UnitQty > 0
+            """, s.BindTenant, r =>
         {
             var enc = EncounterOf(c, HisConnection.I(r, "EncounterType"), HisConnection.I(r, "EncounterNo"));
             if (enc is null) return;
@@ -162,22 +226,25 @@ public static class ConsumptionExtract
         });
     }
 
-    private static async Task ConsumedAsync(HisConnection db, Settings s, Codes c, ItemWriter o, List<Line> lines)
+    private static async Task ConsumedAsync(HisConnection db, Settings s, Codes c, ItemWriter o, LineIndex lines)
     {
         // Spec §8: a floor issue wins over the IP consumed record of the same order.
         await db.QueryAsync($"""
-            WITH ip AS ({IpSet})
+            WITH fo AS (
+                SELECT DISTINCT f.EncounterNo, f.OrderNo FROM #ip i INNER JOIN dbo.HIS_FloorConsumption f WITH (NOLOCK)
+                  ON f.SetupID=@SetupId AND f.ProjectID=@ProjectId AND f.EncounterType=2 AND f.EncounterNo=i.No
+                WHERE f.OrderNo IS NOT NULL
+            )
             SELECT x.AdmissionNo, x.OrderNo, x.ProcedureID, x.Quantity, x.TotalPrice, x.CreatedOn,
                    hp.ProcedureName, hp.OracleItemCode, hp.IsMedicine
-            FROM dbo.INP_PatientConsumedItem x WITH (NOLOCK)
+            FROM #ip i
+            INNER JOIN dbo.INP_PatientConsumedItem x WITH (NOLOCK)
+              ON x.SetupID=@SetupId AND x.ProjectID=@ProjectId AND x.AdmissionNo=i.No
             LEFT JOIN dbo.HIS_Procedure hp WITH (NOLOCK)
               ON hp.SetupID=x.SetupID AND hp.ProjectID=x.ProjectID AND hp.ProcedureID=x.ProcedureID
-            WHERE x.SetupID=@SetupId AND x.ProjectID=@ProjectId AND x.Quantity > 0
-              AND x.AdmissionNo IN (SELECT No FROM ip)
-              AND NOT EXISTS (SELECT 1 FROM dbo.HIS_FloorConsumption f WITH (NOLOCK)
-                              WHERE f.SetupID=x.SetupID AND f.ProjectID=x.ProjectID AND f.EncounterType=2
-                                AND f.EncounterNo=x.AdmissionNo AND f.OrderNo=x.OrderNo)
-            """, s.BindPeriod, r =>
+            LEFT JOIN fo ON fo.EncounterNo = x.AdmissionNo AND fo.OrderNo = x.OrderNo
+            WHERE x.Quantity > 0 AND fo.EncounterNo IS NULL
+            """, s.BindTenant, r =>
         {
             var adm = HisConnection.I(r, "AdmissionNo");
             if (adm <= 0) return;
@@ -193,23 +260,27 @@ public static class ConsumptionExtract
         });
     }
 
-    private static async Task ImplantsAsync(HisConnection db, Settings s, Codes c, ItemWriter o, List<Line> lines)
+    private static async Task ImplantsAsync(HisConnection db, Settings s, Codes c, ItemWriter o, LineIndex lines)
     {
         var otProcs = await OtProceduresAsync(db, s);
         await db.QueryAsync($"""
-            WITH ip AS ({IpSet})
+            WITH fl AS (
+                SELECT f.EncounterNo, f.Barcode, MIN(f.ItemId) AS ItemId FROM #ip i INNER JOIN dbo.HIS_FloorConsumption f WITH (NOLOCK)
+                  ON f.SetupID=@SetupId AND f.ProjectID=@ProjectId AND f.EncounterType=2 AND f.EncounterNo=i.No
+                WHERE ISNULL(f.Barcode, '') <> '' GROUP BY f.EncounterNo, f.Barcode
+            ), bb AS (
+                SELECT b.ItemID, MIN(b.OracleItemCode) AS OracleItemCode FROM dbo.BBraun_ItemIntegrationMapping b WITH (NOLOCK)
+                WHERE b.SetupID=@SetupId AND b.ProjectID=@ProjectId GROUP BY b.ItemID
+            )
             SELECT d.OTReservationID, d.LineItemNo, d.Barcode, d.Description, d.Quantity, d.CreatedOn,
                    ot.AdmissionNo, ot.OTID, ot.OperationDate, fl.ItemId, bb.OracleItemCode
-            FROM dbo.INP_ImplantDetail d WITH (NOLOCK)
-            INNER JOIN dbo.INP_OTReservation ot WITH (NOLOCK)
-              ON ot.SetupID=d.SetupID AND ot.ProjectID=d.ProjectId AND ot.OTReservationID=d.OTReservationID
-            OUTER APPLY (SELECT TOP 1 f.ItemId FROM dbo.HIS_FloorConsumption f WITH (NOLOCK)
-                         WHERE f.SetupID=ot.SetupID AND f.ProjectID=ot.ProjectID AND f.EncounterType=2 AND f.EncounterNo=ot.AdmissionNo
-                           AND f.Barcode=d.Barcode AND ISNULL(d.Barcode,'') <> '') fl
-            OUTER APPLY (SELECT TOP 1 b.OracleItemCode FROM dbo.BBraun_ItemIntegrationMapping b WITH (NOLOCK)
-                         WHERE b.SetupID=ot.SetupID AND b.ProjectID=ot.ProjectID AND b.ItemID=fl.ItemId) bb
-            WHERE d.SetupID=@SetupId AND d.ProjectId=@ProjectId AND ot.AdmissionNo IN (SELECT No FROM ip)
-            """, s.BindPeriod, r =>
+            FROM #ip i
+            INNER JOIN dbo.INP_OTReservation ot WITH (NOLOCK) ON ot.SetupID=@SetupId AND ot.ProjectID=@ProjectId AND ot.AdmissionNo=i.No
+            INNER JOIN dbo.INP_ImplantDetail d WITH (NOLOCK)
+              ON d.SetupID=ot.SetupID AND d.ProjectId=ot.ProjectID AND d.OTReservationID=ot.OTReservationID
+            LEFT JOIN fl ON fl.EncounterNo = ot.AdmissionNo AND fl.Barcode = d.Barcode
+            LEFT JOIN bb ON bb.ItemID = fl.ItemId
+            """, s.BindTenant, r =>
         {
             var adm = HisConnection.I(r, "AdmissionNo");
             var res = HisConnection.I(r, "OTReservationID");
@@ -227,15 +298,14 @@ public static class ConsumptionExtract
         });
     }
 
-    private static async Task OpMedicineAsync(HisConnection db, Settings s, Codes c, ItemWriter o, List<Line> lines, HashSet<string> dispensedLines)
+    private static async Task OpMedicineAsync(HisConnection db, Settings s, Codes c, ItemWriter o, LineIndex lines, HashSet<string> dispensedLines)
     {
         await db.QueryAsync($"""
-            WITH op AS ({OpSet})
             SELECT m.EpisodeID, m.AppointmentNo, m.MedicineCode, m.DispensedQuantity, m.DoseDailyQuantity, m.DoseDurationDays, m.StartDate, m.RxNo
-            FROM dbo.HIS_ProgNoteMedicine m WITH (NOLOCK)
-            WHERE m.SetupID=@SetupId AND m.ProjectID=@ProjectId AND m.AppointmentNo IN (SELECT No FROM op)
-              AND (ISNULL(m.DispensedQuantity, 0) > 0 OR ISNULL(m.DoseDailyQuantity, 0) > 0)
-            """, s.BindPeriod, r =>
+            FROM #op o
+            INNER JOIN dbo.HIS_ProgNoteMedicine m WITH (NOLOCK) ON m.SetupID=@SetupId AND m.ProjectID=@ProjectId AND m.AppointmentNo=o.No
+            WHERE ISNULL(m.DispensedQuantity, 0) > 0 OR ISNULL(m.DoseDailyQuantity, 0) > 0
+            """, s.BindTenant, r =>
         {
             var appt = HisConnection.I(r, "AppointmentNo");
             var enc = c.OpEncounter(appt);
@@ -244,7 +314,7 @@ public static class ConsumptionExtract
             var daily = HisConnection.F(r, "DoseDailyQuantity");
             var days = Math.Max(1, HisConnection.I(r, "DoseDurationDays"));
             // The billed medicine line of the same appointment and medicine, when there is one.
-            var billed = lines.FirstOrDefault(l => l.Encounter == enc && l.IsMedicine && (l.MedicineId == med || l.ProcedureId == med));
+            var billed = lines.ByEncounter[enc].FirstOrDefault(l => l.IsMedicine && (l.MedicineId == med || l.ProcedureId == med));
             if (billed is not null) dispensedLines.Add(billed.Ref);
             var anchor = billed is null ? null : AnchorOnInvoice(lines, billed) ?? billed.Ref;
             o.Add(enc, anchor, billed is null ? "NONE" : "BILLED_LINE", null, "MEDICINE", med, "HIS_MED", billed?.OracleItemCode, null, billed?.Name,
@@ -255,9 +325,9 @@ public static class ConsumptionExtract
     }
 
     /// <summary>Billed medicine lines not already written from an OP dispense: IP medicine and OP medicine with no prescription row.</summary>
-    private static void BilledMedicine(Codes c, ItemWriter o, List<Line> lines, HashSet<string> dispensedLines)
+    private static void BilledMedicine(Codes c, ItemWriter o, LineIndex lines, HashSet<string> dispensedLines)
     {
-        foreach (var l in lines.Where(l => l.IsMedicine && !dispensedLines.Contains(l.Ref)))
+        foreach (var l in lines.All.Where(l => l.IsMedicine && !dispensedLines.Contains(l.Ref)))
         {
             var anchor = AnchorOnInvoice(lines, l);
             var (key, system) = l.MedicineId is not null ? (l.MedicineId, "HIS_MED") : (l.ProcedureId, "HIS_PROC");
@@ -268,18 +338,18 @@ public static class ConsumptionExtract
 
     // ── Staff time ───────────────────────────────────────────────────────────────
 
-    private static async Task OrStaffAsync(HisConnection db, Settings s, Codes c, StaffWriter o, List<Line> lines)
+    private static async Task OrStaffAsync(HisConnection db, Settings s, Codes c, StaffWriter o, LineIndex lines)
     {
         var otProcs = await OtProceduresAsync(db, s);
         var staff = new Dictionary<int, List<(string Id, string Type)>>();
         await db.QueryAsync($"""
-            WITH ip AS ({IpSet})
             SELECT st.OTReservationID, st.MedicalStaffID, st.MedicalStaffType
-            FROM dbo.INP_OTMedicalStaffDetail st WITH (NOLOCK)
-            INNER JOIN dbo.INP_OTReservation ot WITH (NOLOCK)
-              ON ot.SetupID=st.SetupID AND ot.ProjectID=st.ProjectID AND ot.OTReservationID=st.OTReservationID
-            WHERE st.SetupID=@SetupId AND st.ProjectID=@ProjectId AND ISNULL(st.IsActive, 1) = 1 AND ot.AdmissionNo IN (SELECT No FROM ip)
-            """, s.BindPeriod, r =>
+            FROM #ip i
+            INNER JOIN dbo.INP_OTReservation ot WITH (NOLOCK) ON ot.SetupID=@SetupId AND ot.ProjectID=@ProjectId AND ot.AdmissionNo=i.No
+            INNER JOIN dbo.INP_OTMedicalStaffDetail st WITH (NOLOCK)
+              ON st.SetupID=ot.SetupID AND st.ProjectID=ot.ProjectID AND st.OTReservationID=ot.OTReservationID
+            WHERE ISNULL(st.IsActive, 1) = 1
+            """, s.BindTenant, r =>
         {
             var res = HisConnection.I(r, "OTReservationID");
             if (!staff.TryGetValue(res, out var list)) staff[res] = list = [];
@@ -287,12 +357,11 @@ public static class ConsumptionExtract
         });
 
         await db.QueryAsync($"""
-            WITH ip AS ({IpSet})
             SELECT ot.OTReservationID, ot.AdmissionNo, ot.OTID, ot.OperationDate, ot.PrimaryDoctorID,
                    ot.ActualSugeryStartTime, ot.ActualSurgeryEndTime, ot.AnesthesiaStartTime, ot.AnesthesiaEndTime
-            FROM dbo.INP_OTReservation ot WITH (NOLOCK)
-            WHERE ot.SetupID=@SetupId AND ot.ProjectID=@ProjectId AND ot.AdmissionNo IN (SELECT No FROM ip)
-            """, s.BindPeriod, r =>
+            FROM #ip i
+            INNER JOIN dbo.INP_OTReservation ot WITH (NOLOCK) ON ot.SetupID=@SetupId AND ot.ProjectID=@ProjectId AND ot.AdmissionNo=i.No
+            """, s.BindTenant, r =>
         {
             var day = HisConnection.Dt(r, "OperationDate") ?? s.From!.Value;
             var surgS = HisConnection.S(r, "ActualSugeryStartTime");
@@ -330,11 +399,10 @@ public static class ConsumptionExtract
     private static async Task OpDoctorAsync(HisConnection db, Settings s, Codes c, StaffWriter o)
     {
         await db.QueryAsync($"""
-            WITH op AS ({OpSet})
             SELECT a.AppointmentNo, a.DoctorID, a.ClinicID, a.AppointmentDate, a.ActualVisitStartTime, a.ActualVisitEndTime
-            FROM dbo.HIS_Appointment a WITH (NOLOCK)
-            WHERE a.SetupID=@SetupId AND a.ProjectID=@ProjectId AND a.AppointmentNo IN (SELECT No FROM op)
-            """, s.BindPeriod, r =>
+            FROM #op o
+            INNER JOIN dbo.HIS_Appointment a WITH (NOLOCK) ON a.SetupID=@SetupId AND a.ProjectID=@ProjectId AND a.AppointmentNo=o.No
+            """, s.BindTenant, r =>
         {
             var no = HisConnection.I(r, "AppointmentNo");
             if (c.IsErAppointment(no)) return; // measured from the ER assessment
@@ -355,12 +423,11 @@ public static class ConsumptionExtract
     private static async Task ErStaffAsync(HisConnection db, Settings s, Codes c, StaffWriter o)
     {
         await db.QueryAsync($"""
-            WITH er AS ({ErSet})
             SELECT e.AssessmentNo, e.ClinicID, e.AssessmentDate, e.ArrivalTime, e.DischargeTime, e.SignInTime, e.SignOutTime,
                    e.SignInDoctorId, e.DoctorID
-            FROM dbo.INP_ERAssessment e WITH (NOLOCK)
-            WHERE e.SetupID=@SetupId AND e.ProjectID=@ProjectId AND e.AssessmentNo IN (SELECT No FROM er)
-            """, s.BindPeriod, r =>
+            FROM #er x
+            INNER JOIN dbo.INP_ERAssessment e WITH (NOLOCK) ON e.SetupID=@SetupId AND e.ProjectID=@ProjectId AND e.AssessmentNo=x.No
+            """, s.BindTenant, r =>
         {
             var day = HisConnection.Dt(r, "AssessmentDate") ?? s.From!.Value;
             var start = HisConnection.Dt(r, "SignInTime") ?? Maps.Combine(day, HisConnection.S(r, "ArrivalTime"));
@@ -382,11 +449,10 @@ public static class ConsumptionExtract
     private static async Task WardAsync(HisConnection db, Settings s, Codes c, StaffWriter o)
     {
         await db.QueryAsync($"""
-            WITH ip AS ({IpSet})
             SELECT t.TransferNo, t.AdmissionNo, t.TransferDate, t.Duration, t.StartTime, t.EndTime, t.ClinicID
-            FROM dbo.INP_Transfer t WITH (NOLOCK)
-            WHERE t.SetupID=@SetupId AND t.ProjectID=@ProjectId AND t.AdmissionNo IN (SELECT No FROM ip)
-            """, s.BindPeriod, r =>
+            FROM #ip i
+            INNER JOIN dbo.INP_Transfer t WITH (NOLOCK) ON t.SetupID=@SetupId AND t.ProjectID=@ProjectId AND t.AdmissionNo=i.No
+            """, s.BindTenant, r =>
         {
             var day = HisConnection.Dt(r, "TransferDate") ?? s.From!.Value;
             var min = Maps.TransferMinutes(HisConnection.I(r, "Duration"), day, HisConnection.S(r, "StartTime"), HisConnection.S(r, "EndTime"));
@@ -405,13 +471,13 @@ public static class ConsumptionExtract
     {
         var map = new Dictionary<int, HashSet<string>>();
         await db.QueryAsync($"""
-            WITH ip AS ({IpSet})
             SELECT pm.OTReservationID, pm.ProcedureID
-            FROM dbo.INP_OTProcedureMapping pm WITH (NOLOCK)
-            INNER JOIN dbo.INP_OTReservation ot WITH (NOLOCK)
-              ON ot.SetupID=pm.SetupID AND ot.ProjectID=pm.ProjectID AND ot.OTReservationID=pm.OTReservationID
-            WHERE pm.SetupID=@SetupId AND pm.ProjectID=@ProjectId AND ISNULL(pm.IsActive, 1) = 1 AND ot.AdmissionNo IN (SELECT No FROM ip)
-            """, s.BindPeriod, r =>
+            FROM #ip i
+            INNER JOIN dbo.INP_OTReservation ot WITH (NOLOCK) ON ot.SetupID=@SetupId AND ot.ProjectID=@ProjectId AND ot.AdmissionNo=i.No
+            INNER JOIN dbo.INP_OTProcedureMapping pm WITH (NOLOCK)
+              ON pm.SetupID=ot.SetupID AND pm.ProjectID=ot.ProjectID AND pm.OTReservationID=ot.OTReservationID
+            WHERE ISNULL(pm.IsActive, 1) = 1
+            """, s.BindTenant, r =>
         {
             var res = HisConnection.I(r, "OTReservationID");
             if (!map.TryGetValue(res, out var set)) map[res] = set = new(StringComparer.OrdinalIgnoreCase);
@@ -421,9 +487,9 @@ public static class ConsumptionExtract
     }
 
     /// <summary>Rule 3: the admission's counted line for a procedure mapped to the surgery (first line if several).</summary>
-    private static string? OtAnchor(List<Line> lines, string enc, HashSet<string>? procs) =>
+    private static string? OtAnchor(LineIndex lines, string enc, HashSet<string>? procs) =>
         procs is null ? null
-            : lines.Where(l => l.Encounter == enc && !l.IsMedicine && procs.Contains(l.ProcedureId.Trim())).OrderBy(l => l.Inv).ThenBy(l => l.LineNo).FirstOrDefault()?.Ref;
+            : lines.ByEncounter[enc].Where(l => !l.IsMedicine && procs.Contains(l.ProcedureId.Trim())).OrderBy(l => l.Inv).ThenBy(l => l.LineNo).FirstOrDefault()?.Ref;
 
     private static string? EncounterOf(Codes c, int type, int no) =>
         no <= 0 ? null : type switch { 1 => c.OpEncounter(no), 2 => c.IpEncounter(no), 3 => c.ErEncounter(no), _ => null };
@@ -434,14 +500,16 @@ public static class ConsumptionExtract
     private static async Task Safe(CsvZipWriter pack, string label, Func<Task> body)
     {
         try { await body(); }
-        catch (SqlException ex) { pack.Note($"{label} skipped: {ex.Message}"); }
+        catch (SqlException ex) { pack.Warn(label, ex); }
     }
 
     private static async Task Counted(CsvZipWriter pack, string label, ICounted o, Func<Task> body)
     {
         var before = o.Written;
+        pack.Step(label);
+        var sw = System.Diagnostics.Stopwatch.StartNew();
         await body();
-        pack.Note($"{label}: {o.Written - before} rows");
+        pack.Note($"{label}: {o.Written - before} rows ({sw.Elapsed.TotalSeconds:N0} s)");
     }
 
     private interface ICounted { int Written { get; } }
