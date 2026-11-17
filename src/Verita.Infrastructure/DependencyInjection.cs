@@ -22,11 +22,13 @@ public static class DependencyInjection
         services.TryAddSingleton<IRequestInfo, NoRequestInfo>();
         services.AddScoped<IAuditWriter, AuditWriter>();
         services.AddScoped<RunService>();
+        services.AddScoped<PeriodFactsService>();
         services.AddScoped<ScenarioService>();
         services.AddScoped<GovernanceService>();
         services.AddScoped<ReadQueries>();
         services.AddScoped<DataHub.DataHubService>();
         services.AddScoped<DataHub.HisImportService>();
+        services.AddScoped<DataHub.ImportFileService>();
         services.AddScoped<CostingSeed.RecipeSuggestionService>();
         services.AddScoped<Assistant.AssistantAnswers>();
         services.AddMemoryCache();

@@ -388,124 +388,118 @@ interface ImportPreview {
   suggestedHospital?: string | null; notices: string[]; warnings: string[];
 }
 
-/**
- * Template download and raw-data upload (BRD 22.2). Validate runs the real load inside a
- * transaction and rolls it back, so a zip of templates is checked in load order exactly as it
- * would load. Bad rows come back one by one with the reason; the good rows load.
- */
-/** Rough load speed behind the estimated import progress; only the bar depends on it. */
-const IMPORT_ROWS_PER_SECOND = 2000;
+interface ImportFileDto {
+  id: string; fileName: string; sizeBytes: number; uploadedAt: string; uploadedBy: string;
+  isHisPack: boolean; hisSetupId?: string | null; hisProjectId?: number | null; pack?: string | null; factsFrom?: string | null; factsTo?: string | null;
+  hospital?: string | null; totalRows: number; status: string; lastDryRun: boolean; tablesTotal: number; tablesDone: number; currentTable?: string | null;
+  attempts: number; queuedAt?: string | null; startedAt?: string | null; finishedAt?: string | null; runBy?: string | null;
+  rowsCreated: number; rowsUpdated: number; rowsUnchanged: number; rowsRejected: number; errorMessage?: string | null;
+}
+interface ImportFileDetail { file: ImportFileDto; preview: ImportPreview | null; results: ImportResult[]; }
 
+const ACTIVE = ['QUEUED', 'RUNNING'];
+const STATUS_TEXT: Record<string, string> = {
+  UPLOADED: 'Uploaded · not imported', QUEUED: 'Queued', RUNNING: 'Running', VALIDATED: 'Validated · not imported',
+  COMPLETED: 'Imported', COMPLETED_WITH_REJECTS: 'Imported with rejects', FAILED: 'Failed',
+};
+
+/**
+ * Upload is immediate: the file is stored with its preview. Validate and import run in the background
+ * and report progress on the file, so the page can be left and the file imported again from the list.
+ */
 @Component({
   selector: 'v-data-import',
   imports: [FormsModule, ...UI],
   template: `
-    <v-page title="Data import" purpose="Use the HIS Extract Utility to extract data files from HIS, then upload them here to import. Confirm the SetupID/ProjectID mapping, then validate and proceed.">
+    <v-page title="Data import" purpose="Upload files extracted by the HIS Extract Utility (or filled templates). Upload stores the file; validate and import run in the background, and every file stays in the list to import again.">
       <section class="card">
         <h2>Upload</h2>
         <div class="row">
-          <input type="file" accept=".csv,.zip" (change)="pick($event)" aria-label="File to upload" />
+          <input #picker type="file" accept=".csv,.zip" multiple (change)="pick($event, picker)" aria-label="Files to upload" [disabled]="uploading()" />
         </div>
-        @if (busy() && !uploading()) {
-          <div class="import-loading" role="status"><span class="spinner" aria-hidden="true"></span><strong>Reading file…</strong></div>
+        <p class="muted" style="margin:6px 0 0">Choose one file to review it first, or several (e.g. a month of daily packs) to upload them all and queue them for import, oldest date first.</p>
+        @if (uploading()) {
+          <div class="import-loading" role="status"><span class="spinner" aria-hidden="true"></span><strong>{{ uploadText() }}</strong></div>
         }
         @if (error()) { <div class="notice bad" role="alert" style="margin-top:10px">{{ error() }}</div> }
-        @if (uploading(); as mode) {
-          <div class="import-progress" role="status" aria-live="polite" (window:beforeunload)="warnLeaving($event)">
-            <div class="import-loading">
-              <span class="spinner" aria-hidden="true"></span>
-              <div>
-                <strong>{{ mode === 'validate' ? 'Validating' : 'Importing' }} {{ file()?.name }}…</strong>
-                <p class="muted">Keep this page open until it finishes. Progress is an estimate.</p>
-              </div>
-              <span class="import-pct">{{ overallPct() }}%</span>
-            </div>
-            <div class="bar big" role="progressbar" [attr.aria-valuenow]="overallPct()" aria-valuemin="0" aria-valuemax="100" aria-label="Estimated progress"><span [style.width.%]="overallPct()"></span></div>
-            <ul class="import-tables">
-              @for (t of tableProgress(); track t.entity + t.fileName) {
-                <li [class.done]="t.state === 'done'" [class.active]="t.state === 'active'">
-                  <span class="import-table-name">{{ t.entity }}</span>
-                  <span class="import-table-rows">{{ fmt(t.rows) }} rows</span>
-                  <div class="bar"><span [style.width.%]="t.pct"></span></div>
-                  <span class="import-table-state">{{ t.state === 'done' ? 'Done (est.)' : t.state === 'active' ? 'In progress (est.)' : 'Waiting' }}</span>
-                </li>
-              }
-            </ul>
+        @if (batch(); as b) {
+          <div class="notice" [class.warn]="b.failed.length > 0" role="status" style="margin-top:10px">
+            <strong>{{ b.uploaded }} of {{ b.total }} file(s) uploaded, {{ b.queued }} queued for import{{ b.queued ? ' (oldest date first)' : '' }}.</strong>
+            @if (b.failed.length) {
+              <ul style="margin:6px 0 0; padding-left:20px">@for (f of b.failed; track f) { <li>{{ f }}</li> }</ul>
+            }
           </div>
-        } @else if (hisPreview(); as hp) {
-          @if (!imported()) {
-            <div class="his-preview">
-              @if (hp.hisPack) {
-                <p class="notice" style="margin-top:12px">
-                  HIS pack {{ hp.fileName }}
-                  · SetupID <strong>{{ hp.setupId }}</strong>
-                  · ProjectID <strong>{{ hp.projectId }}</strong>
-                  @if (hp.pack) { · {{ hp.pack }} }
-                  @if (hp.from) { · {{ hp.from }} .. {{ hp.toInclusive }} }
-                </p>
-                <label class="field" style="margin-top:12px; max-width:420px">VERITA hospital
-                  <select [ngModel]="hisHospital()" (ngModelChange)="hisHospital.set($event)" name="hisHospital" aria-label="VERITA hospital for this HIS pack">
-                    <option value="">Select…</option>
-                    @for (h of hp.hospitals; track h.code) {
-                      <option [value]="h.code">{{ h.code }} · {{ h.name }}{{ h.match ? ' (HIS match)' : '' }}{{ h.hisSetupId ? ' · ' + h.hisSetupId + '/' + h.hisProjectId : '' }}</option>
-                    }
-                  </select>
-                </label>
+        }
+
+        @if (selected(); as d) {
+          <div class="his-preview">
+            <div class="sel-head">
+              <h3>{{ d.file.fileName }}</h3>
+              <button class="btn" type="button" (click)="close()">Close</button>
+            </div>
+            <p class="muted">{{ fileFacts(d.file) }}</p>
+            @if (d.preview?.hisPack) {
+              <p class="notice">
+                HIS pack · SetupID <strong>{{ d.file.hisSetupId }}</strong> · ProjectID <strong>{{ d.file.hisProjectId }}</strong>
+                @if (d.file.pack) { · {{ d.file.pack }} }
+                @if (d.file.factsFrom) { · {{ d.file.factsFrom }} .. {{ d.file.factsTo }} }
+              </p>
+              @if (mismatch(d.file); as m) {
+                <p class="notice bad" role="alert" style="margin-top:8px">{{ m }}</p>
               } @else {
-                <p class="muted" style="margin-top:12px">VERITA template {{ hp.fileName }}. Validate, then import.</p>
+                <p class="muted" style="margin-top:8px">Imports into <strong>{{ target()?.code }}</strong> · {{ target()?.name }}, the hospital selected at the top.</p>
               }
-              @for (n of hp.notices; track n) { <p class="notice" style="margin-top:8px">{{ n }}</p> }
-              @for (w of hp.warnings; track w) { <p class="notice warn" style="margin-top:8px">{{ w }}</p> }
-              @if (hp.tables.length) {
-                <h3 style="margin-top:14px">Tables in this file</h3>
-                <v-table [rows]="hp.tables" [columns]="previewTableCols" caption="Pack contents" />
+            }
+            @for (n of d.preview?.notices ?? []; track n) { <p class="notice" style="margin-top:8px">{{ n }}</p> }
+
+            @if (live(d.file); as f) {
+              @if (isActive(f)) {
+                <div class="import-progress" role="status" aria-live="polite">
+                  <div class="import-loading">
+                    <span class="spinner" aria-hidden="true"></span>
+                    <div>
+                      <strong>{{ f.status === 'QUEUED' ? 'Queued' : (f.lastDryRun ? 'Validating' : 'Importing') }}{{ f.currentTable ? ' · ' + f.currentTable : '' }}</strong>
+                      <p class="muted">Runs in the background. You can leave this page; the list below keeps the status.</p>
+                    </div>
+                    <span class="import-pct">{{ pct(f) }}%</span>
+                  </div>
+                  <div class="bar big" role="progressbar" [attr.aria-valuenow]="pct(f)" aria-valuemin="0" aria-valuemax="100" aria-label="Tables done"><span [style.width.%]="pct(f)"></span></div>
+                  <p class="muted" style="margin:8px 0 0">{{ f.tablesDone }} of {{ f.tablesTotal }} tables done</p>
+                </div>
+              } @else {
+                @if (f.status === 'FAILED') { <p class="notice bad" style="margin-top:12px">{{ f.errorMessage || 'Failed.' }}</p> }
+                @if (f.status === 'VALIDATED') { <p class="notice" style="margin-top:12px">Validation only — nothing was saved. {{ fmt(f.rowsCreated) }} new, {{ fmt(f.rowsUpdated) }} updated, {{ fmt(f.rowsRejected) }} rejected.</p> }
+                @if (f.status === 'COMPLETED' || f.status === 'COMPLETED_WITH_REJECTS') { <p class="notice" [class.warn]="f.rowsRejected > 0" style="margin-top:12px">Imported {{ when(f.finishedAt) }}. {{ fmt(f.rowsCreated) }} new, {{ fmt(f.rowsUpdated) }} updated, {{ fmt(f.rowsUnchanged) }} unchanged, {{ fmt(f.rowsRejected) }} rejected.</p> }
               }
               <div class="row" style="margin-top:12px">
-                <button class="btn" type="button" (click)="upload(true)" [disabled]="!canProceed() || busy()">Validate</button>
-                <button class="btn primary" type="button" (click)="upload(false)" [disabled]="!canProceed() || busy()">Proceed</button>
+                <button class="btn" type="button" (click)="run(f, true)" [disabled]="!canRun(f, d)">Validate</button>
+                <button class="btn primary" type="button" (click)="run(f, false)" [disabled]="!canRun(f, d)">{{ imported(f) ? 'Import again' : 'Import' }}</button>
               </div>
-            </div>
-          }
-        }
-        @if (results().length) {
-          <p class="notice" style="margin-top:12px">
-            {{ dryRunShown() ? 'Validation only — nothing was saved.' : 'Imported.' }}
-            {{ fmt(totalCreated()) }} new, {{ fmt(totalUpdated()) }} updated.
-            @if (dryRunShown() && totalRejected() === 0) { Ready to import. }
-          </p>
-          <h3 style="margin-top:14px">{{ imported() ? 'Imported rows preview' : 'Validation results' }}</h3>
-          <v-table [rows]="results()" [columns]="resultCols" [caption]="imported() ? 'Imported rows preview' : 'Validation results'" />
+            }
+
+            @if (d.results.length && !isActive(live(d.file))) {
+              <h3 style="margin-top:14px">{{ d.file.lastDryRun ? 'Validation results' : 'Import results' }}</h3>
+              <v-table [rows]="d.results" [columns]="resultCols" [caption]="d.file.lastDryRun ? 'Validation results' : 'Import results'" />
+            } @else if (d.preview?.tables?.length) {
+              <h3 style="margin-top:14px">Tables in this file</h3>
+              <v-table [rows]="d.preview!.tables" [columns]="previewTableCols" caption="File contents" />
+            }
+          </div>
         }
       </section>
 
       <section class="card">
-        <details #hist (toggle)="historyToggle(hist)">
-          <summary>
-            <h2>Import history</h2>
-          </summary>
-          @if (historyOpen()) {
-            <v-state [loading]="history.isLoading() && !history.value()" [error]="history.error()">
-              <v-table [rows]="history.value() ?? []" [columns]="historyCols" empty="Nothing imported yet." />
-              @if (rejectBatches().length) {
-                <p class="muted" style="margin-top:8px">Rejected rows, ready to fix and re-upload:</p>
-                @for (b of rejectBatches(); track b.id) {
-                  <button class="btn" type="button" (click)="rejects(b)" style="margin:0 6px 6px 0">{{ b.entity }} · {{ b.loadedAt.slice(0, 16).replace('T', ' ') }}</button>
-                }
-              }
-            </v-state>
-          }
-        </details>
+        <h2>Uploaded files</h2>
+        <v-state [loading]="files.isLoading() && !files.value()" [error]="files.error()">
+          <v-table paged [rows]="files.value() ?? []" [columns]="fileCols()" caption="Uploaded files" empty="No files uploaded yet." />
+        </v-state>
       </section>
     </v-page>
   `,
   styles: `
-    details > summary { cursor: pointer; list-style: none; display: flex; align-items: center; gap: 8px; }
-    details > summary::-webkit-details-marker { display: none; }
-    details > summary::before { content: '▸'; color: var(--text-3); font-size: 12px; line-height: 1; }
-    details[open] > summary::before { content: '▾'; }
-    details > summary h2 { margin: 0; }
-    details[open] > summary { margin-bottom: 12px; }
-    input[type="checkbox"]:disabled { opacity: .55; cursor: not-allowed; }
+    .his-preview { margin-top: 16px; padding-top: 14px; border-top: 1px solid var(--border); }
+    .sel-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+    .sel-head h3 { margin: 0; overflow-wrap: anywhere; }
     .import-loading { display: flex; align-items: center; gap: 14px; margin-top: 14px; font-size: 16px; }
     .import-loading p { margin: 2px 0 0; font-size: 13px; }
     .spinner { flex: none; width: 36px; height: 36px; border: 4px solid var(--border); border-top-color: var(--accent); border-radius: 50%; animation: import-spin .9s linear infinite; }
@@ -517,75 +511,42 @@ const IMPORT_ROWS_PER_SECOND = 2000;
     .bar { height: 6px; border-radius: 999px; background: var(--border); overflow: hidden; }
     .bar span { display: block; height: 100%; border-radius: inherit; background: var(--accent); transition: width .4s linear; }
     .bar.big { height: 12px; margin-top: 14px; }
-    .import-tables { list-style: none; margin: 16px 0 0; padding: 0; display: grid; gap: 10px; }
-    .import-tables li { display: grid; grid-template-columns: minmax(150px, 1.2fr) auto minmax(80px, 2fr) 130px; align-items: center; gap: 12px; font-size: 14px; color: var(--text-3); }
-    .import-tables li.active { color: var(--text); font-weight: 600; }
-    .import-tables li.done { color: var(--text-2); }
-    .import-tables li.done .bar span { background: var(--good); }
-    .import-table-rows { font-variant-numeric: tabular-nums; }
-    .import-table-state { text-align: right; font-weight: 400; }
-    @media (max-width: 640px) {
-      .import-tables li { grid-template-columns: 1fr auto; }
-      .import-tables li .bar { grid-column: 1 / -1; grid-row: 2; }
-      .import-table-state { grid-column: 1 / -1; text-align: left; }
-    }
   `,
 })
 export class DataImport {
   private http = inject(HttpClient);
-  private auth = inject(Auth);
+  private api = inject(Api);
   private ctx = inject(RunContext);
-  historyOpen = signal(false);
-  history = apiResource<ImportBatchDto[]>(() => this.historyOpen() ? 'data/imports' : null);
-  file = signal<File | null>(null);
+  files = apiResource<ImportFileDto[]>(() => 'data/files');
+  selected = signal<ImportFileDetail | null>(null);
+  /** The hospital selected in the top bar: every import goes there. */
+  target = computed(() => {
+    const code = this.ctx.hospitalParam();
+    return (this.ctx.context()?.hospitals ?? []).find(h => h.code === code) ?? null;
+  });
+  uploading = signal(false);
+  uploadText = signal('');
+  batch = signal<{ total: number; uploaded: number; queued: number; failed: string[] } | null>(null);
   busy = signal(false);
   error = signal<string | null>(null);
-  results = signal<ImportResult[]>([]);
-  hisPreview = signal<ImportPreview | null>(null);
-  hisHospital = signal('');
-  dryRunShown = signal(false);
-  uploading = signal<'validate' | 'import' | null>(null);
-  private elapsed = signal(0);
-  private ticker: ReturnType<typeof setInterval> | null = null;
-  /**
-   * The upload is one request, so progress is estimated from the row counts in the preview: it eases
-   * towards the end and never claims to finish until the API answers.
-   */
-  private progress = computed(() => {
-    const rows = (this.hisPreview()?.tables ?? []).reduce((sum, t) => sum + t.rows, 0);
-    const expected = Math.max(8000, rows / IMPORT_ROWS_PER_SECOND * 1000);
-    return 1 - Math.exp(-2 * this.elapsed() / expected);
-  });
-  overallPct = computed(() => Math.floor(this.progress() * 99));
-  tableProgress = computed(() => {
-    const tables = this.hisPreview()?.tables ?? [];
-    const total = tables.reduce((sum, t) => sum + t.rows, 0) || 1;
-    const at = this.progress();
-    let start = 0;
-    return tables.map((t, i) => {
-      const end = start + t.rows / total;
-      const share = Math.min(1, Math.max(0, (at - start) / Math.max(end - start, 0.0001)));
-      start = end;
-      const last = i === tables.length - 1;
-      const state = share >= 1 && !last ? 'done' : share > 0 ? 'active' : 'waiting';
-      return { ...t, state, pct: Math.floor(share * (last ? 99 : 100)) };
-    });
-  });
-  canProceed = computed(() => {
-    const f = this.file();
-    const p = this.hisPreview();
-    if (!f || !p) return false;
-    return !p.hisPack || !!this.hisHospital();
-  });
-  imported = computed(() => this.results().length > 0 && !this.dryRunShown());
-  totalCreated = computed(() => this.results().reduce((s, r) => s + r.created, 0));
-  totalUpdated = computed(() => this.results().reduce((s, r) => s + r.updated, 0));
-  totalRejected = computed(() => this.results().reduce((s, r) => s + r.rejected, 0));
-  rejectBatches = computed(() => (this.history.value() ?? []).filter(b => b.hasRejects).slice(0, 12));
-  hospitals = computed(() => this.ctx.context()?.hospitals ?? []);
+  private poll: ReturnType<typeof setInterval> | null = null;
+  private wasActive = new Set<string>();
+
   constructor() {
     void this.ctx.load();
-    inject(DestroyRef).onDestroy(() => this.stopProgress());
+    // Poll while anything is queued or running; refresh the open file when its job finishes.
+    effect(() => {
+      const list = this.files.value() ?? [];
+      const active = list.filter(f => ACTIVE.includes(f.status));
+      const finished = [...this.wasActive].filter(id => !active.some(f => f.id === id));
+      this.wasActive = new Set(active.map(f => f.id));
+      const sel = this.selected();
+      if (sel && finished.includes(sel.file.id)) void this.open(sel.file.id);
+      if (finished.length) void this.ctx.load(true);
+      if (active.length && !this.poll) this.poll = setInterval(() => this.files.reload(), 3000);
+      if (!active.length && this.poll) { clearInterval(this.poll); this.poll = null; }
+    });
+    inject(DestroyRef).onDestroy(() => { if (this.poll) clearInterval(this.poll); });
   }
 
   previewTableCols: Col<ImportPreviewTable>[] = [
@@ -594,90 +555,312 @@ export class DataImport {
   resultCols: Col<ImportResult>[] = [
     { key: 'entity', label: 'Table' }, { key: 'rows', label: 'Rows', type: 'num', dp: 0 }, { key: 'created', label: 'New', type: 'num', dp: 0 },
     { key: 'updated', label: 'Updated', type: 'num', dp: 0 }, { key: 'unchanged', label: 'Unchanged', type: 'num', dp: 0 },
-    { key: 'rejected', label: 'Rejected', type: 'num', dp: 0 },
+    { key: 'rejected', label: 'Rejected', type: 'num', dp: 0, bad: r => r.rejected > 0 },
+    { key: 'rejects', label: '', type: 'button', sortable: false, button: r => r.batchId && r.rejected > 0 ? 'Download rejects' : null, onButton: r => void this.rejects(r) },
   ];
-  historyCols: Col<ImportBatchDto>[] = [
-    { key: 'loadedAt', label: 'When', value: r => r.loadedAt.slice(0, 16).replace('T', ' ') }, { key: 'entity', label: 'Table' },
-    { key: 'sourceSystem', label: 'Source' }, { key: 'rowsAccepted', label: 'Accepted', type: 'num', dp: 0 },
-    { key: 'rowsRejected', label: 'Rejected', type: 'num', dp: 0 }, { key: 'loadedBy', label: 'By' },
-  ];
+  fileCols = computed<Col<ImportFileDto>[]>(() => [
+    { key: 'uploadedAt', label: 'Uploaded', value: r => this.when(r.uploadedAt), sub: r => r.uploadedBy },
+    { key: 'fileName', label: 'File', sub: r => this.fileFacts(r) },
+    { key: 'hospital', label: 'Hospital', value: r => r.hospital ?? '—' },
+    { key: 'status', label: 'Status', type: 'chip', value: r => this.statusText(r), bad: r => r.status === 'FAILED' || r.rowsRejected > 0 && !ACTIVE.includes(r.status), sub: r => r.status === 'FAILED' ? r.errorMessage ?? null : this.mismatch(r) ? 'Not for the selected hospital' : null },
+    { key: 'result', label: 'Result', sortable: false, value: r => this.resultText(r) },
+    { key: 'open', label: '', type: 'button', sortable: false, button: () => 'Open', onButton: r => void this.open(r.id) },
+    { key: 'sync', label: '', type: 'button', sortable: false, button: r => this.isActive(r) || this.mismatch(r) ? null : this.imported(r) ? 'Re-import' : 'Import', onButton: r => void this.quick(r) },
+    { key: 'delete', label: '', type: 'button', sortable: false, button: r => this.isActive(r) ? null : 'Remove', onButton: r => void this.remove(r) },
+  ]);
 
-  pick(ev: Event): void {
-    this.file.set((ev.target as HTMLInputElement).files?.[0] ?? null);
-    this.results.set([]);
-    this.error.set(null);
-    this.hisPreview.set(null);
-    this.hisHospital.set('');
-    void this.loadHisPreview();
+  isActive(f: ImportFileDto | null | undefined): boolean { return !!f && ACTIVE.includes(f.status); }
+  imported(f: ImportFileDto): boolean { return f.status === 'COMPLETED' || f.status === 'COMPLETED_WITH_REJECTS' || (f.status === 'FAILED' && !f.lastDryRun); }
+  /** The open file's latest status comes from the polled list. */
+  live(f: ImportFileDto): ImportFileDto { return this.files.value()?.find(x => x.id === f.id) ?? f; }
+  pct(f: ImportFileDto): number { return f.tablesTotal ? Math.floor(f.tablesDone / f.tablesTotal * 100) : 0; }
+  canRun(f: ImportFileDto, _d: ImportFileDetail): boolean { return !this.busy() && !this.isActive(f) && !this.mismatch(f); }
+
+  /** Why a HIS pack cannot load into the top-bar hospital: SetupID / ProjectID must match. Null when it can. */
+  mismatch(f: ImportFileDto): string | null {
+    if (!f.isHisPack) return null;
+    const h = this.target();
+    if (!h) return 'Select a hospital at the top of the screen.';
+    const file = `HIS SetupID ${f.hisSetupId} / ProjectID ${f.hisProjectId}`;
+    if (!h.hisSetupId || h.hisProjectId == null) return `This file is ${file}, but ${h.code} has no HIS SetupID / ProjectID. Set them on the hospital in Data Entry first.`;
+    if (h.hisSetupId.trim().toLowerCase() !== (f.hisSetupId ?? '').trim().toLowerCase() || h.hisProjectId !== f.hisProjectId)
+      return `This file is ${file}, but ${h.code} is HIS SetupID ${h.hisSetupId} / ProjectID ${h.hisProjectId}. Select the matching hospital at the top of the screen.`;
+    return null;
   }
 
-  async loadHisPreview(): Promise<void> {
-    const f = this.file();
-    if (!f) return;
-    const body = new FormData();
-    body.append('file', f);
-    this.busy.set(true);
-    this.error.set(null);
-    try {
-      const p = await firstValueFrom(this.http.post<ImportPreview>(`${apiV1}/data/import/preview`, body));
-      this.hisPreview.set(p);
-      this.hisHospital.set(p.suggestedHospital ?? '');
-    } catch (e) {
-      this.error.set(toApiError(e).message);
-      this.hisPreview.set(null);
-    } finally {
-      this.busy.set(false);
+  statusText(f: ImportFileDto): string {
+    if (f.status === 'RUNNING') return `${f.lastDryRun ? 'Validating' : 'Importing'} ${f.tablesDone}/${f.tablesTotal}${f.currentTable ? ' · ' + f.currentTable : ''}`;
+    if (f.status === 'QUEUED') {
+      const queue = (this.files.value() ?? []).filter(x => x.status === 'QUEUED').sort((a, b) => (a.queuedAt ?? '').localeCompare(b.queuedAt ?? ''));
+      const pos = queue.findIndex(x => x.id === f.id) + 1;
+      return `${f.lastDryRun ? 'Queued to validate' : 'Queued to import'}${pos > 0 ? ' · #' + pos : ''}`;
     }
+    return STATUS_TEXT[f.status] ?? f.status;
   }
-
-  async upload(dryRun: boolean): Promise<void> {
-    const f = this.file();
-    if (!f || !this.canProceed()) return;
-    const body = new FormData();
-    body.append('file', f);
-    body.append('dryRun', String(dryRun));
-    if (this.hisHospital()) body.append('hospital', this.hisHospital());
-    this.busy.set(true);
-    this.error.set(null);
-    this.startProgress(dryRun ? 'validate' : 'import');
-    try {
-      this.results.set(await firstValueFrom(this.http.post<ImportResult[]>(`${apiV1}/data/import`, body)));
-      this.dryRunShown.set(dryRun);
-      if (!dryRun) {
-        if (this.historyOpen()) this.history.reload();
-        void this.ctx.load(true);
-      }
-    } catch (e) {
-      this.error.set(toApiError(e).message);
-      this.results.set([]);
-    } finally {
-      this.stopProgress();
-      this.busy.set(false);
-    }
+  resultText(f: ImportFileDto): string {
+    if (this.isActive(f) || f.status === 'UPLOADED') return '—';
+    if (f.status === 'FAILED') return f.attempts > 1 ? `${f.attempts} attempts` : '—';
+    return `${this.fmt(f.rowsCreated)} new · ${this.fmt(f.rowsUpdated)} updated · ${this.fmt(f.rowsRejected)} rejected`;
   }
-
-  private startProgress(mode: 'validate' | 'import'): void {
-    this.elapsed.set(0);
-    this.uploading.set(mode);
-    const started = Date.now();
-    this.ticker = setInterval(() => this.elapsed.set(Date.now() - started), 400);
+  fileFacts(f: ImportFileDto): string {
+    return [formatBytes(f.sizeBytes), `${this.fmt(f.totalRows)} rows`, `${f.tablesTotal} table${f.tablesTotal === 1 ? '' : 's'}`,
+      f.isHisPack ? `HIS ${f.hisSetupId}/${f.hisProjectId}` : 'Template',
+      f.factsFrom ? `${f.factsFrom}${f.factsTo && f.factsTo !== f.factsFrom ? ' .. ' + f.factsTo : ''}` : null].filter(Boolean).join(' · ');
   }
-
-  private stopProgress(): void {
-    if (this.ticker) clearInterval(this.ticker);
-    this.ticker = null;
-    this.uploading.set(null);
-  }
-
-  /** Leaving the page cancels the request, so the browser asks first. */
-  warnLeaving(event: Event): void { event.preventDefault(); }
-
-  historyToggle(el: HTMLDetailsElement): void {
-    if (el.open) this.historyOpen.set(true);
-  }
-
+  when(v?: string | null): string { return v ? new Date(v.endsWith('Z') ? v : v + 'Z').toLocaleString() : ''; }
   fmt(n: number): string { return formatDec(String(n), 0); }
 
-  rejects(b: ImportBatchDto) { return download(this.http, `${apiV1}/data/imports/${b.id}/rejects`, `${b.entity}-rejects.csv`); }
+  async pick(ev: Event, input: HTMLInputElement): Promise<void> {
+    const picked = Array.from((ev.target as HTMLInputElement).files ?? []);
+    if (!picked.length) return;
+    this.error.set(null);
+    this.batch.set(null);
+    this.uploading.set(true);
+    try {
+      if (picked.length === 1) {
+        this.uploadText.set(`Uploading and reading ${picked[0].name}…`);
+        this.select(await this.uploadOne(picked[0]));
+        this.files.reload();
+        return;
+      }
+      await this.uploadMany(picked);
+    } catch (e) {
+      this.error.set(toApiError(e).message);
+    } finally {
+      this.uploading.set(false);
+      this.uploadText.set('');
+      input.value = '';
+    }
+  }
 
+  private uploadOne(f: File): Promise<ImportFileDetail> {
+    const body = new FormData();
+    body.append('file', f);
+    return firstValueFrom(this.http.post<ImportFileDetail>(`${apiV1}/data/files`, body));
+  }
+
+  /** Upload each file, then queue the ones for the selected hospital: catalogue first, then facts by date. */
+  private async uploadMany(picked: File[]): Promise<void> {
+    const ordered = [...picked].sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }));
+    const uploaded: ImportFileDto[] = [];
+    const failed: string[] = [];
+    for (const [i, f] of ordered.entries()) {
+      this.uploadText.set(`Uploading ${i + 1} of ${ordered.length}: ${f.name}…`);
+      try {
+        uploaded.push((await this.uploadOne(f)).file);
+      } catch (e) {
+        failed.push(`${f.name}: ${toApiError(e).message}`);
+      }
+    }
+    this.files.reload();
+    const hospital = this.ctx.hospitalParam();
+    const toQueue = uploaded.filter(f => {
+      const m = this.mismatch(f);
+      if (m) failed.push(`${f.fileName}: ${m}`);
+      return !m;
+    }).sort((a, b) => queueKey(a).localeCompare(queueKey(b), undefined, { numeric: true }));
+    let queued = 0;
+    for (const [i, f] of toQueue.entries()) {
+      this.uploadText.set(`Queuing ${i + 1} of ${toQueue.length}: ${f.fileName}…`);
+      try {
+        await firstValueFrom(this.api.post<ImportFileDto>(`data/files/${f.id}/import`, { hospital: hospital || null, dryRun: false }));
+        queued++;
+      } catch (e) {
+        failed.push(`${f.fileName}: ${toApiError(e).message}`);
+      }
+    }
+    this.batch.set({ total: picked.length, uploaded: uploaded.length, queued, failed });
+    this.files.reload();
+  }
+
+  async open(id: string): Promise<void> {
+    this.error.set(null);
+    try {
+      this.select(await firstValueFrom(this.api.get<ImportFileDetail>(`data/files/${id}`)));
+    } catch (e) {
+      this.error.set(toApiError(e).message);
+    }
+  }
+
+  private select(d: ImportFileDetail): void {
+    this.selected.set(d);
+  }
+
+  close(): void { this.selected.set(null); }
+
+  async run(f: ImportFileDto, dryRun: boolean): Promise<void> {
+    if (this.busy()) return;
+    this.busy.set(true);
+    this.error.set(null);
+    try {
+      await firstValueFrom(this.api.post<ImportFileDto>(`data/files/${f.id}/import`, { hospital: this.ctx.hospitalParam() || null, dryRun }));
+      this.files.reload();
+    } catch (e) {
+      this.error.set(toApiError(e).message);
+    } finally {
+      this.busy.set(false);
+    }
+  }
+
+  /** From the list: import into the top-bar hospital. A HIS pack for another hospital is refused. */
+  async quick(f: ImportFileDto): Promise<void> {
+    const mismatch = this.mismatch(f);
+    if (mismatch) { this.error.set(mismatch); return; }
+    const hospital = this.ctx.hospitalParam();
+    if (this.imported(f) && !confirm(`Import ${f.fileName} again${hospital ? ' into ' + hospital : ''}? Rows are matched on their keys, so existing rows are updated, not duplicated.`)) return;
+    if (this.busy()) return;
+    this.busy.set(true);
+    this.error.set(null);
+    try {
+      await firstValueFrom(this.api.post<ImportFileDto>(`data/files/${f.id}/import`, { hospital: hospital || null, dryRun: false }));
+      this.files.reload();
+    } catch (e) {
+      this.error.set(toApiError(e).message);
+    } finally {
+      this.busy.set(false);
+    }
+  }
+
+  async remove(f: ImportFileDto): Promise<void> {
+    if (!confirm(`Remove ${f.fileName} from the list? Data already imported stays.`)) return;
+    try {
+      await firstValueFrom(this.api.delete(`data/files/${f.id}`));
+      if (this.selected()?.file.id === f.id) this.selected.set(null);
+      this.files.reload();
+    } catch (e) {
+      this.error.set(toApiError(e).message);
+    }
+  }
+
+  rejects(r: ImportResult) { return download(this.http, `${apiV1}/data/imports/${r.batchId}/rejects`, `${r.entity}-rejects.csv`); }
+}
+
+/** Queue order: catalogue packs first, then facts by their first day, then by name. */
+function queueKey(f: ImportFileDto): string {
+  return `${f.pack === 'catalogue' ? '0' : '1'}|${f.factsFrom ?? '9999-99-99'}|${f.fileName}`;
+}
+
+function formatBytes(n: number): string {
+  if (!n) return '0 B';
+  const units = ['B', 'KB', 'MB', 'GB'];
+  const i = Math.min(units.length - 1, Math.floor(Math.log(n) / Math.log(1024)));
+  return `${(n / 1024 ** i).toFixed(i ? 1 : 0)} ${units[i]}`;
+}
+
+// ── Storage ─────────────────────────────────────────────────────────────────────
+
+interface StorageTable { table: string; group: string; rows: number; bytes: number; dataBytes: number; indexBytes: number; }
+interface StoragePeriodEntity { entity: string; rows: number; estimatedBytes: number; }
+interface StoragePeriod {
+  id: string; code: string; startDate: string; endDate: string; status: string; run?: string | null; runStatus?: string | null;
+  entities: StoragePeriodEntity[]; factRows: number; factBytes: number; resultRows: number; resultBytes: number;
+}
+interface StorageDto {
+  hospital: string; databaseBytes: number; usedBytes: number; tables: StorageTable[];
+  factEntities: { entity: string; label: string; group: string }[]; periods: StoragePeriod[];
+}
+interface StorageGroupRow { group: string; tables: number; rows: number; bytes: number; share: number; }
+
+const GROUP_ORDER = ['Facts', 'Catalogue', 'Calculation results', 'Import files', 'History', 'System'];
+const GROUP_NOTE: Record<string, string> = {
+  Facts: 'Monthly HIS data: encounters, services, activity, revenue, refunds, consumption, staff time, ledger.',
+  Catalogue: 'Hospitals, departments, cost centres, procedures, resources, rates and the rest of the costing model.',
+  'Calculation results': 'What calculation runs wrote. Removed with the run.',
+  'Import files': 'Uploaded files kept for re-import, and import batches.',
+  History: 'Earlier versions of catalogue rows (temporal history).',
+  System: 'Users, audit trail, assistant and migration tables.',
+};
+
+/** How much the database holds: by table and group (all hospitals), and the selected hospital's facts per period. */
+@Component({
+  selector: 'v-storage',
+  imports: [...UI],
+  template: `
+    <v-page title="Storage" purpose="How much the database holds. Storage by group covers every hospital; the period summary is for the selected hospital and is estimated from each table's average row size.">
+      <v-state [loading]="res.isLoading() && !res.value()" [error]="res.error()">
+        @if (res.value(); as d) {
+          <div class="grid tiles">
+            <v-tile label="Database size" [value]="size(d.databaseBytes)" unit="id" [note]="size(d.usedBytes) + ' used'" />
+            @for (g of groupTiles(); track g.group) {
+              <v-tile [label]="g.group" [value]="size(g.bytes)" unit="id" [note]="fmt(g.rows) + ' rows in ' + g.tables + ' tables'" />
+            }
+          </div>
+
+          <section class="card" style="margin-top:14px">
+            <h2>By group</h2>
+            <v-table [rows]="groups()" [columns]="groupCols" caption="Storage by group" />
+          </section>
+
+          <section class="card">
+            <h2>Facts by period · {{ d.hospital }}</h2>
+            <p class="muted">Facts belong to a period by encounter admit date, as on each period's detail screen. Calculation results are the rows the period's runs wrote.</p>
+            <v-table [rows]="d.periods" [columns]="periodCols()" [total]="periodTotal()" caption="Facts by period" empty="This hospital has no periods." />
+          </section>
+
+        }
+      </v-state>
+    </v-page>
+  `,
+})
+export class Storage {
+  private ctx = inject(RunContext);
+  res = apiResource<StorageDto>(() => this.ctx.hospitalParam() ? 'storage' : null, () => ({ hospital: this.ctx.hospitalParam() }));
+  size = formatBytes;
+  fmt(n: number): string { return formatDec(String(n), 0); }
+
+  constructor() { void this.ctx.load(); }
+
+  groups = computed<StorageGroupRow[]>(() => {
+    const t = this.res.value()?.tables ?? [];
+    const total = t.reduce((s, x) => s + x.bytes, 0) || 1;
+    const names = [...new Set(t.map(x => x.group))].sort((a, b) => GROUP_ORDER.indexOf(a) - GROUP_ORDER.indexOf(b));
+    return names.map(g => {
+      const rows = t.filter(x => x.group === g);
+      const bytes = rows.reduce((s, x) => s + x.bytes, 0);
+      return { group: g, tables: rows.length, rows: rows.reduce((s, x) => s + x.rows, 0), bytes, share: bytes / total * 100 };
+    });
+  });
+  groupTiles = computed(() => this.groups().filter(g => ['Facts', 'Catalogue', 'Calculation results'].includes(g.group)));
+
+  groupCols: Col<StorageGroupRow>[] = [
+    { key: 'group', label: 'Group', sub: r => GROUP_NOTE[r.group] ?? null },
+    { key: 'tables', label: 'Tables', type: 'num', dp: 0 },
+    { key: 'rows', label: 'Rows', type: 'num', dp: 0 },
+    { key: 'bytes', label: 'Storage', value: r => formatBytes(r.bytes) },
+    { key: 'share', label: 'Share', type: 'bar' },
+  ];
+
+  private rowsOf(p: StoragePeriod, ...entities: string[]): number {
+    return (p.entities ?? []).filter(e => entities.includes(e.entity)).reduce((s, e) => s + e.rows, 0);
+  }
+  /** Period columns also render the totals row, whose object has the column key instead of entities. */
+  private count(key: string, ...entities: string[]): (r: StoragePeriod) => number {
+    return r => r.entities ? this.rowsOf(r, ...entities) : Number((r as unknown as Record<string, unknown>)[key] ?? 0);
+  }
+  periodCols = computed<Col<StoragePeriod>[]>(() => [
+    { key: 'code', label: 'Period', link: r => `/periods/${r.id}`, sub: r => `${r.startDate} – ${r.endDate}`, minWidth: '12rem' },
+    { key: 'run', label: 'Calculation run', value: r => r.run ?? 'Not run', link: r => r.run ? `/runs/${r.run}` : null, sub: r => r.runStatus ?? null },
+    { key: 'enc', label: 'Encounters', type: 'num', dp: 0, value: this.count('enc', 'Encounter') },
+    { key: 'svc', label: 'Services', type: 'num', dp: 0, value: this.count('svc', 'EncounterService') },
+    { key: 'act', label: 'Activity', type: 'num', dp: 0, value: this.count('act', 'ActivityTransaction') },
+    { key: 'rev', label: 'Revenue', type: 'num', dp: 0, value: this.count('rev', 'RevenueTransaction') },
+    { key: 'cons', label: 'Consumption', type: 'num', dp: 0, value: this.count('cons', 'ConsumptionItem') },
+    { key: 'staff', label: 'Staff time', type: 'num', dp: 0, value: this.count('staff', 'StaffTime') },
+    { key: 'other', label: 'Other', type: 'num', dp: 0, value: this.count('other', 'Patient', 'RefundTransaction', 'InvoicePackageItem', 'GLPosting', 'DriverVolume') },
+    { key: 'factRows', label: 'Fact records', type: 'num', dp: 0 },
+    { key: 'factBytes', label: 'Fact storage', value: r => r.factRows ? formatBytes(r.factBytes) : '—' },
+    { key: 'resultRows', label: 'Result records', type: 'num', dp: 0 },
+    { key: 'resultBytes', label: 'Result storage', value: r => r.resultRows ? formatBytes(r.resultBytes) : '—' },
+  ]);
+  periodTotal = computed(() => {
+    const ps = this.res.value()?.periods ?? [];
+    if (!ps.length) return null;
+    const sum = (f: (p: StoragePeriod) => number) => ps.reduce((s, p) => s + f(p), 0);
+    return {
+      enc: sum(p => this.rowsOf(p, 'Encounter')), svc: sum(p => this.rowsOf(p, 'EncounterService')), act: sum(p => this.rowsOf(p, 'ActivityTransaction')),
+      rev: sum(p => this.rowsOf(p, 'RevenueTransaction')), cons: sum(p => this.rowsOf(p, 'ConsumptionItem')), staff: sum(p => this.rowsOf(p, 'StaffTime')),
+      other: sum(p => this.rowsOf(p, 'Patient', 'RefundTransaction', 'InvoicePackageItem', 'GLPosting', 'DriverVolume')),
+      factRows: sum(p => p.factRows), factBytes: formatBytes(sum(p => p.factBytes)), resultRows: sum(p => p.resultRows), resultBytes: formatBytes(sum(p => p.resultBytes)),
+    };
+  });
 }

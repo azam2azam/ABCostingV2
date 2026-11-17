@@ -98,6 +98,8 @@ if ($Only -in 'both', 'api') {
     # Development settings never go to a server.
     Get-ChildItem $apiOut -Filter 'appsettings.Development.json' | Remove-Item -Force
     if (-not (Test-Path (Join-Path $apiOut 'web.config'))) { throw 'dotnet publish did not produce web.config.' }
+    # Without this, IIS WebDAV answers PUT/DELETE with 405 (see src/Verita.Api/web.config).
+    if ((Get-Content (Join-Path $apiOut 'web.config') -Raw) -notmatch 'WebDAVModule') { throw 'API web.config does not remove WebDAV; PUT and DELETE would fail with 405 on IIS.' }
     if (-not (Test-Path (Join-Path $apiOut 'Verita.Api.dll'))) { throw 'dotnet publish did not produce Verita.Api.dll.' }
 
     Step 'Zipping API'

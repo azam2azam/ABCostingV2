@@ -3,6 +3,7 @@ services:
     image: mcr.microsoft.com/mssql/server:2022-latest
     platform: linux/amd64
     container_name: verita-sql
+    restart: unless-stopped
     # Match Fly verita-abc-sql: shared-cpu-2x @ 2048MB (leave ~512MB under the
     # container cap so SQL can allocate lock blocks / buffers at startup).
     cpus: 2.0
@@ -28,6 +29,7 @@ services:
       context: .
       dockerfile: Dockerfile.api
     container_name: verita-api
+    restart: unless-stopped
     # Match Fly verita-abc-api: shared-cpu-1x @ 2048MB
     cpus: 1.0
     mem_limit: 2048m
@@ -52,6 +54,7 @@ services:
       context: .
       dockerfile: Dockerfile.web
     container_name: verita-web
+    restart: unless-stopped
     # Match Fly verita-abc-web: shared-cpu-1x @ 256MB
     cpus: 1.0
     mem_limit: 256m

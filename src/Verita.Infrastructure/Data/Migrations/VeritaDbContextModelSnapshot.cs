@@ -966,6 +966,124 @@ namespace Verita.Infrastructure.Data.Migrations
                         });
                 });
 
+            modelBuilder.Entity("Verita.Domain.Entities.ConsumptionItem", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<string>("Barcode")
+                        .HasMaxLength(200)
+                        .HasColumnType("nvarchar(200)");
+
+                    b.Property<decimal?>("BilledAmount")
+                        .HasPrecision(19, 4)
+                        .HasColumnType("decimal(19,4)");
+
+                    b.Property<string>("Category")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("nvarchar(200)");
+
+                    b.Property<decimal?>("ConversionFactor")
+                        .HasPrecision(19, 6)
+                        .HasColumnType("decimal(19,6)");
+
+                    b.Property<string>("CostCentreCode")
+                        .HasMaxLength(200)
+                        .HasColumnType("nvarchar(200)");
+
+                    b.Property<string>("Description")
+                        .HasMaxLength(200)
+                        .HasColumnType("nvarchar(max)");
+
+                    b.Property<Guid?>("EncounterId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<string>("HisEncounterNo")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("nvarchar(200)");
+
+                    b.Property<decimal?>("HisUnitPrice")
+                        .HasPrecision(19, 6)
+                        .HasColumnType("decimal(19,6)");
+
+                    b.Property<Guid>("HospitalId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<string>("ItemKey")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("nvarchar(200)");
+
+                    b.Property<string>("ItemKeySystem")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("nvarchar(200)");
+
+                    b.Property<string>("LinkMethod")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("nvarchar(200)");
+
+                    b.Property<string>("LocationId")
+                        .HasMaxLength(200)
+                        .HasColumnType("nvarchar(200)");
+
+                    b.Property<DateTime>("OccurredAt")
+                        .HasColumnType("datetime2(3)");
+
+                    b.Property<string>("OracleItemCode")
+                        .HasMaxLength(200)
+                        .HasColumnType("nvarchar(200)");
+
+                    b.Property<int?>("OtReservationId")
+                        .HasColumnType("int");
+
+                    b.Property<decimal?>("PrescribedQty")
+                        .HasPrecision(19, 6)
+                        .HasColumnType("decimal(19,6)");
+
+                    b.Property<decimal>("Quantity")
+                        .HasPrecision(19, 6)
+                        .HasColumnType("decimal(19,6)");
+
+                    b.Property<string>("ServiceRef")
+                        .HasMaxLength(200)
+                        .HasColumnType("nvarchar(200)");
+
+                    b.Property<string>("SourceRef")
+                        .IsRequired()
+                        .HasMaxLength(120)
+                        .HasColumnType("nvarchar(120)");
+
+                    b.Property<string>("SourceSystem")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("nvarchar(200)");
+
+                    b.Property<string>("SourceTable")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("nvarchar(200)");
+
+                    b.Property<string>("Uom")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("nvarchar(200)");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("EncounterId");
+
+                    b.HasIndex("HospitalId", "HisEncounterNo");
+
+                    b.HasIndex("HospitalId", "SourceRef")
+                        .IsUnique();
+
+                    b.ToTable("ConsumptionItem", (string)null);
+                });
+
             modelBuilder.Entity("Verita.Domain.Entities.CostCenter", b =>
                 {
                     b.Property<Guid>("Id")
@@ -2487,6 +2605,145 @@ namespace Verita.Infrastructure.Data.Migrations
                     b.HasKey("Id");
 
                     b.ToTable("ImportBatch", (string)null);
+                });
+
+            modelBuilder.Entity("Verita.Domain.Entities.ImportFile", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<int>("Attempts")
+                        .HasColumnType("int");
+
+                    b.Property<string>("ContextJson")
+                        .HasMaxLength(200)
+                        .HasColumnType("nvarchar(max)");
+
+                    b.Property<string>("CurrentTable")
+                        .HasMaxLength(200)
+                        .HasColumnType("nvarchar(200)");
+
+                    b.Property<string>("DetailJson")
+                        .HasMaxLength(200)
+                        .HasColumnType("nvarchar(max)");
+
+                    b.Property<string>("ErrorMessage")
+                        .HasMaxLength(200)
+                        .HasColumnType("nvarchar(max)");
+
+                    b.Property<string>("FactsFrom")
+                        .HasMaxLength(200)
+                        .HasColumnType("nvarchar(200)");
+
+                    b.Property<string>("FactsTo")
+                        .HasMaxLength(200)
+                        .HasColumnType("nvarchar(200)");
+
+                    b.Property<string>("FileName")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("nvarchar(200)");
+
+                    b.Property<DateTime?>("FinishedAt")
+                        .HasColumnType("datetime2(3)");
+
+                    b.Property<int?>("HisProjectId")
+                        .HasColumnType("int");
+
+                    b.Property<string>("HisSetupId")
+                        .HasMaxLength(200)
+                        .HasColumnType("nvarchar(200)");
+
+                    b.Property<string>("Hospital")
+                        .HasMaxLength(200)
+                        .HasColumnType("nvarchar(200)");
+
+                    b.Property<bool>("IsHisPack")
+                        .HasColumnType("bit");
+
+                    b.Property<bool>("LastDryRun")
+                        .HasColumnType("bit");
+
+                    b.Property<string>("Pack")
+                        .HasMaxLength(200)
+                        .HasColumnType("nvarchar(200)");
+
+                    b.Property<DateTime?>("QueuedAt")
+                        .HasColumnType("datetime2(3)");
+
+                    b.Property<int>("RowsCreated")
+                        .HasColumnType("int");
+
+                    b.Property<int>("RowsRejected")
+                        .HasColumnType("int");
+
+                    b.Property<int>("RowsUnchanged")
+                        .HasColumnType("int");
+
+                    b.Property<int>("RowsUpdated")
+                        .HasColumnType("int");
+
+                    b.Property<string>("RunBy")
+                        .HasMaxLength(200)
+                        .HasColumnType("nvarchar(200)");
+
+                    b.Property<string>("Sha256")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("nvarchar(64)");
+
+                    b.Property<long>("SizeBytes")
+                        .HasColumnType("bigint");
+
+                    b.Property<DateTime?>("StartedAt")
+                        .HasColumnType("datetime2(3)");
+
+                    b.Property<string>("Status")
+                        .IsRequired()
+                        .HasMaxLength(32)
+                        .HasColumnType("nvarchar(32)");
+
+                    b.Property<int>("TablesDone")
+                        .HasColumnType("int");
+
+                    b.Property<int>("TablesTotal")
+                        .HasColumnType("int");
+
+                    b.Property<int>("TotalRows")
+                        .HasColumnType("int");
+
+                    b.Property<DateTime>("UploadedAt")
+                        .HasColumnType("datetime2(3)");
+
+                    b.Property<string>("UploadedBy")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("nvarchar(200)");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("UploadedAt");
+
+                    b.ToTable("ImportFile", null, t =>
+                        {
+                            t.HasCheckConstraint("CK_ImportFile_ContextJson_Json", "[ContextJson] IS NULL OR ISJSON([ContextJson]) = 1");
+
+                            t.HasCheckConstraint("CK_ImportFile_DetailJson_Json", "[DetailJson] IS NULL OR ISJSON([DetailJson]) = 1");
+                        });
+                });
+
+            modelBuilder.Entity("Verita.Domain.Entities.ImportFileContent", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<byte[]>("Content")
+                        .IsRequired()
+                        .HasColumnType("varbinary(max)");
+
+                    b.HasKey("Id");
+
+                    b.ToTable("ImportFileContent", (string)null);
                 });
 
             modelBuilder.Entity("Verita.Domain.Entities.Insurer", b =>
@@ -4594,6 +4851,103 @@ namespace Verita.Infrastructure.Data.Migrations
                             }));
                 });
 
+            modelBuilder.Entity("Verita.Domain.Entities.StaffTime", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<string>("Basis")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("nvarchar(200)");
+
+                    b.Property<string>("CostCentreCode")
+                        .HasMaxLength(200)
+                        .HasColumnType("nvarchar(200)");
+
+                    b.Property<Guid?>("EncounterId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<string>("HisEncounterNo")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("nvarchar(200)");
+
+                    b.Property<Guid>("HospitalId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<string>("LinkMethod")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("nvarchar(200)");
+
+                    b.Property<decimal>("Minutes")
+                        .HasPrecision(19, 6)
+                        .HasColumnType("decimal(19,6)");
+
+                    b.Property<DateTime>("OccurredAt")
+                        .HasColumnType("datetime2(3)");
+
+                    b.Property<int?>("OtReservationId")
+                        .HasColumnType("int");
+
+                    b.Property<Guid?>("ProviderId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<string>("ServiceRef")
+                        .HasMaxLength(200)
+                        .HasColumnType("nvarchar(200)");
+
+                    b.Property<string>("SourceRef")
+                        .IsRequired()
+                        .HasMaxLength(120)
+                        .HasColumnType("nvarchar(120)");
+
+                    b.Property<string>("SourceSystem")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("nvarchar(200)");
+
+                    b.Property<string>("SourceTable")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("nvarchar(200)");
+
+                    b.Property<string>("StaffId")
+                        .HasMaxLength(200)
+                        .HasColumnType("nvarchar(200)");
+
+                    b.Property<string>("StaffRole")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("nvarchar(200)");
+
+                    b.Property<string>("StaffType")
+                        .HasMaxLength(200)
+                        .HasColumnType("nvarchar(200)");
+
+                    b.Property<decimal?>("Volume")
+                        .HasPrecision(19, 6)
+                        .HasColumnType("decimal(19,6)");
+
+                    b.Property<string>("VolumeUom")
+                        .HasMaxLength(200)
+                        .HasColumnType("nvarchar(200)");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("EncounterId");
+
+                    b.HasIndex("ProviderId");
+
+                    b.HasIndex("HospitalId", "HisEncounterNo");
+
+                    b.HasIndex("HospitalId", "SourceRef")
+                        .IsUnique();
+
+                    b.ToTable("StaffTime", (string)null);
+                });
+
             modelBuilder.Entity("Verita.Domain.Entities.User", b =>
                 {
                     b.Property<Guid>("Id")
@@ -4996,6 +5350,20 @@ namespace Verita.Infrastructure.Data.Migrations
                         .IsRequired();
                 });
 
+            modelBuilder.Entity("Verita.Domain.Entities.ConsumptionItem", b =>
+                {
+                    b.HasOne("Verita.Domain.Entities.Encounter", null)
+                        .WithMany()
+                        .HasForeignKey("EncounterId")
+                        .OnDelete(DeleteBehavior.NoAction);
+
+                    b.HasOne("Verita.Domain.Entities.Hospital", null)
+                        .WithMany()
+                        .HasForeignKey("HospitalId")
+                        .OnDelete(DeleteBehavior.NoAction)
+                        .IsRequired();
+                });
+
             modelBuilder.Entity("Verita.Domain.Entities.CostCenter", b =>
                 {
                     b.HasOne("Verita.Domain.Entities.Department", null)
@@ -5325,6 +5693,15 @@ namespace Verita.Infrastructure.Data.Migrations
                         .WithMany()
                         .HasForeignKey("PeriodId")
                         .OnDelete(DeleteBehavior.NoAction)
+                        .IsRequired();
+                });
+
+            modelBuilder.Entity("Verita.Domain.Entities.ImportFileContent", b =>
+                {
+                    b.HasOne("Verita.Domain.Entities.ImportFile", null)
+                        .WithOne()
+                        .HasForeignKey("Verita.Domain.Entities.ImportFileContent", "Id")
+                        .OnDelete(DeleteBehavior.Cascade)
                         .IsRequired();
                 });
 
@@ -5719,6 +6096,25 @@ namespace Verita.Infrastructure.Data.Migrations
                         .HasForeignKey("ScenarioId")
                         .OnDelete(DeleteBehavior.Cascade)
                         .IsRequired();
+                });
+
+            modelBuilder.Entity("Verita.Domain.Entities.StaffTime", b =>
+                {
+                    b.HasOne("Verita.Domain.Entities.Encounter", null)
+                        .WithMany()
+                        .HasForeignKey("EncounterId")
+                        .OnDelete(DeleteBehavior.NoAction);
+
+                    b.HasOne("Verita.Domain.Entities.Hospital", null)
+                        .WithMany()
+                        .HasForeignKey("HospitalId")
+                        .OnDelete(DeleteBehavior.NoAction)
+                        .IsRequired();
+
+                    b.HasOne("Verita.Domain.Entities.Provider", null)
+                        .WithMany()
+                        .HasForeignKey("ProviderId")
+                        .OnDelete(DeleteBehavior.NoAction);
                 });
 
             modelBuilder.Entity("Verita.Domain.Entities.Variance", b =>

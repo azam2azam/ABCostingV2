@@ -89,6 +89,7 @@ public static class Security
         ]),
         new("Catalogue", [
             new("departments", "Departments", "costing.view", "The hospital's departments from the catalogue. When a calculation has been run for the period, cases, revenue and cost are shown too."),
+            new("doctors", "Doctors", "costing.view", "The hospital's doctors from the catalogue, with their home department and HIS clinics. When a calculation has been run for the period, cases, revenue and cost are shown too."),
             new("cost-centres", "Cost Centres", "masterdata.view", "The financial units money lands in, their step-down sequence and their closing balances."),
             new("packages", "Packages", "costing.view", "Bundled episodes: cost, revenue, variance and margin against the contracted price."),
             new("procedures", "Procedure/Activity", "costing.view", "Standard and actual cost per procedure/activity, fully decomposed into its cost components."),
@@ -111,6 +112,7 @@ public static class Security
         new("Data", [
             new("data-entry", "Data Entry", "masterdata.view", "Add and edit hospitals, cost centres, resources, rates, activities, procedures and the rest of the costing model."),
             new("data-import", "Data Import", "masterdata.edit", "Download templates and upload raw data files; every row is validated and bad rows are returned with the reason."),
+            new("storage", "Storage", "masterdata.view", "How much the database holds: storage by table for catalogue, facts and calculation results, and the selected hospital's fact records per period."),
         ]),
         new("System", [
             new("administration", "Administration", "admin.view", "Users, roles, hospital and department scopes, and the permission matrix."),

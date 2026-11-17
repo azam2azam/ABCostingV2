@@ -1504,7 +1504,7 @@ export class Periods {
   });
   cols = computed<Col<PeriodRow>[]>(() => {
     const cols: Col<PeriodRow>[] = [
-      { key: 'code', label: 'Period' }, { key: 'startDate', label: 'From' }, { key: 'endDate', label: 'To' },
+      { key: 'code', label: 'Period', link: r => `/periods/${r.id}` }, { key: 'startDate', label: 'From' }, { key: 'endDate', label: 'To' },
       { key: 'days', label: 'Days', type: 'num', dp: 0 }, { key: 'status', label: 'Status', type: 'chip' },
       { key: 'costingVersion', label: 'Costing model', value: r => r.costingVersion ?? '—' },
       { key: 'run', label: 'Calculation run', value: r => r.run ?? 'Not run', link: r => r.run ? `/runs/${r.run}` : '/runs' },
@@ -1540,6 +1540,135 @@ export class Periods {
       this.busy.set(false);
     }
   }
+}
+
+interface PeriodFactEntity {
+  entity: string; label: string; group: string; rows: number; estimatedBytes: number; tableRows: number; tableBytes: number;
+  deletable: boolean; alsoDeletes: string[]; note: string | null;
+}
+interface PeriodFactsDto {
+  periodId: string; period: string; hospital: string; startDate: string; endDate: string; status: string;
+  entities: PeriodFactEntity[]; totalRows: number; totalEstimatedBytes: number;
+  runs: { code: string; status: string; costingVersion: string | null }[]; blocker: string | null;
+}
+
+/** Facts held for one hospital's period, per entity, with deletion once no calculation run uses them. */
+@Component({
+  selector: 'v-period-detail',
+  imports: [...UI, RouterLink],
+  template: `
+    <v-state [loading]="res.isLoading() && !res.value()" [error]="res.error()">
+      @if (res.value(); as d) {
+        <v-page [title]="'Period ' + d.period" [purpose]="d.hospital + ' · ' + d.startDate + ' to ' + d.endDate + ' · ' + d.status + '. Facts belong to the period by encounter admit date.'">
+          <div actions class="row">
+            <a class="btn" routerLink="/periods" queryParamsHandling="preserve">Back to periods</a>
+            @if (canEdit()) {
+              <button class="btn danger" type="button" (click)="remove(null)" [disabled]="busy() || !!d.blocker || !d.totalRows">Delete all facts</button>
+            }
+          </div>
+          @if (message()) { <p class="notice" [class.bad]="error()">{{ message() }}</p> }
+          @if (d.blocker) {
+            <div class="notice warn"><strong>Facts cannot be deleted.</strong> {{ d.blocker }}
+              <ul>@for (r of d.runs; track r.code) {
+                <li><a [routerLink]="'/runs/' + r.code">{{ r.code }}</a> · {{ r.status }}@if (r.costingVersion) { · {{ r.costingVersion }} }</li>
+              }</ul>
+            </div>
+          }
+          <div class="grid tiles" style="margin-bottom:14px">
+            <v-tile label="Fact records" [value]="d.totalRows" unit="num" />
+            <v-tile label="Storage (estimated)" [value]="size(d.totalEstimatedBytes)" unit="id" note="Share of each table's data and indexes" />
+            <v-tile label="Encounters" [value]="count(d, 'Encounter')" unit="num" />
+            <v-tile label="Calculation runs" [value]="d.runs.length" unit="num" [note]="d.runs.length ? 'Delete them before the facts' : 'None — facts can be deleted'" />
+          </div>
+          <section class="card">
+            <h2>Facts by entity</h2>
+            <v-table [rows]="d.entities" [columns]="cols()" caption="Facts by entity" />
+          </section>
+        </v-page>
+      }
+    </v-state>
+  `,
+  styles: `.btn.danger { border-color: var(--bad); color: var(--bad); } .btn.danger:not(:disabled):hover { background: var(--bad); color: #fff; }`,
+})
+export class PeriodDetail {
+  id = input.required<string>();
+  private api = inject(Api);
+  private auth = inject(Auth);
+  private ctx = inject(RunContext);
+  busy = signal(false);
+  error = signal(false);
+  message = signal<string | null>(null);
+  canEdit = computed(() => this.auth.can('masterdata.edit'));
+  res = apiResource<PeriodFactsDto>(
+    () => this.ctx.hospitalParam() ? `periods/${this.id()}/facts` : null,
+    () => ({ hospital: this.ctx.hospitalParam() }));
+  size = formatBytes;
+  count(d: PeriodFactsDto, entity: string): number { return d.entities.find(e => e.entity === entity)?.rows ?? 0; }
+  cols = computed<Col<PeriodFactEntity>[]>(() => {
+    const blocked = !!this.res.value()?.blocker;
+    const cols: Col<PeriodFactEntity>[] = [
+      { key: 'label', label: 'Entity', sub: r => r.note },
+      { key: 'group', label: 'Group', type: 'chip' },
+      { key: 'rows', label: 'Records', type: 'num', dp: 0 },
+      { key: 'estimatedBytes', label: 'Storage (est.)', value: r => r.rows ? formatBytes(r.estimatedBytes) : '—' },
+      { key: 'share', label: 'Of whole table', value: r => r.tableRows ? `${pctText(r.rows, r.tableRows)} of ${r.tableRows.toLocaleString()} rows (${formatBytes(r.tableBytes)})` : '—' },
+      { key: 'alsoDeletes', label: 'Deleting also removes', value: r => r.alsoDeletes.length ? r.alsoDeletes.map(x => this.labelOf(x)).join(', ') : '—', sortable: false },
+    ];
+    if (this.canEdit()) {
+      cols.push({
+        key: 'delete', label: '', type: 'button', sortable: false,
+        button: r => r.deletable && r.rows > 0 && !blocked ? 'Delete' : null,
+        onButton: r => void this.remove(r),
+      });
+    }
+    return cols;
+  });
+  private labelOf(entity: string): string {
+    return this.res.value()?.entities.find(e => e.entity === entity)?.label.toLowerCase() ?? entity;
+  }
+  async remove(row: PeriodFactEntity | null): Promise<void> {
+    const d = this.res.value();
+    const hospital = this.ctx.hospitalParam();
+    if (!d || !hospital || this.busy()) return;
+    if (row) {
+      const extra = row.alsoDeletes.filter(x => this.res.value()?.entities.find(e => e.entity === x)?.rows);
+      const also = extra.length ? `\n\nThis also deletes: ${extra.map(x => this.labelOf(x)).join(', ')}.` : '';
+      if (!confirm(`Delete ${row.rows.toLocaleString()} ${row.label.toLowerCase()} of ${d.hospital} ${d.period}?${also}\n\nThis cannot be undone. Re-import the facts to restore them.`)) return;
+    } else {
+      const typed = prompt(`Delete ALL ${d.totalRows.toLocaleString()} fact records of ${d.hospital} ${d.period}?\n\nEncounters, patients only in this period, services, activity, revenue, refunds, package items, GL postings and driver volumes are removed. This cannot be undone.\n\nType the period name (${d.period}) to confirm.`);
+      if (typed === null) return;
+      if (typed.trim() !== d.period) { this.error.set(true); this.message.set('The period name did not match. Nothing was deleted.'); return; }
+    }
+    this.busy.set(true);
+    this.error.set(false);
+    this.message.set(row ? `Deleting ${row.label.toLowerCase()}…` : 'Deleting all facts…');
+    try {
+      const done = await firstValueFrom(this.api.deleteWith<{ entity: string; rows: number }[]>(
+        `periods/${this.id()}/facts`, { hospital, entity: row?.entity }));
+      const removed = done.filter(x => x.rows > 0);
+      this.message.set(removed.length
+        ? `Deleted ${removed.map(x => `${x.rows.toLocaleString()} ${this.labelOf(x.entity)}`).join(', ')}.`
+        : 'Nothing to delete.');
+      this.res.reload();
+    } catch (err) {
+      this.error.set(true);
+      this.message.set(toApiError(err).message);
+    } finally {
+      this.busy.set(false);
+    }
+  }
+}
+
+function formatBytes(n: number): string {
+  if (!n) return '0 B';
+  const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+  const i = Math.min(units.length - 1, Math.floor(Math.log(n) / Math.log(1024)));
+  return `${(n / 1024 ** i).toFixed(i ? 1 : 0)} ${units[i]}`;
+}
+
+function pctText(part: number, whole: number): string {
+  const p = whole ? (part / whole) * 100 : 0;
+  return `${p < 1 && p > 0 ? p.toFixed(2) : p.toFixed(1)}%`;
 }
 
 /** Mirrors Catalogue.IsRunDeletable: results under a published costing model are kept. */

@@ -149,6 +149,42 @@ public sealed class RunWorker(RunQueue queue, IServiceScopeFactory scopes, ILogg
     }
 }
 
+public sealed class ImportQueue
+{
+    private readonly Channel<Verita.Infrastructure.DataHub.ImportFileJob> _channel = Channel.CreateUnbounded<Verita.Infrastructure.DataHub.ImportFileJob>();
+    public ValueTask EnqueueAsync(Verita.Infrastructure.DataHub.ImportFileJob job) => _channel.Writer.WriteAsync(job);
+    public IAsyncEnumerable<Verita.Infrastructure.DataHub.ImportFileJob> ReadAllAsync(CancellationToken ct) => _channel.Reader.ReadAllAsync(ct);
+}
+
+/// <summary>Validates / imports uploaded files one at a time, off the request. Progress and outcome live on ImportFile.</summary>
+public sealed class ImportWorker(ImportQueue queue, IServiceScopeFactory scopes, ILogger<ImportWorker> log) : BackgroundService
+{
+    protected override async Task ExecuteAsync(CancellationToken stoppingToken)
+    {
+        try
+        {
+            using var scope = scopes.CreateScope();
+            await scope.ServiceProvider.GetRequiredService<Verita.Infrastructure.DataHub.ImportFileService>().RecoverInterruptedAsync(stoppingToken);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            log.LogError(ex, "Could not mark interrupted import files");
+        }
+        await foreach (var job in queue.ReadAllAsync(stoppingToken))
+        {
+            try
+            {
+                using var scope = scopes.CreateScope();
+                await scope.ServiceProvider.GetRequiredService<Verita.Infrastructure.DataHub.ImportFileService>().RunAsync(job, stoppingToken);
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                log.LogError(ex, "Import file {FileId} could not be processed", job.FileId);
+            }
+        }
+    }
+}
+
 /// <summary>
 /// Every DTO property is always serialised, so the OpenAPI document marks them all required and
 /// the generated TypeScript types (NG-11) are exact rather than all-optional.

@@ -98,6 +98,11 @@ export class Api {
     return this.http.delete<void>(`${this.base}/${path}`);
   }
 
+  /** A DELETE with query parameters that returns a body. */
+  deleteWith<T>(path: string, params?: Params): Observable<T> {
+    return this.http.delete<T>(`${this.base}/${path}`, { params: this.params(params) });
+  }
+
   /** A scoped read: ?hospital=&period= (ARCH-14). */
   run<T>(path: string, scope: Params, params?: Params): Observable<Envelope<T>> {
     return this.get<Envelope<T>>(path, { ...params, ...scope });

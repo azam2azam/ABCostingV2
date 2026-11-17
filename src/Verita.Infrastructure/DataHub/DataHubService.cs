@@ -188,11 +188,23 @@ public sealed class DataHubService(IDbContextFactory<VeritaDbContext> factory, I
             .Where(m => m.FromId != m.ToId).DistinctBy(m => m.FromId).ToList();
         if (moves.Count == 0) return;
         var json = JsonSerializer.Serialize(moves);
-        foreach (var table in new[] { "ActivityTransaction", "EncounterService", "RevenueTransaction", "RefundTransaction", "InvoicePackageItem" })
+        foreach (var table in new[] { "ActivityTransaction", "EncounterService", "RevenueTransaction", "RefundTransaction", "InvoicePackageItem", "ConsumptionItem", "StaffTime" })
             await db.Database.ExecuteSqlRawAsync(
                 $"UPDATE t SET EncounterId = m.ToId FROM [{table}] t JOIN OPENJSON({{0}}) WITH (FromId uniqueidentifier, ToId uniqueidentifier) m ON t.EncounterId = m.FromId", [json], ct);
         await db.Database.ExecuteSqlRawAsync(
             "DELETE e FROM [Encounter] e JOIN OPENJSON({0}) WITH (FromId uniqueidentifier) m ON e.Id = m.FromId", [json], ct);
+    }
+
+    /// <summary>
+    /// Consumption and staff time can arrive before their encounter (a daily pack, an encounter not billed yet).
+    /// They keep the HIS encounter number and are linked here once the encounter exists.
+    /// </summary>
+    private async Task LinkHisEncountersAsync(CancellationToken ct)
+    {
+        await using var db = await Db(ct);
+        foreach (var table in new[] { "ConsumptionItem", "StaffTime" })
+            await db.Database.ExecuteSqlRawAsync(
+                $"UPDATE t SET EncounterId = e.Id FROM [{table}] t JOIN [Encounter] e ON e.HospitalId = t.HospitalId AND e.EncounterNo = t.HisEncounterNo WHERE t.EncounterId IS NULL", ct);
     }
 
     /// <summary>Links every payer to its insurer and administrator, creating the ones not seen before. Only rows that differ are written.</summary>
@@ -409,7 +421,8 @@ public sealed class DataHubService(IDbContextFactory<VeritaDbContext> factory, I
     /// at the end, so later files see the rows of earlier ones — a zip validates as it would load.
     /// Rejected rows never abort the set; only an unexpected failure rolls everything back.
     /// </summary>
-    public async Task<ImportResult[]> ImportSetAsync(IReadOnlyList<(EntitySpec Spec, List<Dictionary<string, string>> Rows)> files, Principal p, bool dryRun, string source, CancellationToken ct, string? hospital = null)
+    public async Task<ImportResult[]> ImportSetAsync(IReadOnlyList<(EntitySpec Spec, List<Dictionary<string, string>> Rows)> files, Principal p, bool dryRun, string source, CancellationToken ct, string? hospital = null,
+        Func<string, int, int, Task>? onTable = null)
     {
         if (files.FirstOrDefault(f => HisImportPack.CostingModelTables.Contains(f.Spec.Name)).Spec is { } costing)
             throw AppError.Invalid($"Import does not change costing models, so {costing.Name} cannot be imported.");
@@ -423,8 +436,11 @@ public sealed class DataHubService(IDbContextFactory<VeritaDbContext> factory, I
         var results = new List<ImportResult>();
         try
         {
+            var index = 0;
             foreach (var (spec, rows) in files)
             {
+                if (onTable is not null) await onTable(spec.Name, index, files.Count);
+                index++;
                 try
                 {
                     var r = await SaveAsync(spec, p, rows, false, source, ct);
@@ -753,6 +769,7 @@ public sealed class DataHubService(IDbContextFactory<VeritaDbContext> factory, I
             await RemoveRefundsFromRevenueAsync(refunds.Where(r => !refused.Contains(r.Key)).ToList(), ct);
             if (spec.Type == typeof(Payer)) await MapPayerPartiesAsync(ct);
             if (marksChildLines) await MarkChildInvoiceLinesAsync(ct);
+            if (spec.Type == typeof(Encounter) || spec.Type == typeof(ConsumptionItem) || spec.Type == typeof(StaffTime)) await LinkHisEncountersAsync(ct);
 
             await using var log = await Db(ct);
             var batch = new ImportBatch

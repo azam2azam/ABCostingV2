@@ -8,7 +8,7 @@ static class App
     {
         Console.OutputEncoding = System.Text.Encoding.UTF8;
         Console.WriteLine("HISGENX extractor");
-        Console.WriteLine("Read-only. Identity is HIS SetupID + ProjectID. One facts zip per calendar month.");
+        Console.WriteLine("Read-only. Identity is HIS SetupID + ProjectID. One facts zip per day.");
         Console.WriteLine();
 
         var s = new Settings();
@@ -43,6 +43,15 @@ static class App
             Console.WriteLine("Note: --hospital is ignored. Identity is SetupID + ProjectID. Choose the VERITA hospital on import.");
         s.OutDir = Flag(args, "--out") ?? s.OutDir;
         s.CcMapPath = Flag(args, "--cc-map");
+        if (Flag(args, "--ward-nurse-min") is { } wn)
+        {
+            if (!decimal.TryParse(wn, System.Globalization.NumberStyles.Number, System.Globalization.CultureInfo.InvariantCulture, out var wardMin) || wardMin < 0)
+            {
+                Console.Error.WriteLine($"Could not parse --ward-nurse-min '{wn}'. Use minutes per patient-day, e.g. 260.");
+                return 1;
+            }
+            s.WardNurseMinutesPerDay = wardMin;
+        }
 
         var fromRaw = Flag(args, "--from");
         var toRaw = Flag(args, "--to");
@@ -74,7 +83,7 @@ static class App
                     Console.Error.WriteLine($"Empty period: from {s.From:yyyy-MM-dd} to inclusive {s.To.Value.AddDays(-1):yyyy-MM-dd}.");
                     return 1;
                 }
-                Console.WriteLine($"Period {s.From:yyyy-MM-dd} .. {s.To.Value.AddDays(-1):yyyy-MM-dd} inclusive ({MonthSlices.Of(s.From.Value, s.To.Value).Count} month file(s) for facts).");
+                Console.WriteLine($"Period {s.From:yyyy-MM-dd} .. {s.To.Value.AddDays(-1):yyyy-MM-dd} inclusive ({DaySlices.Of(s.From.Value, s.To.Value).Count} daily file(s) for facts).");
             }
         }
 
@@ -132,9 +141,9 @@ static class App
 
     private static async Task Facts(HisConnection db, Settings s)
     {
-        var slices = MonthSlices.Of(s.From!.Value, s.To!.Value);
+        var slices = DaySlices.Of(s.From!.Value, s.To!.Value);
         Console.WriteLine();
-        Console.WriteLine($"Facts pack  {s.PackPrefix}  {slices.Count} month file(s)  {s.From:yyyy-MM-dd} .. {s.To.Value.AddDays(-1):yyyy-MM-dd} inclusive");
+        Console.WriteLine($"Facts pack  {s.PackPrefix}  {slices.Count} daily file(s)  {s.From:yyyy-MM-dd} .. {s.To.Value.AddDays(-1):yyyy-MM-dd} inclusive");
         var origFrom = s.From;
         var origTo = s.To;
         try
@@ -143,9 +152,9 @@ static class App
             {
                 s.From = slice.From;
                 s.To = slice.ToExclusive;
-                var zip = Path.Combine(s.OutDir, $"{s.PackPrefix}-{slice.YearMonth}-facts.zip");
+                var zip = Path.Combine(s.OutDir, $"{s.PackPrefix}-{slice.Day}-facts.zip");
                 Console.WriteLine();
-                Console.WriteLine($"  Month {slice.YearMonth}  {slice.From:yyyy-MM-dd} .. {slice.ToExclusive.AddDays(-1):yyyy-MM-dd} inclusive");
+                Console.WriteLine($"  Day {slice.Day}");
                 using var pack = new CsvZipWriter(zip, Readme(s, "facts", slice.From, slice.ToExclusive), s);
                 await FactsExtract.RunAsync(db, s, pack);
                 pack.Completed = true;
@@ -170,8 +179,11 @@ static class App
         Identity is SetupID + ProjectID (every CSV + zip name). Do not treat the zip
         filename as a VERITA hospital. Inner CSV names stay NN_Table.csv.
 
-        Facts include 35_ActivityTransaction.csv from measured HIS clocks and quantities
-        (visit/ER/OR times, bed-days, floor stock, dispensed qty). Invoice price is not cost.
+        Facts are one zip per day. They include 35_ActivityTransaction.csv from measured HIS
+        clocks and quantities, 39_ConsumptionItem.csv (consumables, implants, medicine by item)
+        and 40_StaffTime.csv (OR team, OP/ER doctor, ward nursing minutes). Quantities only:
+        invoice price is not cost. Each day carries every item and minute of the encounters
+        admitted or invoiced that day; rows are keyed by sourceRef, so re-sent rows update.
         Import remaps SetupID-ProjectID codes onto the VERITA hospital you pick.
         """;
 
@@ -202,7 +214,12 @@ static class App
             && partial[2].YearMonth == "2026-09" && partial[2].ToExclusive == new DateTime(2026, 9, 21));
 
         var one = MonthSlices.Of(new DateTime(2026, 9, 1), new DateTime(2026, 10, 1));
-        Check("--month 2026-09 → one zip", one.Count == 1 && one[0].YearMonth == "2026-09");
+        Check("--month 2026-09 → one month", one.Count == 1 && one[0].YearMonth == "2026-09");
+        var days = DaySlices.Of(new DateTime(2026, 9, 1), new DateTime(2026, 10, 1));
+        Check("--month 2026-09 → 30 daily zips", days.Count == 30 && days[0].Day == "2026-09-01" && days[29].Day == "2026-09-30"
+            && days[29].ToExclusive == new DateTime(2026, 10, 1));
+        var span = DaySlices.Of(new DateTime(2026, 7, 30), new DateTime(2026, 8, 2));
+        Check("days cross a month boundary", span.Count == 3 && span[2].Day == "2026-08-01");
 
         var day = new DateTime(2026, 8, 3);
         Check("clock minutes 08:00-09:30", Maps.ClockMinutes(Maps.Combine(day, "08:00"), Maps.Combine(day, "09:30")) == 90);
@@ -351,14 +368,16 @@ static class App
               HisExtract all --month 2026-09
               HisExtract selftest
 
-            One facts zip per calendar month, even when --from/--to spans months:
+            One facts zip per day, even when --from/--to spans days or months:
               HIS-010266-15-catalogue.zip
-              HIS-010266-15-2026-07-facts.zip
-              HIS-010266-15-2026-08-facts.zip
+              HIS-010266-15-2026-07-01-facts.zip
+              HIS-010266-15-2026-07-02-facts.zip
               ...
 
-            Facts include 35_ActivityTransaction.csv from measured HIS clocks and
-            quantities. Invoice / floor UnitPrice is never written as cost.
+            Facts include 35_ActivityTransaction.csv (measured HIS clocks and quantities),
+            39_ConsumptionItem.csv (consumables, implants, medicine by item) and
+            40_StaffTime.csv (staff minutes). Quantities only: invoice / floor UnitPrice
+            is never written as cost.
             Tables over 50,000 rows split to NN_Entity.csv, NN_Entity_p2.csv, … — import
             concatenates every page. Queries use NOLOCK / READ UNCOMMITTED.
 
@@ -372,6 +391,7 @@ static class App
               --out        output directory     default ./his-extract-out
               --cc-map     reviewed CSV (costCentreCode, departmentCode) that overrides
                            the derived cost centre → department link (catalogue)
+              --ward-nurse-min  ward nursing minutes per patient-day   default 260
 
             Defaults (UAT):
               Connection string  ****

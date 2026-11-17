@@ -223,7 +223,11 @@ public sealed partial class ReadQueries
     public sealed record ProcedureCostingItem(Guid Id, string Code, string Name, decimal? MarginPct, decimal ListPrice, Guid? PackageId = null, decimal? CompositionCost = null);
     public sealed record ProcedureTypeRow(string Code, string Name, int Procedures, decimal? MarginPct, ProcedureCostingItem[] Items);
     public sealed record PackageComponentDto(Guid ProcedureId, string Procedure, decimal Quantity, decimal StandardUnit, decimal StandardLine, string Code, string Category, string ProcType, decimal Price, bool IsMedicine, decimal Cost);
-    public sealed record PackageDetail(PackageRow Package, PackageComponentDto[] Components, EncounterRow[] Encounters, string Explanation, int EncounterCount, decimal? AverageEncounterFee);
+    public sealed record PackageDetail(PackageRow Package, PackageComponentDto[] Components, EncounterRow[] Encounters, string Explanation, int EncounterCount, decimal? AverageEncounterFee,
+        PackageDoctorRow[] Doctors);
+
+    /// <summary>A doctor on the package's billed lines this period (HIS PrimaryDoctorID on the line). Id is null for lines with no doctor.</summary>
+    public sealed record PackageDoctorRow(Guid? Id, string Code, string Name, string Specialty, string? Department, bool IsDummy, int Encounters, decimal Quantity, decimal SharePct);
 
     /// <summary>The hospital's packages, or only <paramref name="only"/> when a detail screen needs one row.</summary>
     public async Task<PackageRow[]> PackagesAsync(ScopedRun s, Principal p, CancellationToken ct, Guid? only = null)
@@ -288,7 +292,7 @@ public sealed partial class ReadQueries
         }).ToArray();
     }
 
-    private sealed record CountedLine(Guid EncounterId, Guid ProcedureId, decimal Quantity);
+    private sealed record CountedLine(Guid EncounterId, Guid ProcedureId, decimal Quantity, Guid? ProviderId = null);
 
     /// <summary>
     /// The period's counted service lines of these procedures: in the run's encounters when there is a run, else the
@@ -312,13 +316,13 @@ public sealed partial class ReadQueries
             ? await (from es in services
                      join ec in db.EncounterCosts.AsNoTracking() on es.EncounterId equals ec.EncounterId
                      where ec.RunId == s.Run.Id
-                     select new { es.EncounterId, es.SourceRef, es.ProcedureId, es.Quantity }).ToListAsync(ct)
+                     select new { es.EncounterId, es.SourceRef, es.ProcedureId, es.Quantity, es.ProviderId }).ToListAsync(ct)
             : await (from es in services
                      join e in db.Encounters.AsNoTracking() on es.EncounterId equals e.Id
                      where e.HospitalId == s.Hospital.Id && (fromHis || (e.AdmitAt >= periodStart && e.AdmitAt < periodEnd))
-                     select new { es.EncounterId, es.SourceRef, es.ProcedureId, es.Quantity }).ToListAsync(ct);
+                     select new { es.EncounterId, es.SourceRef, es.ProcedureId, es.Quantity, es.ProviderId }).ToListAsync(ct);
         return rows.Where(x => countedKeys is null || countedKeys.Contains((x.EncounterId, RefTail(x.SourceRef))))
-            .Select(x => new CountedLine(x.EncounterId, x.ProcedureId, x.Quantity)).ToList();
+            .Select(x => new CountedLine(x.EncounterId, x.ProcedureId, x.Quantity, x.ProviderId)).ToList();
     }
 
     /// <summary>INV-2-7-1 and REV-2-7-1 are the same invoice line: the part after the prefix matches.</summary>
@@ -862,7 +866,123 @@ public sealed partial class ReadQueries
             : Math.Abs(perCase) < 1 ? "Actual cost is in line with the standard."
             : $"Each case ran SAR {Math.Abs(perCase):N0} {(perCase > 0 ? "above" : "below")} standard across {row.Cases} cases" +
               (p.Can("revenue.view") ? $"; the contracted price of SAR {row.Price:N0} {(row.ActualPerCase > row.Price ? "no longer covers" : "still covers")} the average case." : ".");
-        return new PackageDetail(row, comps, [], explanation, encounterCount, averageFee);
+        var doctors = await PackageDoctorsAsync(s, p, row.Code, ct);
+        return new PackageDetail(row, comps, [], explanation, encounterCount, averageFee, doctors);
+    }
+
+    /// <summary>A package or procedure a doctor performed: counted billed lines where they are the line's doctor.</summary>
+    public sealed record DoctorWorkRow(Guid Id, string Code, string Name, string Category, int Encounters, decimal Quantity,
+        decimal Revenue, decimal UnitCost, decimal Cost, decimal Margin, decimal MarginPct);
+
+    /// <summary>
+    /// What one doctor performed this period, split into packages and procedures not billed as packages.
+    /// Revenue is the counted net of the same invoice lines (after refunds); cost is the run's unit cost × quantity,
+    /// as on the Procedures and Packages lists.
+    /// </summary>
+    public async Task<(DoctorWorkRow[] Packages, DoctorWorkRow[] Procedures)> DoctorWorkAsync(ScopedRun s, Principal p, Guid doctorId, CancellationToken ct)
+    {
+        var services = CountedServices(s).Where(es => es.ProviderId == doctorId);
+        var (periodStart, periodEnd) = (s.Period.StartDate.ToDateTime(TimeOnly.MinValue), s.Period.EndDate.AddDays(1).ToDateTime(TimeOnly.MinValue));
+        var fromHis = FromHis(s);
+        var lines = s.Run.Id != Guid.Empty
+            ? await (from es in services
+                     join ec in db.EncounterCosts.AsNoTracking() on es.EncounterId equals ec.EncounterId
+                     where ec.RunId == s.Run.Id
+                     select new { es.EncounterId, es.ProcedureId, es.Quantity, es.SourceRef }).ToListAsync(ct)
+            : await (from es in services
+                     join e in db.Encounters.AsNoTracking() on es.EncounterId equals e.Id
+                     where e.HospitalId == s.Hospital.Id && (fromHis || (e.AdmitAt >= periodStart && e.AdmitAt < periodEnd))
+                     select new { es.EncounterId, es.ProcedureId, es.Quantity, es.SourceRef }).ToListAsync(ct);
+        if (lines.Count == 0) return ([], []);
+
+        var showRevenue = p.Can("revenue.view");
+        var net = new Dictionary<(Guid, string), decimal>();
+        if (showRevenue)
+        {
+            var encIds = lines.Select(l => l.EncounterId).Distinct().ToList();
+            var procIds = lines.Select(l => l.ProcedureId).Distinct().ToList();
+            foreach (var r in await CountedRevenue(s)
+                         .Where(r => r.ProcedureId != null && procIds.Contains(r.ProcedureId.Value) && encIds.Contains(r.EncounterId))
+                         .Select(r => new { r.EncounterId, r.SourceRef, Net = r.NetAmount - (r.RefundedAmount ?? 0m) }).ToListAsync(ct))
+            {
+                var key = (r.EncounterId, RefTail(r.SourceRef));
+                net[key] = net.GetValueOrDefault(key) + r.Net;
+            }
+        }
+
+        var procedures = (await ProceduresAsync(s, p, ct)).ToDictionary(x => x.Id);
+        var packages = (await PackagesAsync(s, p, ct)).ToDictionary(x => x.Code, StringComparer.OrdinalIgnoreCase);
+        var pkgRows = new List<DoctorWorkRow>();
+        var procRows = new List<DoctorWorkRow>();
+        foreach (var g in lines.GroupBy(l => l.ProcedureId))
+        {
+            if (!procedures.TryGetValue(g.Key, out var proc)) continue; // outside the user's departments
+            var qty = g.Sum(l => l.Quantity);
+            var enc = g.Select(l => l.EncounterId).Distinct().Count();
+            var revenue = showRevenue ? Money.R4(g.Sum(l => net.GetValueOrDefault((l.EncounterId, RefTail(l.SourceRef))))) : 0m;
+            if (packages.TryGetValue(proc.Code, out var pkg))
+            {
+                var cost = Money.R4(pkg.UnitCost * qty);
+                pkgRows.Add(Work(pkg.Id, pkg.Code, pkg.Name, pkg.ProcType, enc, qty, revenue, pkg.UnitCost, cost, showRevenue));
+            }
+            else
+            {
+                var cost = Money.R4(proc.UnitCost * qty);
+                procRows.Add(Work(proc.Id, proc.Code, proc.Name, proc.Category, enc, qty, revenue, proc.UnitCost, cost, showRevenue));
+            }
+        }
+        return (pkgRows.OrderByDescending(x => x.Revenue).ThenByDescending(x => x.Encounters).ToArray(),
+                procRows.OrderByDescending(x => x.Revenue).ThenByDescending(x => x.Encounters).ToArray());
+
+        static DoctorWorkRow Work(Guid id, string code, string name, string category, int enc, decimal qty, decimal revenue, decimal unit, decimal cost, bool showRevenue)
+        {
+            var margin = showRevenue ? Money.R4(revenue - cost) : 0m;
+            var pct = showRevenue && revenue != 0 ? Math.Round(margin / revenue * 100m, 1) : 0m;
+            return new DoctorWorkRow(id, code, name, category, enc, qty, revenue, unit, cost, margin, pct);
+        }
+    }
+
+    /// <summary>
+    /// Doctors on the package's counted billed lines (same lines as the encounter count), most encounters first.
+    /// A user limited to some departments sees only encounters in those departments.
+    /// </summary>
+    private async Task<PackageDoctorRow[]> PackageDoctorsAsync(ScopedRun s, Principal p, string code, CancellationToken ct)
+    {
+        var procId = await db.Procedures.AsNoTracking().Where(x => x.HospitalId == s.Hospital.Id && x.Code == code).Select(x => (Guid?)x.Id).FirstOrDefaultAsync(ct);
+        if (procId is not { } pid) return [];
+        var lines = await CountedLinesOfAsync(s, [pid], ct);
+        if (lines.Count == 0) return [];
+        if (!p.AllDepartments)
+        {
+            var ids = lines.Select(l => l.EncounterId).Distinct().ToList();
+            var allowed = (await (from e in db.Encounters.AsNoTracking()
+                                  join d in db.Departments.AsNoTracking() on e.DepartmentId equals d.Id
+                                  where ids.Contains(e.Id)
+                                  select new { e.Id, d.Code }).ToListAsync(ct))
+                .Where(x => p.HasDepartment(x.Code)).Select(x => x.Id).ToHashSet();
+            lines = lines.Where(l => allowed.Contains(l.EncounterId)).ToList();
+            if (lines.Count == 0) return [];
+        }
+        var providerIds = lines.Where(l => l.ProviderId != null).Select(l => l.ProviderId!.Value).Distinct().ToList();
+        var providers = (await (from pr in db.Providers.AsNoTracking()
+                                join d in db.Departments.AsNoTracking() on pr.DepartmentId equals d.Id into dj
+                                from d in dj.DefaultIfEmpty()
+                                where providerIds.Contains(pr.Id)
+                                select new { pr.Id, pr.Code, pr.Name, pr.Specialty, pr.IsDummy, Department = d == null ? null : d.Name }).ToListAsync(ct))
+            .ToDictionary(x => x.Id);
+        var total = lines.Select(l => l.EncounterId).Distinct().Count();
+        return lines.GroupBy(l => l.ProviderId)
+            .Select(g =>
+            {
+                var enc = g.Select(l => l.EncounterId).Distinct().Count();
+                var share = total == 0 ? 0m : Math.Round(enc * 100m / total, 1);
+                var qty = g.Sum(l => l.Quantity);
+                return g.Key is { } id && providers.TryGetValue(id, out var pr)
+                    ? new PackageDoctorRow(pr.Id, pr.Code, pr.Name, pr.Specialty, pr.Department, pr.IsDummy, enc, qty, share)
+                    : new PackageDoctorRow(null, "", "No doctor on the line", "", null, false, enc, qty, share);
+            })
+            .OrderByDescending(x => x.Encounters).ThenBy(x => x.Name)
+            .ToArray();
     }
 
     /// <summary>

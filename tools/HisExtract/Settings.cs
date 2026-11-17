@@ -14,6 +14,8 @@ public sealed class Settings
     public string OutDir { get; set; } = Path.Combine(Environment.CurrentDirectory, "his-extract-out");
     /// <summary>Optional reviewed CSV (costCentreCode, departmentCode) that wins over the derived cost centre → department link.</summary>
     public string? CcMapPath { get; set; }
+    /// <summary>Ward nursing minutes per patient-day until nursing supplies a standard per ward (StaffTime, STANDARD).</summary>
+    public decimal WardNurseMinutesPerDay { get; set; } = 260m;
 
     /// <summary>HIS tenant token used in row codes. Not a VERITA Hospital.Code — import maps that.</summary>
     public string H => $"{SetupId}-{ProjectId}";

@@ -96,6 +96,75 @@ public sealed partial class ReadQueries
         return new DepartmentDetail(row, centres, doctors);
     }
 
+    // ═══ Doctors ═════════════════════════════════════════════════════════════════════
+
+    /// <summary>Catalogue doctors for the hospital. A run, when present, adds cases/revenue/cost.</summary>
+    public sealed record DoctorRow(Guid Id, string Code, string Name, string Specialty, string Grade, Guid DepartmentId, string? Department,
+        int Departments, bool IsDummy, int Cases, decimal Revenue, decimal Cost);
+
+    public async Task<DoctorRow[]> DoctorsAsync(ScopedRun s, Principal p, CancellationToken ct)
+    {
+        var depts = await db.Departments.AsNoTracking().Where(d => d.HospitalId == s.Hospital.Id).ToDictionaryAsync(d => d.Id, ct);
+        var deptCodes = depts.ToDictionary(d => d.Key, d => d.Value.CatalogCode);
+        var deptIds = depts.Keys.ToList();
+        // A doctor is in this hospital when their home department or an active HIS clinic is here.
+        var clinics = await db.ProviderClinics.AsNoTracking().Where(c => c.IsActive && deptIds.Contains(c.DepartmentId))
+            .Select(c => new { c.ProviderId, c.DepartmentId }).ToListAsync(ct);
+        var clinicIds = clinics.Select(c => c.ProviderId).Distinct().ToList();
+        var providers = await db.Providers.AsNoTracking().Where(x => deptIds.Contains(x.DepartmentId) || clinicIds.Contains(x.Id)).ToListAsync(ct);
+        var deptsOf = clinics.GroupBy(c => c.ProviderId).ToDictionary(g => g.Key, g => g.Select(c => c.DepartmentId).ToHashSet());
+        var showRevenue = p.Can("revenue.view");
+        var figures = await db.RunDimensionCosts.AsNoTracking()
+            .Where(x => x.RunId == s.Run.Id && x.Dimension == "physician" && x.Key != "")
+            .ToDictionaryAsync(x => x.Key, ct);
+        return providers.Select(x =>
+        {
+            var all = deptsOf.GetValueOrDefault(x.Id) ?? [];
+            if (depts.ContainsKey(x.DepartmentId)) all.Add(x.DepartmentId);
+            return (x, all);
+        })
+        .Where(t => t.all.Any(d => DeptAllowed(p, deptCodes, d)))
+        .Select(t =>
+        {
+            var x = t.x;
+            figures.TryGetValue(x.Id.ToString(), out var f);
+            return new DoctorRow(x.Id, x.Code, x.Name, x.Specialty, x.Grade, x.DepartmentId,
+                depts.GetValueOrDefault(x.DepartmentId)?.Name, t.all.Count, x.IsDummy,
+                f?.Encounters ?? 0, showRevenue ? f?.Revenue ?? 0m : 0m, f?.TotalCost ?? 0m);
+        })
+        .OrderBy(x => x.IsDummy).ThenBy(x => x.Name).ToArray();
+    }
+
+    public sealed record DoctorDepartmentRow(Guid Id, string Code, string Name, string? HisClinicId, bool IsHome, bool IsDefault, int Cases);
+    public sealed record DoctorDetail(DoctorRow Doctor, DoctorDepartmentRow[] Departments, DoctorWorkRow[] Packages, DoctorWorkRow[] Procedures);
+
+    /// <summary>One doctor: their figures for the run and the departments (home and HIS clinics) they work in.</summary>
+    public async Task<DoctorDetail> DoctorAsync(ScopedRun s, Principal p, Guid id, CancellationToken ct)
+    {
+        var row = (await DoctorsAsync(s, p, ct)).FirstOrDefault(d => d.Id == id) ?? throw AppError.NotFound("Doctor");
+        var depts = await db.Departments.AsNoTracking().Where(d => d.HospitalId == s.Hospital.Id).ToDictionaryAsync(d => d.Id, ct);
+        var deptIds = depts.Keys.ToList();
+        var clinics = await db.ProviderClinics.AsNoTracking().Where(c => c.ProviderId == id && c.IsActive && deptIds.Contains(c.DepartmentId))
+            .ToListAsync(ct);
+        // Cases: this run's encounters by this doctor, per encounter department.
+        var cases = await (from e in db.Encounters.AsNoTracking()
+                           join ec in db.EncounterCosts.AsNoTracking() on e.Id equals ec.EncounterId
+                           where ec.RunId == s.Run.Id && e.ProviderId == id
+                           group e by e.DepartmentId into g
+                           select new { g.Key, N = g.Select(x => x.Id).Distinct().Count() })
+            .ToDictionaryAsync(x => x.Key, x => x.N, ct);
+        var ids = clinics.Select(c => c.DepartmentId).Append(row.DepartmentId).Concat(cases.Keys).Distinct().Where(depts.ContainsKey);
+        var rows = ids.Select(d =>
+        {
+            var dept = depts[d];
+            var c = clinics.Where(x => x.DepartmentId == d).ToList();
+            return new DoctorDepartmentRow(d, dept.Code, dept.Name, c.Count == 0 ? null : string.Join(", ", c.Select(x => x.HisClinicId)),
+                d == row.DepartmentId, c.Any(x => x.IsDefault), cases.GetValueOrDefault(d));
+        }).OrderByDescending(x => x.IsHome).ThenByDescending(x => x.Cases).ThenBy(x => x.Name).ToArray();
+        var (packages, procedures) = await DoctorWorkAsync(s, p, id, ct);
+        return new DoctorDetail(row, rows, packages, procedures);
+    }
+
     // ═══ Cost centres ════════════════════════════════════════════════════════════════
 
     public sealed record CostCentreRow(Guid Id, string Code, string Name, string CcType, int StepDownSeq, string Department, string? Facility,

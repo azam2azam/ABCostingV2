@@ -113,6 +113,10 @@ public static class EntitySpecs
             [Hosp, R("encounterNo", "EncounterId", typeof(Encounter), "EncounterNo", opt: true), R("procedureCode", "ProcedureId", typeof(Procedure), opt: true), R("payerCode", "PayerId", typeof(Payer), opt: true)]),
         new("InvoicePackageItem", typeof(InvoicePackageItem), "Monthly data", "Package component on a HIS invoice. For reference; not part of cost or revenue.", ["HospitalId", "SourceRef"],
             [Hosp, R("encounterNo", "EncounterId", typeof(Encounter), "EncounterNo", opt: true), R("procedureCode", "ProcedureId", typeof(Procedure), opt: true)]),
+        new("ConsumptionItem", typeof(ConsumptionItem), "Monthly data", "Consumable, implant or medicine a patient used, by item (HIS). Quantities only; cost joins later on itemKey / oracleItemCode.", ["HospitalId", "SourceRef"],
+            [Hosp, R("encounterNo", "EncounterId", typeof(Encounter), "EncounterNo", opt: true)]),
+        new("StaffTime", typeof(StaffTime), "Monthly data", "Minutes of doctors, nurses and technicians on a case: measured from HIS clocks or volume × standard.", ["HospitalId", "SourceRef"],
+            [Hosp, R("encounterNo", "EncounterId", typeof(Encounter), "EncounterNo", opt: true), R("providerCode", "ProviderId", typeof(Provider), opt: true)]),
 
         // ── Access ───────────────────────────────────────────────────────────────
         new("User", typeof(User), "Access", "A person who signs in. hospitalScope is a comma-separated list of hospital codes, or *.", ["Email"], [],

@@ -2,7 +2,7 @@
 -- Run first, in the target database (SSMS: select the database, open this file, Execute; or
 --   sqlcmd -S <server> -d <database> -U <user> -P <password> -C -b -i 01-schema.sql).
 -- Then run 02-seed-users.sql. Needs SQL Server 2016 or newer (temporal tables).
--- Generated with: scripts/ef.sh migrations script   (latest migration: 20261111092450_RunHisInvoicing)
+-- Generated with: scripts/ef.sh migrations script   (latest migration: 20261117095051_ConsumptionAndStaffTime)
 
 -- Session settings SQL Server needs for filtered indexes, computed columns and schema-bound objects
 -- (SSMS sets these already; sqlcmd does not).
@@ -2925,6 +2925,156 @@ GO
 
 INSERT INTO [__EFMigrationsHistory] ([MigrationId], [ProductVersion])
 VALUES (N'20261111092450_RunHisInvoicing', N'8.0.11');
+GO
+
+COMMIT;
+GO
+
+BEGIN TRANSACTION;
+GO
+
+CREATE TABLE [ImportFile] (
+    [Id] uniqueidentifier NOT NULL,
+    [FileName] nvarchar(200) NOT NULL,
+    [SizeBytes] bigint NOT NULL,
+    [Sha256] nvarchar(64) NOT NULL,
+    [UploadedAt] datetime2(3) NOT NULL,
+    [UploadedBy] nvarchar(200) NOT NULL,
+    [IsHisPack] bit NOT NULL,
+    [HisSetupId] nvarchar(200) NULL,
+    [HisProjectId] int NULL,
+    [Pack] nvarchar(200) NULL,
+    [FactsFrom] nvarchar(200) NULL,
+    [FactsTo] nvarchar(200) NULL,
+    [Hospital] nvarchar(200) NULL,
+    [TotalRows] int NOT NULL,
+    [ContextJson] nvarchar(max) NULL,
+    [Status] nvarchar(32) NOT NULL,
+    [LastDryRun] bit NOT NULL,
+    [TablesTotal] int NOT NULL,
+    [TablesDone] int NOT NULL,
+    [CurrentTable] nvarchar(200) NULL,
+    [Attempts] int NOT NULL,
+    [QueuedAt] datetime2(3) NULL,
+    [StartedAt] datetime2(3) NULL,
+    [FinishedAt] datetime2(3) NULL,
+    [RunBy] nvarchar(200) NULL,
+    [RowsCreated] int NOT NULL,
+    [RowsUpdated] int NOT NULL,
+    [RowsUnchanged] int NOT NULL,
+    [RowsRejected] int NOT NULL,
+    [DetailJson] nvarchar(max) NULL,
+    [ErrorMessage] nvarchar(max) NULL,
+    CONSTRAINT [PK_ImportFile] PRIMARY KEY ([Id]),
+    CONSTRAINT [CK_ImportFile_ContextJson_Json] CHECK ([ContextJson] IS NULL OR ISJSON([ContextJson]) = 1),
+    CONSTRAINT [CK_ImportFile_DetailJson_Json] CHECK ([DetailJson] IS NULL OR ISJSON([DetailJson]) = 1)
+);
+GO
+
+CREATE TABLE [ImportFileContent] (
+    [Id] uniqueidentifier NOT NULL,
+    [Content] varbinary(max) NOT NULL,
+    CONSTRAINT [PK_ImportFileContent] PRIMARY KEY ([Id]),
+    CONSTRAINT [FK_ImportFileContent_ImportFile_Id] FOREIGN KEY ([Id]) REFERENCES [ImportFile] ([Id]) ON DELETE CASCADE
+);
+GO
+
+CREATE INDEX [IX_ImportFile_UploadedAt] ON [ImportFile] ([UploadedAt]);
+GO
+
+INSERT INTO [__EFMigrationsHistory] ([MigrationId], [ProductVersion])
+VALUES (N'20261117094640_ImportFiles', N'8.0.11');
+GO
+
+COMMIT;
+GO
+
+BEGIN TRANSACTION;
+GO
+
+CREATE TABLE [ConsumptionItem] (
+    [Id] uniqueidentifier NOT NULL,
+    [HospitalId] uniqueidentifier NOT NULL,
+    [EncounterId] uniqueidentifier NULL,
+    [HisEncounterNo] nvarchar(200) NOT NULL,
+    [ServiceRef] nvarchar(200) NULL,
+    [LinkMethod] nvarchar(200) NOT NULL,
+    [OtReservationId] int NULL,
+    [Category] nvarchar(200) NOT NULL,
+    [ItemKey] nvarchar(200) NOT NULL,
+    [ItemKeySystem] nvarchar(200) NOT NULL,
+    [OracleItemCode] nvarchar(200) NULL,
+    [Barcode] nvarchar(200) NULL,
+    [Description] nvarchar(max) NULL,
+    [Quantity] decimal(19,6) NOT NULL,
+    [Uom] nvarchar(200) NOT NULL,
+    [ConversionFactor] decimal(19,6) NULL,
+    [PrescribedQty] decimal(19,6) NULL,
+    [CostCentreCode] nvarchar(200) NULL,
+    [LocationId] nvarchar(200) NULL,
+    [BilledAmount] decimal(19,4) NULL,
+    [HisUnitPrice] decimal(19,6) NULL,
+    [OccurredAt] datetime2(3) NOT NULL,
+    [SourceTable] nvarchar(200) NOT NULL,
+    [SourceSystem] nvarchar(200) NOT NULL,
+    [SourceRef] nvarchar(120) NOT NULL,
+    CONSTRAINT [PK_ConsumptionItem] PRIMARY KEY ([Id]),
+    CONSTRAINT [FK_ConsumptionItem_Encounter_EncounterId] FOREIGN KEY ([EncounterId]) REFERENCES [Encounter] ([Id]),
+    CONSTRAINT [FK_ConsumptionItem_Hospital_HospitalId] FOREIGN KEY ([HospitalId]) REFERENCES [Hospital] ([Id])
+);
+GO
+
+CREATE TABLE [StaffTime] (
+    [Id] uniqueidentifier NOT NULL,
+    [HospitalId] uniqueidentifier NOT NULL,
+    [EncounterId] uniqueidentifier NULL,
+    [HisEncounterNo] nvarchar(200) NOT NULL,
+    [ServiceRef] nvarchar(200) NULL,
+    [LinkMethod] nvarchar(200) NOT NULL,
+    [OtReservationId] int NULL,
+    [StaffRole] nvarchar(200) NOT NULL,
+    [StaffType] nvarchar(200) NULL,
+    [StaffId] nvarchar(200) NULL,
+    [ProviderId] uniqueidentifier NULL,
+    [Minutes] decimal(19,6) NOT NULL,
+    [Basis] nvarchar(200) NOT NULL,
+    [Volume] decimal(19,6) NULL,
+    [VolumeUom] nvarchar(200) NULL,
+    [CostCentreCode] nvarchar(200) NULL,
+    [OccurredAt] datetime2(3) NOT NULL,
+    [SourceTable] nvarchar(200) NOT NULL,
+    [SourceSystem] nvarchar(200) NOT NULL,
+    [SourceRef] nvarchar(120) NOT NULL,
+    CONSTRAINT [PK_StaffTime] PRIMARY KEY ([Id]),
+    CONSTRAINT [FK_StaffTime_Encounter_EncounterId] FOREIGN KEY ([EncounterId]) REFERENCES [Encounter] ([Id]),
+    CONSTRAINT [FK_StaffTime_Hospital_HospitalId] FOREIGN KEY ([HospitalId]) REFERENCES [Hospital] ([Id]),
+    CONSTRAINT [FK_StaffTime_Provider_ProviderId] FOREIGN KEY ([ProviderId]) REFERENCES [Provider] ([Id])
+);
+GO
+
+CREATE INDEX [IX_ConsumptionItem_EncounterId] ON [ConsumptionItem] ([EncounterId]);
+GO
+
+CREATE INDEX [IX_ConsumptionItem_HospitalId_HisEncounterNo] ON [ConsumptionItem] ([HospitalId], [HisEncounterNo]);
+GO
+
+CREATE UNIQUE INDEX [IX_ConsumptionItem_HospitalId_SourceRef] ON [ConsumptionItem] ([HospitalId], [SourceRef]);
+GO
+
+CREATE INDEX [IX_StaffTime_EncounterId] ON [StaffTime] ([EncounterId]);
+GO
+
+CREATE INDEX [IX_StaffTime_HospitalId_HisEncounterNo] ON [StaffTime] ([HospitalId], [HisEncounterNo]);
+GO
+
+CREATE UNIQUE INDEX [IX_StaffTime_HospitalId_SourceRef] ON [StaffTime] ([HospitalId], [SourceRef]);
+GO
+
+CREATE INDEX [IX_StaffTime_ProviderId] ON [StaffTime] ([ProviderId]);
+GO
+
+INSERT INTO [__EFMigrationsHistory] ([MigrationId], [ProductVersion])
+VALUES (N'20261117095051_ConsumptionAndStaffTime', N'8.0.11');
 GO
 
 COMMIT;

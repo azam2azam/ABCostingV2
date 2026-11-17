@@ -855,6 +855,115 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/departments/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Envelope`1[[ReadQueriesDepartmentDetail, Verita.Infrastructure, Version=1.0.0.0, Culture=neutral, PublicKeyToken=null]]"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/doctors": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Envelope`1[[ReadQueriesDoctorRow[], Verita.Infrastructure, Version=1.0.0.0, Culture=neutral, PublicKeyToken=null]]"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/doctors/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Envelope`1[[ReadQueriesDoctorDetail, Verita.Infrastructure, Version=1.0.0.0, Culture=neutral, PublicKeyToken=null]]"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/cost-centres": {
         parameters: {
             query?: never;
@@ -1224,7 +1333,14 @@ export interface paths {
         };
         get: {
             parameters: {
-                query?: never;
+                query?: {
+                    search?: string;
+                    type?: string;
+                    sort?: string;
+                    desc?: boolean;
+                    page?: number;
+                    pageSize?: number;
+                };
                 header?: never;
                 path?: never;
                 cookie?: never;
@@ -1237,7 +1353,7 @@ export interface paths {
                         [name: string]: unknown;
                     };
                     content: {
-                        "application/json": components["schemas"]["Envelope`1[[ReadQueriesProcedureRow[], Verita.Infrastructure, Version=1.0.0.0, Culture=neutral, PublicKeyToken=null]]"];
+                        "application/json": components["schemas"]["Envelope`1[[ReadQueriesCataloguePage`1[[ReadQueriesProcedureRow, Verita.Infrastructure, Version=1.0.0.0, Culture=neutral, PublicKeyToken=null]], Verita.Infrastructure, Version=1.0.0.0, Culture=neutral, PublicKeyToken=null]]"];
                     };
                 };
             };
@@ -1377,7 +1493,14 @@ export interface paths {
         };
         get: {
             parameters: {
-                query?: never;
+                query?: {
+                    search?: string;
+                    type?: string;
+                    sort?: string;
+                    desc?: boolean;
+                    page?: number;
+                    pageSize?: number;
+                };
                 header?: never;
                 path?: never;
                 cookie?: never;
@@ -1390,7 +1513,7 @@ export interface paths {
                         [name: string]: unknown;
                     };
                     content: {
-                        "application/json": components["schemas"]["Envelope`1[[ReadQueriesPackageRow[], Verita.Infrastructure, Version=1.0.0.0, Culture=neutral, PublicKeyToken=null]]"];
+                        "application/json": components["schemas"]["Envelope`1[[ReadQueriesCataloguePage`1[[ReadQueriesPackageRow, Verita.Infrastructure, Version=1.0.0.0, Culture=neutral, PublicKeyToken=null]], Verita.Infrastructure, Version=1.0.0.0, Culture=neutral, PublicKeyToken=null]]"];
                     };
                 };
             };
@@ -2997,6 +3120,166 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/data/files": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Verita.Infrastructure.DataHub.ImportFileDto"][];
+                    };
+                };
+            };
+        };
+        put?: never;
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: {
+                content: {
+                    "multipart/form-data": {
+                        /** Format: binary */
+                        file?: string;
+                    };
+                };
+            };
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Verita.Infrastructure.DataHub.ImportFileDetail"];
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/data/files/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Verita.Infrastructure.DataHub.ImportFileDetail"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+            };
+        };
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/data/files/{id}/import": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: {
+                content: {
+                    "application/json": components["schemas"]["DataControllerImportFileRequest"];
+                    "text/json": components["schemas"]["DataControllerImportFileRequest"];
+                    "application/*+json": components["schemas"]["DataControllerImportFileRequest"];
+                };
+            };
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Verita.Infrastructure.DataHub.ImportFileDto"];
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/data/imports": {
         parameters: {
             query?: never;
@@ -3519,6 +3802,69 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/periods/{id}/facts": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: {
+            parameters: {
+                query?: {
+                    hospital?: string;
+                };
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Verita.Infrastructure.Runs.PeriodFactsDto"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete: {
+            parameters: {
+                query?: {
+                    hospital?: string;
+                    entity?: string;
+                };
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Verita.Infrastructure.Runs.PeriodFactsDeleted"][];
+                    };
+                };
+            };
+        };
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/runs/{run}/transition": {
         parameters: {
             query?: never;
@@ -3773,6 +4119,10 @@ export interface components {
             /** Format: decimal */
             rate: string | null;
         };
+        DataControllerImportFileRequest: {
+            hospital: string | null;
+            dryRun: boolean;
+        };
         "Envelope`1[[ReadQueriesActivityDetail, Verita.Infrastructure, Version=1.0.0.0, Culture=neutral, PublicKeyToken=null]]": {
             meta: components["schemas"]["Meta"];
             data: components["schemas"]["ReadQueriesActivityDetail"];
@@ -3784,6 +4134,14 @@ export interface components {
         "Envelope`1[[ReadQueriesCapacityDto, Verita.Infrastructure, Version=1.0.0.0, Culture=neutral, PublicKeyToken=null]]": {
             meta: components["schemas"]["Meta"];
             data: components["schemas"]["ReadQueriesCapacityDto"];
+        };
+        "Envelope`1[[ReadQueriesCataloguePage`1[[ReadQueriesPackageRow, Verita.Infrastructure, Version=1.0.0.0, Culture=neutral, PublicKeyToken=null]], Verita.Infrastructure, Version=1.0.0.0, Culture=neutral, PublicKeyToken=null]]": {
+            meta: components["schemas"]["Meta"];
+            data: components["schemas"]["ReadQueriesCataloguePage`1[[ReadQueriesPackageRow, Verita.Infrastructure, Version=1.0.0.0, Culture=neutral, PublicKeyToken=null]]"];
+        };
+        "Envelope`1[[ReadQueriesCataloguePage`1[[ReadQueriesProcedureRow, Verita.Infrastructure, Version=1.0.0.0, Culture=neutral, PublicKeyToken=null]], Verita.Infrastructure, Version=1.0.0.0, Culture=neutral, PublicKeyToken=null]]": {
+            meta: components["schemas"]["Meta"];
+            data: components["schemas"]["ReadQueriesCataloguePage`1[[ReadQueriesProcedureRow, Verita.Infrastructure, Version=1.0.0.0, Culture=neutral, PublicKeyToken=null]]"];
         };
         "Envelope`1[[ReadQueriesCompareItemsPage, Verita.Infrastructure, Version=1.0.0.0, Culture=neutral, PublicKeyToken=null]]": {
             meta: components["schemas"]["Meta"];
@@ -3813,9 +4171,21 @@ export interface components {
             meta: components["schemas"]["Meta"];
             data: components["schemas"]["ReadQueriesDashboardTrendDto"];
         };
+        "Envelope`1[[ReadQueriesDepartmentDetail, Verita.Infrastructure, Version=1.0.0.0, Culture=neutral, PublicKeyToken=null]]": {
+            meta: components["schemas"]["Meta"];
+            data: components["schemas"]["ReadQueriesDepartmentDetail"];
+        };
         "Envelope`1[[ReadQueriesDepartmentRow[], Verita.Infrastructure, Version=1.0.0.0, Culture=neutral, PublicKeyToken=null]]": {
             meta: components["schemas"]["Meta"];
             data: components["schemas"]["ReadQueriesDepartmentRow"][];
+        };
+        "Envelope`1[[ReadQueriesDoctorDetail, Verita.Infrastructure, Version=1.0.0.0, Culture=neutral, PublicKeyToken=null]]": {
+            meta: components["schemas"]["Meta"];
+            data: components["schemas"]["ReadQueriesDoctorDetail"];
+        };
+        "Envelope`1[[ReadQueriesDoctorRow[], Verita.Infrastructure, Version=1.0.0.0, Culture=neutral, PublicKeyToken=null]]": {
+            meta: components["schemas"]["Meta"];
+            data: components["schemas"]["ReadQueriesDoctorRow"][];
         };
         "Envelope`1[[ReadQueriesDrgDetail, Verita.Infrastructure, Version=1.0.0.0, Culture=neutral, PublicKeyToken=null]]": {
             meta: components["schemas"]["Meta"];
@@ -3857,10 +4227,6 @@ export interface components {
             meta: components["schemas"]["Meta"];
             data: components["schemas"]["ReadQueriesPackageDetail"];
         };
-        "Envelope`1[[ReadQueriesPackageRow[], Verita.Infrastructure, Version=1.0.0.0, Culture=neutral, PublicKeyToken=null]]": {
-            meta: components["schemas"]["Meta"];
-            data: components["schemas"]["ReadQueriesPackageRow"][];
-        };
         "Envelope`1[[ReadQueriesPatientEncounterDetail, Verita.Infrastructure, Version=1.0.0.0, Culture=neutral, PublicKeyToken=null]]": {
             meta: components["schemas"]["Meta"];
             data: components["schemas"]["ReadQueriesPatientEncounterDetail"];
@@ -3884,10 +4250,6 @@ export interface components {
         "Envelope`1[[ReadQueriesProcedureDetail, Verita.Infrastructure, Version=1.0.0.0, Culture=neutral, PublicKeyToken=null]]": {
             meta: components["schemas"]["Meta"];
             data: components["schemas"]["ReadQueriesProcedureDetail"];
-        };
-        "Envelope`1[[ReadQueriesProcedureRow[], Verita.Infrastructure, Version=1.0.0.0, Culture=neutral, PublicKeyToken=null]]": {
-            meta: components["schemas"]["Meta"];
-            data: components["schemas"]["ReadQueriesProcedureRow"][];
         };
         "Envelope`1[[ReadQueriesProcedureTypeItemsPage, Verita.Infrastructure, Version=1.0.0.0, Culture=neutral, PublicKeyToken=null]]": {
             meta: components["schemas"]["Meta"];
@@ -4140,6 +4502,26 @@ export interface components {
             utilisationPct: string;
             calcExpression: string;
         };
+        "ReadQueriesCataloguePage`1[[ReadQueriesPackageRow, Verita.Infrastructure, Version=1.0.0.0, Culture=neutral, PublicKeyToken=null]]": {
+            rows: components["schemas"]["ReadQueriesPackageRow"][];
+            /** Format: int32 */
+            total: number;
+            /** Format: int32 */
+            page: number;
+            /** Format: int32 */
+            pageSize: number;
+            counts: components["schemas"]["ReadQueriesTypeCounts"];
+        };
+        "ReadQueriesCataloguePage`1[[ReadQueriesProcedureRow, Verita.Infrastructure, Version=1.0.0.0, Culture=neutral, PublicKeyToken=null]]": {
+            rows: components["schemas"]["ReadQueriesProcedureRow"][];
+            /** Format: int32 */
+            total: number;
+            /** Format: int32 */
+            page: number;
+            /** Format: int32 */
+            pageSize: number;
+            counts: components["schemas"]["ReadQueriesTypeCounts"];
+        };
         ReadQueriesChainActivity: {
             /** Format: uuid */
             activityId: string;
@@ -4313,6 +4695,8 @@ export interface components {
             revenue: string;
             /** Format: decimal */
             cost: string;
+            /** Format: uuid */
+            departmentId: string;
         };
         ReadQueriesCostingModelsDto: {
             versions: components["schemas"]["ReadQueriesVersionDto"][];
@@ -4341,6 +4725,24 @@ export interface components {
         ReadQueriesDashboardTrendDto: {
             months: components["schemas"]["ReadQueriesTrendPoint"][];
         };
+        ReadQueriesDepartmentDetail: {
+            department: components["schemas"]["ReadQueriesDepartmentRow"];
+            costCentres: components["schemas"]["ReadQueriesCostCentreRow"][];
+            doctors: components["schemas"]["ReadQueriesDepartmentDoctorRow"][];
+        };
+        ReadQueriesDepartmentDoctorRow: {
+            /** Format: uuid */
+            id: string;
+            code: string;
+            name: string;
+            specialty: string;
+            grade: string;
+            isHome: boolean;
+            isDefault: boolean;
+            isDummy: boolean;
+            /** Format: int32 */
+            cases: number;
+        };
         ReadQueriesDepartmentRow: {
             /** Format: uuid */
             id: string;
@@ -4357,6 +4759,8 @@ export interface components {
             revenue: string;
             /** Format: decimal */
             cost: string;
+            /** Format: int32 */
+            doctors: number;
         };
         ReadQueriesDiffLine: {
             procedure: string;
@@ -4366,6 +4770,64 @@ export interface components {
             from: string | null;
             /** Format: decimal */
             to: string | null;
+        };
+        ReadQueriesDoctorDepartmentRow: {
+            /** Format: uuid */
+            id: string;
+            code: string;
+            name: string;
+            hisClinicId: string | null;
+            isHome: boolean;
+            isDefault: boolean;
+            /** Format: int32 */
+            cases: number;
+        };
+        ReadQueriesDoctorDetail: {
+            doctor: components["schemas"]["ReadQueriesDoctorRow"];
+            departments: components["schemas"]["ReadQueriesDoctorDepartmentRow"][];
+            packages: components["schemas"]["ReadQueriesDoctorWorkRow"][];
+            procedures: components["schemas"]["ReadQueriesDoctorWorkRow"][];
+        };
+        ReadQueriesDoctorRow: {
+            /** Format: uuid */
+            id: string;
+            code: string;
+            name: string;
+            specialty: string;
+            grade: string;
+            /** Format: uuid */
+            departmentId: string;
+            department: string | null;
+            /** Format: int32 */
+            departments: number;
+            isDummy: boolean;
+            /** Format: int32 */
+            cases: number;
+            /** Format: decimal */
+            revenue: string;
+            /** Format: decimal */
+            cost: string;
+        };
+        ReadQueriesDoctorWorkRow: {
+            /** Format: uuid */
+            id: string;
+            code: string;
+            name: string;
+            category: string;
+            /** Format: int32 */
+            encounters: number;
+            /** Format: decimal */
+            quantity: string;
+            /** Format: decimal */
+            revenue: string;
+            /** Format: decimal */
+            unitCost: string;
+            /** Format: decimal */
+            cost: string;
+            /** Format: decimal */
+            margin: string;
+            /** Format: decimal */
+            marginPct: string;
         };
         ReadQueriesDrgDetail: {
             drg: components["schemas"]["ReadQueriesDrgRow"];
@@ -4781,6 +5243,22 @@ export interface components {
             encounterCount: number;
             /** Format: decimal */
             averageEncounterFee: string | null;
+            doctors: components["schemas"]["ReadQueriesPackageDoctorRow"][];
+        };
+        ReadQueriesPackageDoctorRow: {
+            /** Format: uuid */
+            id: string | null;
+            code: string;
+            name: string;
+            specialty: string;
+            department: string | null;
+            isDummy: boolean;
+            /** Format: int32 */
+            encounters: number;
+            /** Format: decimal */
+            quantity: string;
+            /** Format: decimal */
+            sharePct: string;
         };
         ReadQueriesPackageRow: {
             /** Format: uuid */
@@ -5443,6 +5921,18 @@ export interface components {
             /** Format: int32 */
             erEncounters: number;
         };
+        ReadQueriesTypeCount: {
+            type: string;
+            /** Format: int32 */
+            count: number;
+        };
+        ReadQueriesTypeCounts: {
+            /** Format: int32 */
+            all: number;
+            /** Format: int32 */
+            zeroPrice: number | null;
+            types: components["schemas"]["ReadQueriesTypeCount"][];
+        };
         ReadQueriesUserDto: {
             /** Format: uuid */
             id: string;
@@ -5643,6 +6133,56 @@ export interface components {
             loadedBy: string;
             hasRejects: boolean;
         };
+        "Verita.Infrastructure.DataHub.ImportFileDetail": {
+            file: components["schemas"]["Verita.Infrastructure.DataHub.ImportFileDto"];
+            preview: components["schemas"]["Verita.Infrastructure.DataHub.ImportPreview"];
+            results: components["schemas"]["Verita.Infrastructure.DataHub.ImportResult"][];
+        };
+        "Verita.Infrastructure.DataHub.ImportFileDto": {
+            /** Format: uuid */
+            id: string;
+            fileName: string;
+            /** Format: int64 */
+            sizeBytes: number;
+            /** Format: date-time */
+            uploadedAt: string;
+            uploadedBy: string;
+            isHisPack: boolean;
+            hisSetupId: string | null;
+            /** Format: int32 */
+            hisProjectId: number | null;
+            pack: string | null;
+            factsFrom: string | null;
+            factsTo: string | null;
+            hospital: string | null;
+            /** Format: int32 */
+            totalRows: number;
+            status: string;
+            lastDryRun: boolean;
+            /** Format: int32 */
+            tablesTotal: number;
+            /** Format: int32 */
+            tablesDone: number;
+            currentTable: string | null;
+            /** Format: int32 */
+            attempts: number;
+            /** Format: date-time */
+            queuedAt: string | null;
+            /** Format: date-time */
+            startedAt: string | null;
+            /** Format: date-time */
+            finishedAt: string | null;
+            runBy: string | null;
+            /** Format: int32 */
+            rowsCreated: number;
+            /** Format: int32 */
+            rowsUpdated: number;
+            /** Format: int32 */
+            rowsUnchanged: number;
+            /** Format: int32 */
+            rowsRejected: number;
+            errorMessage: string | null;
+        };
         "Verita.Infrastructure.DataHub.ImportPreview": {
             hisPack: boolean;
             fileName: string;
@@ -5713,6 +6253,50 @@ export interface components {
             page: number;
             /** Format: int32 */
             pageSize: number;
+        };
+        "Verita.Infrastructure.Runs.PeriodFactEntity": {
+            entity: string;
+            label: string;
+            group: string;
+            /** Format: int64 */
+            rows: number;
+            /** Format: int64 */
+            estimatedBytes: number;
+            /** Format: int64 */
+            tableRows: number;
+            /** Format: int64 */
+            tableBytes: number;
+            deletable: boolean;
+            alsoDeletes: string[];
+            note: string | null;
+        };
+        "Verita.Infrastructure.Runs.PeriodFactRun": {
+            code: string;
+            status: string;
+            costingVersion: string | null;
+        };
+        "Verita.Infrastructure.Runs.PeriodFactsDeleted": {
+            entity: string;
+            /** Format: int64 */
+            rows: number;
+        };
+        "Verita.Infrastructure.Runs.PeriodFactsDto": {
+            /** Format: uuid */
+            periodId: string;
+            period: string;
+            hospital: string;
+            /** Format: date */
+            startDate: string;
+            /** Format: date */
+            endDate: string;
+            status: string;
+            entities: components["schemas"]["Verita.Infrastructure.Runs.PeriodFactEntity"][];
+            /** Format: int64 */
+            totalRows: number;
+            /** Format: int64 */
+            totalEstimatedBytes: number;
+            runs: components["schemas"]["Verita.Infrastructure.Runs.PeriodFactRun"][];
+            blocker: string | null;
         };
     };
     responses: never;

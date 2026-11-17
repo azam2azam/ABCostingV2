@@ -257,6 +257,79 @@ public class InvoicePackageItem
     public string SourceRef { get; set; } = "";
 }
 
+/// <summary>
+/// An item a patient consumed (consumable, implant, medicine) as HIS records it, by item, with the
+/// procedure line it was tied to when a rule found one. Quantities only: cost is joined later from
+/// pharmacy / ERP on itemKey or oracleItemCode. See docs/HIS-CONSUMPTION-QUANTITIES-SPEC.md.
+/// </summary>
+public class ConsumptionItem
+{
+    public Guid Id { get; set; }
+    public Guid HospitalId { get; set; }
+    /// <summary>Linked once the encounter is loaded; HisEncounterNo keeps the HIS number until then.</summary>
+    public Guid? EncounterId { get; set; }
+    public string HisEncounterNo { get; set; } = "";
+    /// <summary>The anchor invoice line's sourceRef (INV-…), when a link rule found one.</summary>
+    public string? ServiceRef { get; set; }
+    /// <summary>ORDER_LINE, ORDER, OT_RESERVATION, BILLED_LINE or NONE.</summary>
+    public string LinkMethod { get; set; } = "NONE";
+    public int? OtReservationId { get; set; }
+    /// <summary>CONSUMABLE, IMPLANT or MEDICINE.</summary>
+    public string Category { get; set; } = "CONSUMABLE";
+    public string ItemKey { get; set; } = "";
+    /// <summary>INV_ITEM, HIS_PROC, HIS_MED, BARCODE or TEXT.</summary>
+    public string ItemKeySystem { get; set; } = "";
+    public string? OracleItemCode { get; set; }
+    public string? Barcode { get; set; }
+    public string? Description { get; set; }
+    [Precise] public decimal Quantity { get; set; }
+    public string Uom { get; set; } = "UNIT";
+    [Precise] public decimal? ConversionFactor { get; set; }
+    [Precise] public decimal? PrescribedQty { get; set; }
+    public string? CostCentreCode { get; set; }
+    public string? LocationId { get; set; }
+    /// <summary>Charge on the linked line. Informational — not cost.</summary>
+    public decimal? BilledAmount { get; set; }
+    /// <summary>HIS_FloorConsumption.UnitPrice as stored, until it is confirmed to be cost or price.</summary>
+    [Precise] public decimal? HisUnitPrice { get; set; }
+    public DateTime OccurredAt { get; set; }
+    public string SourceTable { get; set; } = "";
+    public string SourceSystem { get; set; } = "VIDA-HIS";
+    public string SourceRef { get; set; } = "";
+}
+
+/// <summary>
+/// Minutes a member of staff (doctor, nurse, technician) spent on a case: measured from HIS clocks,
+/// or a volume times a standard. Rates come later from payroll on staffId or role.
+/// </summary>
+public class StaffTime
+{
+    public Guid Id { get; set; }
+    public Guid HospitalId { get; set; }
+    public Guid? EncounterId { get; set; }
+    public string HisEncounterNo { get; set; } = "";
+    public string? ServiceRef { get; set; }
+    public string LinkMethod { get; set; } = "NONE";
+    public int? OtReservationId { get; set; }
+    /// <summary>SURGEON, ASSISTANT, ANESTHETIST, OT_STAFF, SCRUB_NURSE, CIRC_NURSE, RECOVERY_NURSE, WARD_NURSE, ER_NURSE, ER_DOCTOR, OP_DOCTOR, TECHNICIAN.</summary>
+    public string StaffRole { get; set; } = "";
+    /// <summary>The raw HIS staff type code (e.g. INP_OTMedicalStaffDetail.MedicalStaffType) until it is decoded.</summary>
+    public string? StaffType { get; set; }
+    /// <summary>HIS doctor / employee id; empty for standard-based rows.</summary>
+    public string? StaffId { get; set; }
+    public Guid? ProviderId { get; set; }
+    [Precise] public decimal Minutes { get; set; }
+    /// <summary>MEASURED or STANDARD.</summary>
+    public string Basis { get; set; } = "MEASURED";
+    [Precise] public decimal? Volume { get; set; }
+    public string? VolumeUom { get; set; }
+    public string? CostCentreCode { get; set; }
+    public DateTime OccurredAt { get; set; }
+    public string SourceTable { get; set; } = "";
+    public string SourceSystem { get; set; } = "VIDA-HIS";
+    public string SourceRef { get; set; } = "";
+}
+
 // ═══ Staging contract (BRD 22.2) ═══════════════════════════════════════════════════
 
 /// <summary>Every inbound load, with accepted and rejected counts.</summary>
@@ -270,6 +343,56 @@ public class ImportBatch
     public string? RejectReasons { get; set; }
     public DateTime LoadedAt { get; set; }
     public string LoadedBy { get; set; } = "";
+}
+
+/// <summary>
+/// An uploaded import file (CSV or zip pack), kept so it can be imported again. Upload is immediate;
+/// validate / import run in the background and write their progress here.
+/// </summary>
+public class ImportFile
+{
+    public Guid Id { get; set; }
+    public string FileName { get; set; } = "";
+    public long SizeBytes { get; set; }
+    public string Sha256 { get; set; } = "";
+    public DateTime UploadedAt { get; set; }
+    public string UploadedBy { get; set; } = "";
+    public bool IsHisPack { get; set; }
+    public string? HisSetupId { get; set; }
+    public int? HisProjectId { get; set; }
+    public string? Pack { get; set; }
+    public string? FactsFrom { get; set; }
+    public string? FactsTo { get; set; }
+    /// <summary>The VERITA hospital the file was (or will be) imported into.</summary>
+    public string? Hospital { get; set; }
+    public int TotalRows { get; set; }
+    /// <summary>The preview taken at upload (tables, notices, hospitals), as JSON.</summary>
+    public string? ContextJson { get; set; }
+    /// <summary>UPLOADED, QUEUED, RUNNING, VALIDATED, COMPLETED, COMPLETED_WITH_REJECTS, FAILED.</summary>
+    public string Status { get; set; } = "UPLOADED";
+    public bool LastDryRun { get; set; }
+    public int TablesTotal { get; set; }
+    public int TablesDone { get; set; }
+    public string? CurrentTable { get; set; }
+    public int Attempts { get; set; }
+    public DateTime? QueuedAt { get; set; }
+    public DateTime? StartedAt { get; set; }
+    public DateTime? FinishedAt { get; set; }
+    public string? RunBy { get; set; }
+    public int RowsCreated { get; set; }
+    public int RowsUpdated { get; set; }
+    public int RowsUnchanged { get; set; }
+    public int RowsRejected { get; set; }
+    /// <summary>The last validate / import results per table, as JSON.</summary>
+    public string? DetailJson { get; set; }
+    public string? ErrorMessage { get; set; }
+}
+
+/// <summary>The bytes of an <see cref="ImportFile"/>, apart so listing files never loads them.</summary>
+public class ImportFileContent
+{
+    public Guid Id { get; set; }
+    public byte[] Content { get; set; } = [];
 }
 
 // ═══ J. Governance ═════════════════════════════════════════════════════════════════

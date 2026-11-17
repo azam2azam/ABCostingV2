@@ -78,7 +78,8 @@ public sealed class HisImportService(IDbContextFactory<VeritaDbContext> factory,
             tables, skipped, listed, suggested, notices.ToArray(), warnings.ToArray());
     }
 
-    public async Task<ImportResult[]> ImportAsync(Principal p, string fileName, Stream stream, string? hospital, bool dryRun, string? entityHint, CancellationToken ct)
+    public async Task<ImportResult[]> ImportAsync(Principal p, string fileName, Stream stream, string? hospital, bool dryRun, string? entityHint, CancellationToken ct,
+        Func<string, int, int, Task>? onTable = null)
     {
         var sw = Stopwatch.StartNew();
         var (files, identity, skipped) = ReadWithoutCostingModels(fileName, stream, entityHint);
@@ -158,7 +159,7 @@ public sealed class HisImportService(IDbContextFactory<VeritaDbContext> factory,
         log.LogInformation("Import {Mode} {File} hospital={Hospital} setup={Setup} project={Project} tables={Tables} skipped={Skipped}",
             dryRun ? "validate" : "commit", fileName, hospital, identity?.SetupId, identity?.ProjectId, set.Count, skipped.Length);
 
-        var results = await hub.ImportSetAsync(set, p, dryRun, source, ct, hospital);
+        var results = await hub.ImportSetAsync(set, p, dryRun, source, ct, hospital, onTable);
         var rejected = results.Sum(r => r.Rejected);
         log.LogInformation("Import finished {Mode} {File} hospital={Hospital} tables={Tables} rejected={Rejected} {Ms}ms",
             dryRun ? "validate" : "commit", fileName, hospital, results.Length, rejected, sw.ElapsedMilliseconds);

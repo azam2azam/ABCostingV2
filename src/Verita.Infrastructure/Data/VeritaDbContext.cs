@@ -60,6 +60,8 @@ public sealed class VeritaDbContext(DbContextOptions<VeritaDbContext> options) :
     public DbSet<RevenueTransaction> RevenueTransactions => Set<RevenueTransaction>();
     public DbSet<RefundTransaction> RefundTransactions => Set<RefundTransaction>();
     public DbSet<InvoicePackageItem> InvoicePackageItems => Set<InvoicePackageItem>();
+    public DbSet<ConsumptionItem> ConsumptionItems => Set<ConsumptionItem>();
+    public DbSet<StaffTime> StaffTimes => Set<StaffTime>();
     // Rules & versions
     public DbSet<AllocationRule> AllocationRules => Set<AllocationRule>();
     public DbSet<AllocationRuleTarget> AllocationRuleTargets => Set<AllocationRuleTarget>();
@@ -94,6 +96,8 @@ public sealed class VeritaDbContext(DbContextOptions<VeritaDbContext> options) :
     public DbSet<ApprovalRequest> ApprovalRequests => Set<ApprovalRequest>();
     public DbSet<AuditLog> AuditLogs => Set<AuditLog>();
     public DbSet<ImportBatch> ImportBatches => Set<ImportBatch>();
+    public DbSet<ImportFile> ImportFiles => Set<ImportFile>();
+    public DbSet<ImportFileContent> ImportFileContents => Set<ImportFileContent>();
     // Assistant
     public DbSet<AssistantThread> AssistantThreads => Set<AssistantThread>();
     public DbSet<AssistantMessage> AssistantMessages => Set<AssistantMessage>();
@@ -183,6 +187,10 @@ public sealed class VeritaDbContext(DbContextOptions<VeritaDbContext> options) :
         mb.Entity<CostComponent>().HasKey(x => x.Id).IsClustered(false);
         mb.Entity<CostComponent>().HasIndex(x => new { x.RunId, x.Scope, x.ScopeId }).IsClustered();
         mb.Entity<EncounterCost>().HasKey(x => x.Id).IsClustered(false);
+        mb.Entity<ImportFile>().Property(x => x.Sha256).HasMaxLength(64);
+        mb.Entity<ImportFile>().Property(x => x.Status).HasMaxLength(32);
+        mb.Entity<ImportFile>().HasIndex(x => x.UploadedAt);
+        mb.Entity<ImportFileContent>().HasOne<ImportFile>().WithOne().HasForeignKey<ImportFileContent>(x => x.Id).OnDelete(DeleteBehavior.Cascade);
         mb.Entity<RunDimensionCost>().Property(x => x.Dimension).HasMaxLength(32);
         mb.Entity<RunDimensionCost>().HasIndex(x => new { x.RunId, x.Dimension });
         mb.Entity<RunHisInvoicing>().HasIndex(x => new { x.RunId, x.InvoiceType }).IsUnique();
@@ -283,6 +291,11 @@ public sealed class VeritaDbContext(DbContextOptions<VeritaDbContext> options) :
         Fk<InvoicePackageItem, Hospital>(x => x.HospitalId);
         Fk<InvoicePackageItem, Encounter>(x => x.EncounterId);
         Fk<InvoicePackageItem, Procedure>(x => x.ProcedureId);
+        Fk<ConsumptionItem, Hospital>(x => x.HospitalId);
+        Fk<ConsumptionItem, Encounter>(x => x.EncounterId);
+        Fk<StaffTime, Hospital>(x => x.HospitalId);
+        Fk<StaffTime, Encounter>(x => x.EncounterId);
+        Fk<StaffTime, Provider>(x => x.ProviderId);
         Fk<AllocationRule, CostPool>(x => x.SourcePoolId);
         Fk<AllocationRule, CostDriver>(x => x.DriverId);
         Fk<AllocationRuleTarget, AllocationRule>(x => x.RuleId);
@@ -378,6 +391,14 @@ public sealed class VeritaDbContext(DbContextOptions<VeritaDbContext> options) :
         mb.Entity<InvoicePackageItem>().Property(x => x.SourceRef).HasMaxLength(100);
         mb.Entity<InvoicePackageItem>().HasIndex(x => new { x.HospitalId, x.SourceRef }).IsUnique();
         mb.Entity<InvoicePackageItem>().HasIndex(x => x.EncounterId);
+        mb.Entity<ConsumptionItem>().Property(x => x.SourceRef).HasMaxLength(120);
+        mb.Entity<ConsumptionItem>().HasIndex(x => new { x.HospitalId, x.SourceRef }).IsUnique();
+        mb.Entity<ConsumptionItem>().HasIndex(x => x.EncounterId);
+        mb.Entity<ConsumptionItem>().HasIndex(x => new { x.HospitalId, x.HisEncounterNo });
+        mb.Entity<StaffTime>().Property(x => x.SourceRef).HasMaxLength(120);
+        mb.Entity<StaffTime>().HasIndex(x => new { x.HospitalId, x.SourceRef }).IsUnique();
+        mb.Entity<StaffTime>().HasIndex(x => x.EncounterId);
+        mb.Entity<StaffTime>().HasIndex(x => new { x.HospitalId, x.HisEncounterNo });
         mb.Entity<DriverVolume>().HasIndex(x => new { x.DriverId, x.PeriodId });
         mb.Entity<ResourceRate>().HasIndex(x => new { x.ResourceId, x.EffectiveFrom });
         mb.Entity<GLMapping>().HasIndex(x => new { x.GLAccountId, x.CostCenterId });

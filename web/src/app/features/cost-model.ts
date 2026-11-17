@@ -7,7 +7,7 @@ import {
 import { Auth } from '../core/auth';
 import { RunContext } from '../core/context';
 import { apiResource, catalogueResource } from '../core/resource';
-import { Col, UI, matchesNameOrCode } from '../shared/ui';
+import { Col, UI, hisProcedureId, matchesNameOrCode } from '../shared/ui';
 
 export const allocationCols: Col<AllocationDto>[] = [
   { key: 'stage', label: 'Stage', type: 'num', dp: 0 },
@@ -81,8 +81,166 @@ export class Departments {
   });
 }
 
+// ── Doctors ─────────────────────────────────────────────────────────────────────
+
 /** OpenAPI types catch up on the next api:types run. */
-type CcRow = CostCentreRow & { departmentId?: string };
+export interface DoctorRow {
+  id: string;
+  code: string;
+  name: string;
+  specialty: string;
+  grade: string;
+  departmentId: string;
+  department: string | null;
+  departments: number;
+  isDummy: boolean;
+  cases: number;
+  revenue: number;
+  cost: number;
+}
+
+interface DoctorDetailDto {
+  doctor: DoctorRow;
+  departments: { id: string; code: string; name: string; hisClinicId: string | null; isHome: boolean; isDefault: boolean; cases: number }[];
+  packages: DoctorWork[];
+  procedures: DoctorWork[];
+}
+
+interface DoctorWork {
+  id: string; code: string; name: string; category: string; encounters: number; quantity: number | string;
+  revenue: number | string; unitCost: number | string; cost: number | string; margin: number | string; marginPct: number | string;
+}
+
+@Component({
+  selector: 'v-doctors',
+  imports: [...UI],
+  template: `
+    <v-page title="Doctors" purpose="The hospital's doctors from the catalogue, with their home department and HIS clinics. When a calculation has been run for the period, cases, revenue and cost are shown too.">
+      <v-state [loading]="res.isLoading()" [error]="res.error()">
+        @if (res.value()) {
+          <v-table paged [rows]="filtered()" [columns]="cols()" sortBy="cases" caption="Doctors"
+            [empty]="search().trim() ? 'No doctors match this search.' : 'No doctors in the catalogue for this hospital.'">
+            <v-list-search toolbar [(query)]="search" placeholder="Search by name or id" />
+          </v-table>
+        }
+      </v-state>
+    </v-page>
+  `,
+})
+export class Doctors {
+  private auth = inject(Auth);
+  res = catalogueResource<DoctorRow[]>(() => 'doctors');
+  search = signal('');
+  filtered = computed(() => (this.res.value()?.data ?? []).filter(r => matchesNameOrCode(this.search(), r.name, r.code)));
+  cols = computed<Col<DoctorRow>[]>(() => {
+    const cols: Col<DoctorRow>[] = [
+      { key: 'code', label: 'Id', value: r => localCode(r.code), minWidth: '9rem' },
+      { key: 'name', label: 'Name', link: r => `/doctors/${r.id}`, sub: r => r.isDummy ? 'HIS placeholder' : null },
+      { key: 'specialty', label: 'Specialty' },
+      { key: 'grade', label: 'Grade' },
+      { key: 'department', label: 'Home department', link: r => r.department ? `/departments/${r.departmentId}` : null },
+      { key: 'departments', label: 'Departments', type: 'num', dp: 0 },
+      { key: 'cases', label: 'Cases', type: 'num', dp: 0, link: () => '/patient-encounters',
+        linkParams: r => ({ physician: r.id }) },
+    ];
+    if (this.auth.can('revenue.view')) {
+      cols.push(
+        { key: 'revenue', label: 'Revenue', type: 'money', dp: 0 },
+        { key: 'cost', label: 'Cost', type: 'money', dp: 0, bad: r => Number(r.cost) > Number(r.revenue) },
+      );
+    } else {
+      cols.push({ key: 'cost', label: 'Cost', type: 'money', dp: 0 });
+    }
+    return cols;
+  });
+}
+
+type DoctorWorkRow = DoctorDetailDto['packages'][number];
+
+@Component({
+  selector: 'v-doctor',
+  imports: [...UI],
+  template: `
+    <v-state [loading]="res.isLoading()" [error]="res.error()">
+      @if (res.value(); as r) {
+        <v-page [title]="r.data.doctor.name" [purpose]="purpose(r.data.doctor)">
+          <div class="grid tiles">
+            <v-tile label="Cases" [value]="r.data.doctor.cases" unit="" />
+            @if (canRevenue()) { <v-tile label="Revenue" [value]="r.data.doctor.revenue" /> }
+            <v-tile label="Cost" [value]="r.data.doctor.cost" />
+            @if (canRevenue()) {
+              <v-tile label="Margin" [value]="margin(r.data.doctor)" direction="higher-better" />
+              <v-tile label="Margin %" [value]="marginPct(r.data.doctor)" unit="%" direction="higher-better" />
+            }
+            <v-tile label="Departments" [value]="r.data.departments.length" unit="" />
+          </div>
+          <section class="card" style="margin-top:14px">
+            <h2>Departments</h2>
+            <v-table [rows]="r.data.departments" [columns]="deptCols" sortBy="cases" caption="Departments this doctor works in"
+              empty="This doctor is not linked to any department." />
+          </section>
+          <section class="card">
+            <h2>Packages performed</h2>
+            <p class="muted">Billed package lines in {{ r.meta.period }} where this doctor is the line's doctor.</p>
+            <v-table paged [rows]="r.data.packages" [columns]="workCols('packages')" [total]="workTotal(r.data.packages)" caption="Packages performed"
+              empty="No packages billed under this doctor in this period." />
+          </section>
+          <section class="card">
+            <h2>Procedures performed (not packaged)</h2>
+            <p class="muted">Billed procedure lines in {{ r.meta.period }} where this doctor is the line's doctor, excluding package lines.</p>
+            <v-table paged [rows]="r.data.procedures" [columns]="workCols('procedures')" [total]="workTotal(r.data.procedures)" caption="Procedures performed (not packaged)"
+              empty="No procedures billed under this doctor in this period." />
+          </section>
+        </v-page>
+      }
+    </v-state>
+  `,
+})
+export class DoctorDetail {
+  id = input.required<string>();
+  private auth = inject(Auth);
+  res = catalogueResource<DoctorDetailDto>(() => `doctors/${this.id()}`);
+  canRevenue = computed(() => this.auth.can('revenue.view'));
+  deptCols: Col<DoctorDetailDto['departments'][number]>[] = [
+    { key: 'code', label: 'Code', value: r => localCode(r.code) },
+    { key: 'name', label: 'Department', link: r => `/departments/${r.id}` },
+    { key: 'hisClinicId', label: 'HIS clinic' },
+    { key: 'isHome', label: 'Link', value: r => r.isHome ? 'Home department' : r.isDefault ? 'Default clinic' : r.hisClinicId ? 'Clinic' : 'Encounters only' },
+    { key: 'cases', label: 'Cases', type: 'num', dp: 0 },
+  ];
+  workCols(kind: 'packages' | 'procedures'): Col<DoctorWorkRow>[] {
+    const cols: Col<DoctorWorkRow>[] = [
+      { key: 'code', label: 'Id', value: r => hisProcedureId(r.code), link: r => `/${kind}/${r.id}` },
+      { key: 'name', label: kind === 'packages' ? 'Package' : 'Procedure', link: r => `/${kind}/${r.id}` },
+      { key: 'category', label: kind === 'packages' ? 'Type' : 'Category', value: r => r.category || '—' },
+      { key: 'encounters', label: 'Encounters', type: 'num', dp: 0 },
+      { key: 'quantity', label: 'Quantity', type: 'num', dp: 0 },
+    ];
+    if (this.canRevenue()) cols.push({ key: 'revenue', label: 'Revenue', type: 'money', dp: 0 });
+    cols.push({ key: 'unitCost', label: 'Unit cost', type: 'money', dp: 0 }, { key: 'cost', label: 'Cost', type: 'money', dp: 0, bad: r => this.canRevenue() && Number(r.cost) > Number(r.revenue) });
+    if (this.canRevenue()) cols.push(
+      { key: 'margin', label: 'Margin', type: 'money', dp: 0, bad: r => Number(r.margin) < 0 },
+      { key: 'marginPct', label: 'Margin %', value: r => Number(r.revenue) ? `${Number(r.marginPct).toFixed(1)}%` : '—', bad: r => Number(r.margin) < 0 },
+    );
+    return cols;
+  }
+  workTotal(rows: DoctorWorkRow[]): Record<string, number> | null {
+    if (!rows.length) return null;
+    const sum = (k: keyof DoctorWorkRow) => rows.reduce((t, r) => t + Number(r[k]), 0);
+    return { quantity: sum('quantity'), revenue: sum('revenue'), cost: sum('cost'), margin: sum('margin') };
+  }
+  purpose(d: DoctorRow): string {
+    return [localCode(d.code), d.specialty, d.grade, d.department, d.isDummy ? 'HIS placeholder' : null].filter(Boolean).join(' · ');
+  }
+  margin(d: DoctorRow): number { return Number(d.revenue) - Number(d.cost); }
+  marginPct(d: DoctorRow): number {
+    const rev = Number(d.revenue);
+    return rev === 0 ? 0 : this.margin(d) / rev * 100;
+  }
+}
+
+/** OpenAPI types catch up on the next api:types run. */
+type CcRow =CostCentreRow & { departmentId?: string };
 
 interface DepartmentDetailDto {
   department: DepartmentRow;

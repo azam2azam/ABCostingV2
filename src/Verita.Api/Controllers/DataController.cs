@@ -113,6 +113,48 @@ public sealed class DataController(DataHubService hub, RecipeSuggestionService r
         return results;
     }
 
+    // ── Uploaded files: upload now, validate / import in the background ─────────
+
+    /// <summary>Store a CSV or zip pack and preview it. Nothing is imported yet.</summary>
+    [HttpPost("files")]
+    [Authorize(Policy = "masterdata.view")]
+    [RequestSizeLimit(200_000_000)]
+    public async Task<ImportFileDetail> UploadFile(IFormFile file, [FromServices] ImportFileService files, CancellationToken ct)
+    {
+        var p = await Me();
+        if (file is null || file.Length == 0) throw AppError.Invalid("Choose a file to upload.");
+        await using var stream = file.OpenReadStream();
+        return await files.UploadAsync(p, file.FileName, stream, ct);
+    }
+
+    [HttpGet("files")]
+    [Authorize(Policy = "masterdata.view")]
+    public async Task<ImportFileDto[]> Files([FromServices] ImportFileService files, CancellationToken ct) => await files.ListAsync(await Me(), ct);
+
+    [HttpGet("files/{id:guid}")]
+    [Authorize(Policy = "masterdata.view")]
+    public async Task<ImportFileDetail> FileDetail(Guid id, [FromServices] ImportFileService files, CancellationToken ct) => await files.GetAsync(await Me(), id, ct);
+
+    public sealed record ImportFileRequest(string? Hospital, bool DryRun);
+
+    /// <summary>Queue a validate (dryRun) or import of a stored file. Returns at once; poll the file for status.</summary>
+    [HttpPost("files/{id:guid}/import")]
+    [Authorize(Policy = "masterdata.view")]
+    public async Task<ActionResult<ImportFileDto>> ImportFile(Guid id, ImportFileRequest req, [FromServices] ImportFileService files, [FromServices] Verita.Api.Infrastructure.ImportQueue queue, CancellationToken ct)
+    {
+        var job = await files.QueueAsync(await Me(), id, req.Hospital, req.DryRun, ct);
+        await queue.EnqueueAsync(job);
+        return Accepted((await files.GetAsync(job.Actor, id, ct)).File);
+    }
+
+    [HttpDelete("files/{id:guid}")]
+    [Authorize(Policy = "masterdata.view")]
+    public async Task<IActionResult> DeleteFile(Guid id, [FromServices] ImportFileService files, CancellationToken ct)
+    {
+        await files.DeleteAsync(await Me(), id, ct);
+        return NoContent();
+    }
+
     [HttpGet("imports")]
     [Authorize(Policy = "masterdata.view")]
     public async Task<ImportBatchDto[]> History(CancellationToken ct) => await hub.HistoryAsync(ct);

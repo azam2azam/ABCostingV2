@@ -113,6 +113,24 @@ public sealed class RunsController(RunService runs, RunQueue queue, VeritaDbCont
         return NoContent();
     }
 
+    /// <summary>Facts held for a hospital's period: rows and estimated storage per entity, and the runs that block deleting them.</summary>
+    [HttpGet("periods/{id:guid}/facts")]
+    [Authorize(Policy = "masterdata.view")]
+    public async Task<PeriodFactsDto> PeriodFacts(Guid id, [FromQuery] string hospital, [FromServices] PeriodFactsService facts, CancellationToken ct) =>
+        await facts.SummaryAsync(await Me(), id, hospital, ct);
+
+    /// <summary>Delete one entity's facts for the period (and what depends on it), or every fact when entity is omitted. Refused while a calculation run uses them.</summary>
+    [HttpDelete("periods/{id:guid}/facts")]
+    [Authorize(Policy = "masterdata.edit")]
+    public async Task<PeriodFactsDeleted[]> DeletePeriodFacts(Guid id, [FromQuery] string hospital, [FromQuery] string? entity, [FromServices] PeriodFactsService facts, CancellationToken ct) =>
+        await facts.DeleteAsync(await Me(), id, hospital, entity, ct);
+
+    /// <summary>Database storage by table (all hospitals), and the hospital's facts and calculation results per period.</summary>
+    [HttpGet("storage")]
+    [Authorize(Policy = "masterdata.view")]
+    public async Task<StorageDto> Storage([FromQuery] string hospital, [FromServices] PeriodFactsService facts, CancellationToken ct) =>
+        await facts.StorageAsync(await Me(), hospital, ct);
+
     public sealed record TransitionRequest(string To);
 
     [HttpPost("runs/{run}/transition")]

@@ -13,6 +13,7 @@ public static class FactsExtract
         await EncountersAsync(db, s, c, pack);
         await BillingAsync(db, s, c, pack);
         await ActivityTxnExtract.RunAsync(db, s, c, pack);
+        await ConsumptionExtract.RunAsync(db, s, c, pack);
         pack.Note("Facts extract finished");
     }
 

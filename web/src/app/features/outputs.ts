@@ -311,6 +311,11 @@ export class Packages {
           </div>
           <section class="card" style="margin-top:14px"><h2>Standard composition</h2><v-table [rows]="r.data.components" [columns]="compCols" [total]="compTotal()" /></section>
           <section class="card">
+            <h2>Doctors who performed this package</h2>
+            <p class="muted">Doctor on each billed package line in {{ r.meta.period }}, counted the same way as the encounter count.</p>
+            <v-table [rows]="r.data.doctors" [columns]="doctorCols" caption="Doctors who performed this package" empty="No billed package lines in this period." />
+          </section>
+          <section class="card">
             <h2>Encounters</h2>
             <p><a [routerLink]="['/patient-encounters']" [queryParams]="{ billedPackageId: id() }" queryParamsHandling="merge">View list</a></p>
           </section>
@@ -330,6 +335,14 @@ export class PackageDetail {
     { key: 'procType', label: 'Type', value: r => r.isMedicine ? 'Medicine' : r.procType },
     { key: 'price', label: 'Contracted price', type: 'money' },
     { key: 'cost', label: 'Cost', type: 'money' },
+  ];
+  doctorCols: Col<PackageDetailDto['doctors'][number]>[] = [
+    { key: 'name', label: 'Doctor', link: r => r.id ? `/doctors/${r.id}` : null, sub: r => r.isDummy ? 'HIS placeholder' : r.code || null },
+    { key: 'specialty', label: 'Specialty', value: r => r.specialty || '—' },
+    { key: 'department', label: 'Department', value: r => r.department ?? '—' },
+    { key: 'encounters', label: 'Encounters', type: 'num', dp: 0 },
+    { key: 'quantity', label: 'Quantity billed', type: 'num', dp: 0 },
+    { key: 'sharePct', label: 'Share of encounters', type: 'bar' },
   ];
   encCount = computed(() => this.res.value()?.data.encounterCount ?? 0);
   /** Same as the packages list: contracted list price × billed quantity in this run. */

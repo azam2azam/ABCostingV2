@@ -20,6 +20,8 @@ builder.Services.AddVerita(cs);
 builder.Services.AddScoped<CurrentUser>();
 builder.Services.AddSingleton<RunQueue>();
 builder.Services.AddHostedService<RunWorker>();
+builder.Services.AddSingleton<ImportQueue>();
+builder.Services.AddHostedService<ImportWorker>();
 builder.Services.AddSingleton<IAuthorizationMiddlewareResultHandler, JsonAuthorizationResultHandler>();
 
 // NFR-10: production signs in through OIDC (Entra ID) with MFA. Locally issued tokens exist for
@@ -80,6 +82,12 @@ builder.Services.AddSwaggerGen(o =>
 });
 
 var app = builder.Build();
+
+// Bring the database schema up to date before serving: apply any EF Core migration the database
+// has not recorded in __EFMigrationsHistory. A failure stops the API rather than run on an old schema.
+// Turn off with Database__MigrateOnStartup=false (then apply migrations by script).
+if (app.Configuration.GetValue("Database:MigrateOnStartup", true))
+    await DatabaseMigrator.MigrateAsync(app.Services, app.Logger);
 
 app.UseResponseCompression();
 if (corsOrigins.Length > 0) app.UseCors();

@@ -72,7 +72,7 @@ public static class HisImportPack
     public static List<Dictionary<string, string>> UnknownDoctors(IEnumerable<ParsedFile> files, IReadOnlySet<string> known)
     {
         var unknown = new Dictionary<string, Dictionary<string, string>>(StringComparer.OrdinalIgnoreCase);
-        foreach (var file in files.Where(f => f.Spec?.Name is "Encounter" or "EncounterService"))
+        foreach (var file in files.Where(f => f.Spec?.Name is "Encounter" or "EncounterService" or "StaffTime"))
             foreach (var row in file.Rows)
                 if (row.GetValueOrDefault("providerCode")?.Trim() is { Length: > 0 } code && !known.Contains(code) && !unknown.ContainsKey(code))
                     unknown[code] = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
@@ -357,6 +357,13 @@ public static class HisImportPack
             return true;
         }
         var name = Path.GetFileNameWithoutExtension(fileName ?? "");
+        var day = System.Text.RegularExpressions.Regex.Match(name, @"-(\d{4}-\d{2}-\d{2})-facts$", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+        if (day.Success && DateOnly.TryParseExact(day.Groups[1].Value, "yyyy-MM-dd", CultureInfo.InvariantCulture, DateTimeStyles.None, out var d))
+        {
+            from = d;
+            toInclusive = d;
+            return true;
+        }
         var m = System.Text.RegularExpressions.Regex.Match(name, @"-(\d{4}-\d{2})-facts$", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
         if (m.Success && DateOnly.TryParseExact(m.Groups[1].Value + "-01", "yyyy-MM-dd", CultureInfo.InvariantCulture, DateTimeStyles.None, out var month))
         {
