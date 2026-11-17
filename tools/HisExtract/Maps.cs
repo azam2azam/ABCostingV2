@@ -4,18 +4,20 @@ namespace HisExtract;
 
 public static class Maps
 {
+    /// <summary>HIS_Patient.Gender: 1 male, 2 female (as HIS's own procedures read it). Anything else is not known: blank.</summary>
     public static string Sex(object? gender) => Convert.ToInt32(gender ?? 0) switch
     {
-        2 => "F",
-        0 => "M",
         1 => "M",
-        _ => "M",
+        2 => "F",
+        _ => "",
     };
 
-    public static string Segment(int birthYear, bool pregnant, DateTime asOf)
+    /// <summary>Unknown birth year: VERITA needs a segment, so ADULT — never an age worked out from the 1900 placeholder.</summary>
+    public static string Segment(int? birthYear, bool pregnant, DateTime asOf)
     {
         if (pregnant) return "MATERNITY";
-        var age = asOf.Year - birthYear;
+        if (birthYear is null) return "ADULT";
+        var age = asOf.Year - birthYear.Value;
         if (age < 18) return "PEDIATRIC";
         if (age >= 65) return "GERIATRIC";
         return "ADULT";

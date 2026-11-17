@@ -30,9 +30,11 @@ public sealed class HisImportService(IDbContextFactory<VeritaDbContext> factory,
             notices.Add($"Skipped {string.Join(", ", skipped)}.");
         if (HisImportPack.IsFactsPack(identity, files))
         {
-            files = HisImportPack.WithoutHisInventedActivityTransactions(files, out var droppedTxn);
+            files = HisImportPack.WithoutHisInventedRows(files, out var droppedTxn, out var droppedStaff);
             if (droppedTxn > 0)
                 notices.Add($"Skipped {droppedTxn:N0} ActivityTransaction row(s). HIS packs use StaffTime, EncounterTransfer and ConsumptionItem — not invented ACT/RES volumes.");
+            if (droppedStaff > 0)
+                notices.Add($"Skipped {droppedStaff:N0} StaffTime row(s) HIS never recorded (ward nursing by standard, unnamed ER nurse). Re-extract with the current HisExtract.");
         }
         var tables = files.Select(f => new ImportPreviewTable(f.Spec!.Name, f.FileName, f.Rows.Count)).ToArray();
 
@@ -101,9 +103,11 @@ public sealed class HisImportService(IDbContextFactory<VeritaDbContext> factory,
 
         if (HisImportPack.IsFactsPack(identity, files))
         {
-            files = HisImportPack.WithoutHisInventedActivityTransactions(files, out var droppedTxn);
+            files = HisImportPack.WithoutHisInventedRows(files, out var droppedTxn, out var droppedStaff);
             if (droppedTxn > 0)
                 log.LogInformation("Import {File}: skipped {Count} ActivityTransaction row(s) (HIS packs use StaffTime / EncounterTransfer / ConsumptionItem)", fileName, droppedTxn);
+            if (droppedStaff > 0)
+                log.LogInformation("Import {File}: skipped {Count} StaffTime row(s) HIS never recorded (STANDARD basis, unnamed ER nurse)", fileName, droppedStaff);
         }
 
         if (identity is not null)

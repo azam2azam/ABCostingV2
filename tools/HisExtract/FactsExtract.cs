@@ -50,12 +50,12 @@ public static class FactsExtract
         {
             var mrn = c.Mrn(HisConnection.I(r, "PatientID"));
             if (mrn.Length == 0 || !seen.Add(mrn)) return;
+            // birthYear is required by VERITA: 1900 marks "not in HIS".
             var dob = HisConnection.Dt(r, "DateofBirth");
-            var year = dob?.Year ?? 1900;
             csv.Write(c.Hospital, mrn,
                 Maps.FullName(HisConnection.S(r, "FirstName"), HisConnection.S(r, "MiddleName"), HisConnection.S(r, "LastName")),
-                Maps.Int(year), Maps.Sex(HisConnection.I(r, "Gender")),
-                Maps.Segment(year, HisConnection.B(r, "IsPregnant"), asOf),
+                Maps.Int(dob?.Year ?? 1900), Maps.Sex(HisConnection.I(r, "Gender")),
+                Maps.Segment(dob?.Year, HisConnection.B(r, "IsPregnant"), asOf),
                 Maps.MaskId(HisConnection.S(r, "PatientIdentificationNo")));
         });
 
@@ -83,9 +83,10 @@ public static class FactsExtract
             var mrn = c.Mrn(HisConnection.I(r, "PatientID"));
             if (mrn.Length == 0 || !seen.Add(mrn)) return;
             stubs++;
-            csv.Write(c.Hospital, mrn, "Unknown patient", "1900", "M", "ADULT", "");
+            // Only the MRN is known. Name and sex stay blank; birthYear and segment are VERITA-required placeholders.
+            csv.Write(c.Hospital, mrn, "", "1900", "", "ADULT", "");
         });
-        if (stubs > 0) pack.Note($"Patient: {stubs} encounter PatientIDs had no HIS_Patient row and were added as stubs.");
+        if (stubs > 0) pack.Note($"Patient: {stubs} encounter PatientIDs had no HIS_Patient row; written with the MRN only (birthYear 1900 = unknown).");
     }
 
     private static async Task EncountersAsync(HisConnection db, Settings s, Codes c, CsvZipWriter pack)
@@ -410,6 +411,8 @@ public static class FactsExtract
             if (posted.Date < s.From!.Value.Date || posted.Date >= s.To!.Value.Date)
                 outsideWindow++;
             var performed = HisConnection.Dt(r, "PerformDate") ?? posted;
+            // HIS stores Quantity 0 for one unit (the line's shares equal its unit price), so 0 reads as 1.
+            // The stored value is kept in hisQuantity.
             var qty = Math.Max(1, HisConnection.I(r, "Quantity"));
             var price = Maps.Round4(HisConnection.F(r, "Price"));
             var gross = decimal.Round(price * qty, 4, MidpointRounding.AwayFromZero);

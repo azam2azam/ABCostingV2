@@ -5,7 +5,7 @@ namespace HisExtract;
 /// <summary>
 /// Facts pack phase 3 (docs/HIS-CONSUMPTION-QUANTITIES-SPEC.md): item-level consumption, staff time, and bed transfers.
 /// 39_ConsumptionItem.csv — consumables, implants, medicine by item, tied to the procedure line when a rule finds one.
-/// 40_StaffTime.csv — OR team, OP and ER doctors/nurses (measured). Ward nursing is not invented here.
+/// 40_StaffTime.csv — OR team, OP and ER doctors, day-procedure staff: HIS clocks and the staff HIS names. Nothing without a clock.
 /// 41_EncounterTransfer.csv — HIS INP_Transfer as stored (TransferDate, StartTime, EndTime, Duration); no conversion.
 /// Quantities only. Cost joins later from pharmacy / ERP on itemKey or oracleItemCode, and from payroll on staffId.
 ///
@@ -105,7 +105,7 @@ public static class ConsumptionExtract
             await Safe(pack, "Nursing procedure notes", () => Counted(pack, "Nursing procedure note clocks", o, () => NursingProcedureNotesAsync(db, s, c, o)));
             await Safe(pack, "OP doctor", () => Counted(pack, "OP doctor minutes", o, () => OpDoctorAsync(db, s, c, o)));
             await Safe(pack, "ER staff", () => Counted(pack, "ER doctor / nurse minutes", o, () => ErStaffAsync(db, s, c, o)));
-            pack.Note("StaffTime: measured HIS clocks + named staff ids as received. Ward nursing standards are not invented — see 41_EncounterTransfer.csv.");
+            pack.Note("StaffTime: measured HIS clocks + named staff ids as received. No row without a HIS clock; no ER nurse (INP_ERAssessment names none); ward nursing is in 41_EncounterTransfer.csv.");
         }
 
         using (var csv = pack.Create("41_EncounterTransfer.csv",
@@ -153,6 +153,7 @@ public static class ConsumptionExtract
         {
             var adm = HisConnection.Ni(r, "AdmissionNo");
             var enc = adm is > 0 ? c.IpEncounter(adm.Value) : c.OpEncounter(HisConnection.I(r, "AppointmentNo"));
+            // HIS stores Quantity 0 for one unit (the line's shares equal its unit price), so 0 reads as 1.
             var qty = Math.Max(1, HisConnection.I(r, "Quantity"));
             var price = Maps.Round4(HisConnection.F(r, "Price"));
             list.Add(new Line(enc, HisConnection.I(r, "TransactionType"), HisConnection.I(r, "InvoiceNo"), HisConnection.I(r, "LineItemNo"),
@@ -246,7 +247,7 @@ public static class ConsumptionExtract
             var itemId = HisConnection.S(r, "ItemId").Trim();
             var name = names.GetValueOrDefault(itemId);
             o.Add(enc, anchor, method, null, "CONSUMABLE", itemId, "INV_ITEM", name?.Oracle ?? Nz(HisConnection.S(r, "OracleItemCode")),
-                Nz(HisConnection.S(r, "Barcode")), name?.Name ?? $"Item {itemId} (category {HisConnection.S(r, "ItemCategoryId")})",
+                Nz(HisConnection.S(r, "Barcode")), name?.Name,
                 Maps.Round4(HisConnection.F(r, "UnitQty")), "UNIT", Opt(HisConnection.F(r, "ConversionFactor")), null,
                 ns is null ? c.UnmappedCc : c.WardCc(ns), HisConnection.S(r, "InventoryLocationID"),
                 billed, Opt(HisConnection.F(r, "UnitPrice")),
@@ -329,9 +330,11 @@ public static class ConsumptionExtract
         var otProcs = await OtProceduresAsync(db, s);
         await db.QueryAsync($"""
             WITH fl AS (
-                SELECT f.EncounterNo, f.Barcode, MIN(f.ItemId) AS ItemId FROM #ip i INNER JOIN dbo.HIS_FloorConsumption f WITH (NOLOCK)
+                -- HIS_FloorConsumption.Barcode is bigint, INP_ImplantDetail.Barcode is varchar: compare as text,
+                -- or SQL converts the implant barcode to bigint and the whole step fails on the first non-numeric one.
+                SELECT f.EncounterNo, CAST(f.Barcode AS varchar(50)) AS Barcode, MIN(f.ItemId) AS ItemId FROM #ip i INNER JOIN dbo.HIS_FloorConsumption f WITH (NOLOCK)
                   ON f.SetupID=@SetupId AND f.ProjectID=@ProjectId AND f.EncounterType=2 AND f.EncounterNo=i.No
-                WHERE ISNULL(f.Barcode, '') <> '' GROUP BY f.EncounterNo, f.Barcode
+                WHERE f.Barcode > 0 GROUP BY f.EncounterNo, f.Barcode
             ), bb AS (
                 SELECT b.ItemID, MIN(b.OracleItemCode) AS OracleItemCode FROM dbo.BBraun_ItemIntegrationMapping b WITH (NOLOCK)
                 WHERE b.SetupID=@SetupId AND b.ProjectID=@ProjectId GROUP BY b.ItemID
@@ -342,7 +345,7 @@ public static class ConsumptionExtract
             INNER JOIN dbo.INP_OTReservation ot WITH (NOLOCK) ON ot.SetupID=@SetupId AND ot.ProjectID=@ProjectId AND ot.AdmissionNo=i.No
             INNER JOIN dbo.INP_ImplantDetail d WITH (NOLOCK)
               ON d.SetupID=ot.SetupID AND d.ProjectId=ot.ProjectID AND d.OTReservationID=ot.OTReservationID
-            LEFT JOIN fl ON fl.EncounterNo = ot.AdmissionNo AND fl.Barcode = d.Barcode
+            LEFT JOIN fl ON fl.EncounterNo = ot.AdmissionNo AND fl.Barcode = LTRIM(RTRIM(d.Barcode))
             LEFT JOIN bb ON bb.ItemID = fl.ItemId
             """, s.BindTenant, r =>
         {
@@ -356,7 +359,7 @@ public static class ConsumptionExtract
             var ot = HisConnection.Ni(r, "OTID");
             var name = item.Length > 0 ? names.GetValueOrDefault(item) : null;
             o.Add(enc, anchor, anchor is null ? "NONE" : "OT_RESERVATION", res, "IMPLANT", key, system, name?.Oracle ?? Nz(HisConnection.S(r, "OracleItemCode")),
-                barcode, Nz(HisConnection.S(r, "Description")) ?? name?.Name, Math.Max(1, HisConnection.I(r, "Quantity")), "UNIT", null, null,
+                barcode, Nz(HisConnection.S(r, "Description")) ?? name?.Name, HisConnection.I(r, "Quantity"), "UNIT", null, null,
                 ot is null ? c.UnmappedCc : c.OtCc(ot), ot?.ToString(), null, null,
                 HisConnection.Dt(r, "CreatedOn") ?? HisConnection.Dt(r, "OperationDate") ?? s.From!.Value,
                 "INP_ImplantDetail", $"IMP-{res}-{HisConnection.I(r, "LineItemNo")}");
@@ -378,21 +381,25 @@ public static class ConsumptionExtract
             var name = names.GetValueOrDefault(med);
             var dispensed = HisConnection.I(r, "DispensedQuantity");
             var daily = HisConnection.F(r, "DoseDailyQuantity");
-            var days = Math.Max(1, HisConnection.I(r, "DoseDurationDays"));
+            var days = HisConnection.I(r, "DoseDurationDays");
             // The billed medicine line of the same appointment and medicine, when there is one.
             var billed = lines.ByEncounter[enc].FirstOrDefault(l => l.IsMedicine && (l.MedicineId == med || l.ProcedureId == med));
-            if (billed is not null) dispensedLines.Add(billed.Ref);
+            // Quantity is DispensedQuantity as HIS holds it, never the billed quantity. Only a row that carries a
+            // dispensed quantity stands for the billed line; otherwise the billed line is written on its own (BilledMedicine).
+            var claims = billed is not null && dispensed > 0;
+            if (claims) dispensedLines.Add(billed!.Ref);
             var anchor = billed is null ? null : AnchorOnInvoice(lines, billed) ?? billed.Ref;
             o.Add(enc, anchor, billed is null ? "NONE" : "BILLED_LINE", null, "MEDICINE", med, "HIS_MED", billed?.OracleItemCode ?? name?.Oracle, null, name?.Name ?? billed?.Name,
-                dispensed > 0 ? dispensed : billed?.Qty ?? 0, "UNIT", null, daily > 0 ? Maps.Round4(daily * days) : null, c.UnmappedCc, null,
-                billed?.Amount, null, HisConnection.Dt(r, "StartDate") ?? s.From!.Value, "HIS_ProgNoteMedicine",
+                dispensed, "UNIT", null, daily > 0 && days > 0 ? Maps.Round4(daily * days) : null, c.UnmappedCc, null,
+                claims ? billed!.Amount : null, null, HisConnection.Dt(r, "StartDate") ?? s.From!.Value, "HIS_ProgNoteMedicine",
                 $"MED-OP-{HisConnection.I(r, "EpisodeID")}-{appt}-{med}");
         });
     }
 
     private static async Task IpMedicineOrdersAsync(HisConnection db, Settings s, Codes c, ItemWriter o, LineIndex lines, Dictionary<string, ItemName> names)
     {
-        // IP orders have no dispensed qty in HIS — keep prescribed qty; billed qty when a matching line exists.
+        // IP orders have no dispensed qty in HIS: quantity 0 and the prescribed qty as HIS holds it. The billed
+        // line keeps its own row (BilledMedicine), so its quantity and amount are not copied here as well.
         await db.QueryAsync($"""
             SELECT m.OrderNo, m.LineItemNo, m.AdmissionNo, m.ItemID, m.ItemUom, m.DoseDailyQuantity, m.DoseDurationDays,
                    m.StartDate, m.OrderDate, m.Price, m.ClinicID
@@ -411,16 +418,17 @@ public static class ConsumptionExtract
             var line = HisConnection.Ni(r, "LineItemNo");
             var name = names.GetValueOrDefault(item);
             var daily = HisConnection.F(r, "DoseDailyQuantity");
-            var days = Math.Max(1, HisConnection.I(r, "DoseDurationDays"));
-            decimal? prescribed = daily > 0 ? Maps.Round4(daily * days) : null;
+            var days = HisConnection.I(r, "DoseDurationDays");
+            decimal? prescribed = daily > 0 && days > 0 ? Maps.Round4(daily * days) : null;
             var billed = lines.ByEncounter[enc].FirstOrDefault(l => l.IsMedicine && (l.MedicineId == item || l.ProcedureId == item));
-            var (anchor, method, _) = billed is not null
-                ? (AnchorOnInvoice(lines, billed) ?? billed.Ref, "BILLED_LINE", billed.Amount)
-                : ByOrder(lines, enc, order, line);
+            var byOrder = ByOrder(lines, enc, order, line);
+            var (anchor, method) = billed is not null
+                ? (AnchorOnInvoice(lines, billed) ?? billed.Ref, "BILLED_LINE")
+                : (byOrder.Ref, byOrder.Method);
             var clinic = HisConnection.Ni(r, "ClinicID");
             o.Add(enc, anchor, method, null, "MEDICINE", item, "HIS_MED", billed?.OracleItemCode ?? name?.Oracle, null, name?.Name ?? billed?.Name,
-                billed?.Qty ?? 0, "UNIT", null, prescribed, clinic is null ? c.UnmappedCc : c.ClinicCc(clinic), null,
-                billed?.Amount, Opt(HisConnection.F(r, "Price")),
+                0m, "UNIT", null, prescribed, clinic is null ? c.UnmappedCc : c.ClinicCc(clinic), null,
+                null, Opt(HisConnection.F(r, "Price")),
                 HisConnection.Dt(r, "StartDate") ?? HisConnection.Dt(r, "OrderDate") ?? s.From!.Value,
                 "INP_ProgNoteMedicineOrder", $"MED-IP-{order}-{line}-{item}",
                 new ItemHis(OrderNo: order, OrderLine: line));
@@ -621,15 +629,20 @@ public static class ConsumptionExtract
 
     private static async Task OperativeReportStaffAsync(HisConnection db, Settings s, Codes c, StaffWriter o, LineIndex lines)
     {
-        // Named OR nurses/techs from the operative report; minutes from the admission's surgery clock when there is one OT.
-        var surgeryByAdm = new Dictionary<int, (int Res, DateTime Start, decimal Min, string StartRaw, string EndRaw, int? OtId)>();
+        // Named OR nurses/techs from the operative report. The report is keyed by encounter, not by surgery, so its
+        // staff get a surgery's clock only when the admission has exactly one surgery; otherwise nothing is guessed.
+        var surgeryByAdm = new Dictionary<int, (int Res, DateTime Start, decimal Min, string StartRaw, string EndRaw, int? OtId,
+            DateTime? AnStart, decimal? AnMin, string AnStartRaw, string AnEndRaw)>();
+        var surgeries = new Dictionary<int, int>();
         await db.QueryAsync($"""
-            SELECT ot.OTReservationID, ot.AdmissionNo, ot.OTID, ot.OperationDate, ot.ActualSugeryStartTime, ot.ActualSurgeryEndTime
+            SELECT ot.OTReservationID, ot.AdmissionNo, ot.OTID, ot.OperationDate, ot.ActualSugeryStartTime, ot.ActualSurgeryEndTime,
+                   ot.AnesthesiaStartTime, ot.AnesthesiaEndTime
             FROM #ip i
             INNER JOIN dbo.INP_OTReservation ot WITH (NOLOCK) ON ot.SetupID=@SetupId AND ot.ProjectID=@ProjectId AND ot.AdmissionNo=i.No
             """, s.BindTenant, r =>
         {
             var adm = HisConnection.I(r, "AdmissionNo");
+            surgeries[adm] = surgeries.GetValueOrDefault(adm) + 1;
             var day = HisConnection.Dt(r, "OperationDate") ?? s.From!.Value;
             var surgS = HisConnection.S(r, "ActualSugeryStartTime");
             var surgE = HisConnection.S(r, "ActualSurgeryEndTime");
@@ -637,10 +650,14 @@ public static class ConsumptionExtract
             var start = Maps.Combine(day, surgS);
             var min = Maps.ClockMinutes(start, Maps.Combine(day, surgE));
             if (min is null) return;
-            // One surgery per admission for report attribution; first filled clock wins.
-            if (!surgeryByAdm.ContainsKey(adm))
-                surgeryByAdm[adm] = (HisConnection.I(r, "OTReservationID"), start, min.Value, surgS, surgE, HisConnection.Ni(r, "OTID"));
+            var anS = HisConnection.S(r, "AnesthesiaStartTime");
+            var anE = HisConnection.S(r, "AnesthesiaEndTime");
+            DateTime? anStart = anS.Length > 0 && anE.Length > 0 ? Maps.Combine(day, anS) : null;
+            var anMin = anStart is not null ? Maps.ClockMinutes(anStart.Value, Maps.Combine(day, anE)) : null;
+            surgeryByAdm[adm] = (HisConnection.I(r, "OTReservationID"), start, min.Value, surgS, surgE, HisConnection.Ni(r, "OTID"),
+                anMin is null ? null : anStart, anMin, anS, anE);
         });
+        foreach (var adm in surgeries.Where(kv => kv.Value != 1).Select(kv => kv.Key)) surgeryByAdm.Remove(adm);
 
         await db.QueryAsync($"""
             SELECT n.EncounterType, n.EncounterNo, n.ScrubNurseID, n.CirculatingNurseID, n.RecoveryNurseId, n.ORNurseId,
@@ -662,12 +679,19 @@ public static class ConsumptionExtract
                     clock.Min, "MEASURED", null, null, cc, clock.Start,
                     "HIS_EncounterNursingOperativeReport", $"ORRPT-{adm}-{role}-{id}", clock.StartRaw, clock.EndRaw, clock.OtId, null);
             }
+            void Anaesthetist(int? id)
+            {
+                if (id is not > 0 || clock.AnMin is null) return;
+                o.Add(enc, anchor, "NONE", clock.Res, "ANESTHETIST", null, $"{id}", "",
+                    clock.AnMin.Value, "MEASURED", null, null, cc, clock.AnStart!.Value,
+                    "HIS_EncounterNursingOperativeReport", $"ORRPT-{adm}-ANESTHETIST-{id}", clock.AnStartRaw, clock.AnEndRaw, clock.OtId, null);
+            }
             Staff("SCRUB_NURSE", HisConnection.Ni(r, "ScrubNurseID"));
             Staff("CIRC_NURSE", HisConnection.Ni(r, "CirculatingNurseID"));
             Staff("RECOVERY_NURSE", HisConnection.Ni(r, "RecoveryNurseId"));
             Staff("OT_STAFF", HisConnection.Ni(r, "ORNurseId"));
             Staff("TECHNICIAN", HisConnection.Ni(r, "Technician") ?? HisConnection.Ni(r, "ORTechnician"));
-            Staff("ANESTHETIST", HisConnection.Ni(r, "AnesthetistID"));
+            Anaesthetist(HisConnection.Ni(r, "AnesthetistID"));
         });
     }
 
@@ -718,7 +742,7 @@ public static class ConsumptionExtract
             var anS = HisConnection.Dt(r, "AnesthesiaStart");
             var anE = HisConnection.Dt(r, "AnesthesiaEnd");
             var anMin = anS is not null && anE is not null ? Maps.ClockMinutes(anS.Value, anE.Value) : null;
-            Staff("ANESTHETIST", HisConnection.Ni(r, "AnesthetistID"), anS, anE, anMin ?? min);
+            Staff("ANESTHETIST", HisConnection.Ni(r, "AnesthetistID"), anS, anE, anMin);
         });
     }
 
@@ -756,24 +780,24 @@ public static class ConsumptionExtract
             INNER JOIN dbo.INP_ERAssessment e WITH (NOLOCK) ON e.SetupID=@SetupId AND e.ProjectID=@ProjectId AND e.AssessmentNo=x.No
             """, s.BindTenant, r =>
         {
-            var day = HisConnection.Dt(r, "AssessmentDate") ?? s.From!.Value;
-            var start = HisConnection.Dt(r, "SignInTime") ?? Maps.Combine(day, HisConnection.S(r, "ArrivalTime"));
+            // Doctor sign-in / sign-out when HIS has them, else the patient's arrival / discharge. No clock, no row.
+            // INP_ERAssessment names no nurse, so no ER_NURSE row is written: nursing time is not in HIS.
+            var day = HisConnection.Dt(r, "AssessmentDate");
+            var arrival = HisConnection.S(r, "ArrivalTime");
+            var start = HisConnection.Dt(r, "SignInTime")
+                ?? (day is not null && arrival.Length > 0 && Maps.Combine(day.Value, arrival) is var a && a != day.Value.Date ? a : null);
             var end = HisConnection.Dt(r, "SignOutTime") ?? HisConnection.Dt(r, "DischargeTime");
-            if (end is null) return;
-            var min = Maps.ClockMinutes(start, end.Value, 72 * 60);
+            if (start is null || end is null) return;
+            var min = Maps.ClockMinutes(start.Value, end.Value, 72 * 60);
             if (min is null) return;
             var no = HisConnection.I(r, "AssessmentNo");
             var enc = c.ErEncounter(no);
             var clinic = HisConnection.Ni(r, "ClinicID");
             var cc = clinic is null ? c.UnmappedCc : c.ClinicCc(clinic);
             var doctor = HisConnection.Ni(r, "SignInDoctorId") ?? HisConnection.Ni(r, "DoctorID");
-            var arrive = HisConnection.S(r, "ArrivalTime");
-            var discharge = HisConnection.S(r, "DischargeTime");
             o.Add(enc, null, "NONE", null, "ER_DOCTOR", null, doctor?.ToString(), doctor is > 0 ? c.Provider(doctor.Value) : "",
-                min.Value, "MEASURED", null, null, cc, start, "INP_ERAssessment", $"ER-{no}-ER_DOCTOR",
-                arrive, discharge, null, clinic);
-            o.Add(enc, null, "NONE", null, "ER_NURSE", null, null, "", min.Value, "MEASURED", null, null, cc, start, "INP_ERAssessment", $"ER-{no}-ER_NURSE",
-                arrive, discharge, null, clinic);
+                min.Value, "MEASURED", null, null, cc, start.Value, "INP_ERAssessment", $"ER-{no}-ER_DOCTOR",
+                Maps.DateTime(start.Value), Maps.DateTime(end.Value), null, clinic);
         });
     }
 

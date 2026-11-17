@@ -263,6 +263,9 @@ static class App
         Check("HIS ArrivalTime HHMMSS", Maps.Combine(day, "143000") == day.Date.AddHours(14).AddMinutes(30));
         Check("transfer duration hours", Maps.TransferMinutes(2, day, "", "") == 120);
         Check("transfer duration minutes", Maps.TransferMinutes(180, day, "", "") == 180);
+        Check("HIS gender 1 = M, 2 = F", Maps.Sex(1) == "M" && Maps.Sex(2) == "F");
+        Check("HIS gender unknown stays blank, not M", Maps.Sex(0) == "" && Maps.Sex(5) == "");
+        Check("unknown birth year is not GERIATRIC", Maps.Segment(null, false, day) == "ADULT");
 
         var tmp = Path.Combine(Path.GetTempPath(), "his-extract-selftest-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(tmp);

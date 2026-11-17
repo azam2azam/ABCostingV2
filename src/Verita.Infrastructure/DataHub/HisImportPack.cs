@@ -217,23 +217,43 @@ public static class HisImportPack
     };
 
     /// <summary>
-    /// HIS facts packs must not load invented Activity×Resource volumes.
+    /// HIS facts packs load only what HIS holds. Older extracts wrote rows HIS never recorded, and they are left out here:
+    /// Activity×Resource volumes made from clocks (ActivityTransaction), ward nursing as patient-days × a standard
+    /// (StaffTime basis STANDARD), and an unnamed ER nurse given the patient's stay (StaffTime ER_NURSE from INP_ERAssessment).
     /// People → StaffTime; bed timing → EncounterTransfer; materials → ConsumptionItem.
     /// </summary>
-    public static List<ParsedFile> WithoutHisInventedActivityTransactions(IEnumerable<ParsedFile> files, out int skippedRows)
+    public static List<ParsedFile> WithoutHisInventedRows(IEnumerable<ParsedFile> files, out int skippedTransactions, out int skippedStaffRows)
     {
-        skippedRows = 0;
+        skippedTransactions = 0;
+        skippedStaffRows = 0;
         var kept = new List<ParsedFile>();
         foreach (var f in files)
         {
             if (f.Spec?.Name == "ActivityTransaction")
             {
-                skippedRows += f.Rows.Count;
+                skippedTransactions += f.Rows.Count;
+                continue;
+            }
+            if (f.Spec?.Name == "StaffTime")
+            {
+                var rows = f.Rows.Where(r => !IsInventedStaffTime(r)).ToList();
+                skippedStaffRows += f.Rows.Count - rows.Count;
+                if (rows.Count > 0) kept.Add(f with { Rows = rows });
                 continue;
             }
             kept.Add(f);
         }
         return kept;
+    }
+
+    /// <summary>A staff-time row HIS never recorded: a standard rather than a clock, or the ER nurse HIS does not name.</summary>
+    public static bool IsInventedStaffTime(Dictionary<string, string> row)
+    {
+        static string Get(Dictionary<string, string> r, string k) => r.GetValueOrDefault(k)?.Trim() ?? "";
+        if (Get(row, "basis").Equals("STANDARD", StringComparison.OrdinalIgnoreCase)) return true;
+        return Get(row, "staffRole").Equals("ER_NURSE", StringComparison.OrdinalIgnoreCase)
+            && Get(row, "staffId").Length == 0
+            && Get(row, "sourceTable").Equals("INP_ERAssessment", StringComparison.OrdinalIgnoreCase);
     }
 
     public static (List<ParsedFile> Files, Identity? His, string[] Skipped) Read(string fileName, Stream stream, string? entityHint = null)

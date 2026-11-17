@@ -270,4 +270,28 @@ public class HisImportPackTests
         Assert.Equal(new DateOnly(2026, 10, 31), to);
         Assert.False(HisImportPack.TryFactRange(null, "HIS-010266-15-catalogue.zip", out _, out _));
     }
+
+    [Fact]
+    public void Facts_import_leaves_out_rows_his_never_recorded()
+    {
+        static Dictionary<string, string> Staff(string role, string id, string basis, string table) => new(StringComparer.OrdinalIgnoreCase)
+            { ["staffRole"] = role, ["staffId"] = id, ["basis"] = basis, ["sourceTable"] = table, ["sourceRef"] = $"{role}-{id}-{table}" };
+        List<HisImportPack.ParsedFile> files =
+        [
+            new("35_ActivityTransaction.csv", EntitySpecs.Find("ActivityTransaction"), [new(StringComparer.OrdinalIgnoreCase) { ["sourceRef"] = "x" }]),
+            new("40_StaffTime.csv", EntitySpecs.Find("StaffTime"),
+            [
+                Staff("WARD_NURSE", "", "STANDARD", "INP_Transfer"),
+                Staff("ER_NURSE", "", "MEASURED", "INP_ERAssessment"),
+                Staff("ER_DOCTOR", "77", "MEASURED", "INP_ERAssessment"),
+                Staff("SCRUB_NURSE", "12", "MEASURED", "INP_ImplantDetail"),
+                Staff("ANESTHETIST", "", "MEASURED", "INP_OTReservation"),
+            ]),
+        ];
+        var kept = HisImportPack.WithoutHisInventedRows(files, out var txn, out var staff);
+        Assert.Equal(1, txn);
+        Assert.Equal(2, staff);
+        var only = Assert.Single(kept);
+        Assert.Equal(["ER_DOCTOR", "SCRUB_NURSE", "ANESTHETIST"], only.Rows.Select(r => r["staffRole"]).ToArray());
+    }
 }

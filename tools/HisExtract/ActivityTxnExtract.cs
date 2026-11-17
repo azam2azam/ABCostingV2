@@ -4,7 +4,7 @@ namespace HisExtract;
 /// Legacy stub. <see cref="FactsExtract"/> no longer calls this — packs carry
 /// <c>40_StaffTime</c>, <c>41_EncounterTransfer</c>, <c>39_ConsumptionItem</c> only.
 /// Kept so a one-off empty <c>35_ActivityTransaction.csv</c> can still be written if needed.
-/// Import drops ActivityTransaction on HIS facts packs via <c>WithoutHisInventedActivityTransactions</c>.
+/// Import drops ActivityTransaction on HIS facts packs via <c>HisImportPack.WithoutHisInventedRows</c>.
 /// </summary>
 public static class ActivityTxnExtract
 {
