@@ -4932,6 +4932,12 @@ export interface components {
             cost: string;
             /** Format: int32 */
             doctors: number;
+            /** Format: int32 */
+            packages: number;
+            /** Format: decimal */
+            amountBilled: string;
+            /** Format: decimal */
+            claimed: string;
         };
         ReadQueriesDiffLine: {
             procedure: string;
@@ -5467,6 +5473,8 @@ export interface components {
             wardDays: string;
             /** Format: decimal */
             claimsReceived: string | null;
+            /** Format: decimal */
+            claimsReceivedLines: string | null;
         };
         ReadQueriesPackageDoctorRow: {
             /** Format: uuid */
@@ -5579,6 +5587,8 @@ export interface components {
             claimSettled: string;
             /** Format: decimal */
             claimRejected: string;
+            /** Format: decimal */
+            claimsReceived: string | null;
         };
         ReadQueriesPackageWorkRow: {
             /** Format: uuid */
@@ -5614,6 +5624,8 @@ export interface components {
             /** Format: decimal */
             wardDays: string;
             encounterRows: components["schemas"]["ReadQueriesPackageDoctorEncounterRow"][];
+            /** Format: decimal */
+            claimsReceivedLines: string | null;
         };
         ReadQueriesPatientEncounterDetail: {
             encounter: components["schemas"]["ReadQueriesPatientEncounterRow"];

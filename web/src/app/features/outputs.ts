@@ -300,12 +300,10 @@ export class Packages {
     { key: 'cases', label: 'Cases', type: 'num', dp: 0, blankZero: true },
     { key: 'feeBilled', label: 'Amount Billed', type: 'money', dp: 0, blankZero: true },
     { key: 'wardDays', label: 'Nurse/Ward', value: r => wardTime(r) || (Number(r.staffMinutes) ? staffTime(Number(r.staffMinutes))! : ''), sub: r => wardTime(r) ? staffTime(Number(r.staffMinutes)) : null },
-    { key: 'materialsBilled', label: 'Materials consumed', type: 'money', dp: 0, blankZero: true,
-      sub: r => r.materialItems ? `${formatDec(String(r.materialItems), 0)} items` : null },
-    { key: 'medicineBilled', label: 'Medicine', type: 'money', dp: 0, blankZero: true,
-      sub: r => Number(r.medicineQuantity) ? `${formatDec(String(r.medicineQuantity), 0)} items` : null },
+    { key: 'materialsBilled', label: 'Materials consumed', type: 'money', dp: 0, blankZero: true },
+    { key: 'medicineBilled', label: 'Medicine', type: 'money', dp: 0, blankZero: true },
     { key: 'claimed', label: 'Claimed Amount', type: 'money', dp: 0, blankZero: true },
-    { key: 'claimSettled', label: 'Claim received', type: 'money', dp: 0, blankZero: true },
+    { key: 'claimsReceived', label: 'Claim received', type: 'money', dp: 0, blankZero: true },
     { key: 'claimRejected', label: 'Claim rejected', type: 'money', dp: 0, blankZero: true, bad: r => Number(r.claimRejected) > 0 },
   ];
 }
@@ -386,7 +384,7 @@ export class PackageDetail {
       value: r => Number(r.encounters) ? Number(r.wardDays ?? 0) / Number(r.encounters) : 0 },
     { key: 'allClaimed', label: 'Claimed', type: 'money', dp: 0, blankZero: true, sortable: false, bad: r => Number(r.rejectedClaims) > 0,
       value: r => Number(r.claimed) + Number(r.consumablesClaimed ?? 0) + Number(r.medicineClaimed ?? 0) },
-    { key: 'settled', label: 'Claims received', type: 'money', dp: 0, blankZero: true, sortable: false },
+    { key: 'claimsReceived', label: 'Claims received', type: 'money', dp: 0, blankZero: true, sortable: false },
   ];
   /** Contracted price × cases, the consumables and medicine the package price covered, and those billed separately. */
   resourcesTile = computed(() => {
@@ -432,7 +430,7 @@ export class PackageDetail {
     const sum = (f: (r: (typeof rows)[number]) => unknown) => rows.reduce((t, r) => t + Number(f(r) ?? 0), 0);
     return {
       quantity: sum(r => r.quantity), feeBilled: sum(r => r.feeBilled),
-      consumablesBilled: sum(r => r.consumablesBilled), consumablesCovered: sum(r => r.consumablesCovered), medicineCovered: sum(r => r.medicineCovered), medicineBilled: sum(r => r.medicineBilled), claimed: sum(r => r.claimed), settled: sum(r => r.settled), medicineClaimed: sum(r => r.medicineClaimed), consumablesClaimed: sum(r => r.consumablesClaimed),
+      consumablesBilled: sum(r => r.consumablesBilled), consumablesCovered: sum(r => r.consumablesCovered), medicineCovered: sum(r => r.medicineCovered), medicineBilled: sum(r => r.medicineBilled), claimed: sum(r => r.claimed), settled: sum(r => r.settled), claimsReceived: sum(r => r.claimsReceived), medicineClaimed: sum(r => r.medicineClaimed), consumablesClaimed: sum(r => r.consumablesClaimed),
       wardDays: sum(r => r.wardDays), encounters: sum(r => r.encounters),
       allClaimed: sum(r => Number(r.claimed) + Number(r.consumablesClaimed ?? 0) + Number(r.medicineClaimed ?? 0)),
     };

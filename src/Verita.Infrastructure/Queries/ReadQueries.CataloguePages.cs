@@ -95,6 +95,7 @@ public sealed partial class ReadQueries
             "medicineBilled" => x.MedicineBilled,
             "claimed" => x.Claimed,
             "claimSettled" => x.ClaimSettled,
+            "claimsReceived" => x.ClaimsReceived ?? 0m,
             "claimRejected" => x.ClaimRejected,
             "code" => ListedId(x.Code),
             _ => x.Cases,

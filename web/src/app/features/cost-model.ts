@@ -7,7 +7,7 @@ import {
 import { Auth } from '../core/auth';
 import { RunContext } from '../core/context';
 import { apiResource, catalogueResource } from '../core/resource';
-import { Col, UI, hisProcedureId, matchesNameOrCode } from '../shared/ui';
+import { Col, TypeCounts, UI, hisProcedureId, matchesNameOrCode } from '../shared/ui';
 
 export const allocationCols: Col<AllocationDto>[] = [
   { key: 'stage', label: 'Stage', type: 'num', dp: 0 },
@@ -34,6 +34,11 @@ export interface DepartmentRow {
   cases: number;
   revenue: number;
   cost: number;
+  /** Package cases on the department's encounters in the run. */
+  packages?: number;
+  /** Every counted line on the department's encounters, once, net plus VAT. */
+  amountBilled?: number | string;
+  claimed?: number | string;
 }
 
 @Component({
@@ -43,6 +48,7 @@ export interface DepartmentRow {
     <v-page title="Departments" purpose="The hospital's departments from the catalogue. When a calculation has been run for the period, cases, revenue and cost are shown too.">
       <v-state [loading]="res.isLoading()" [error]="res.error()">
         @if (res.value()) {
+          <v-type-tiles [counts]="serviceLineCounts()" [(selected)]="serviceLine" />
           <v-table paged [rows]="filtered()" [columns]="cols()" sortBy="cases" caption="Departments"
             [empty]="search().trim() ? 'No departments match this search.' : 'No departments in the catalogue for this hospital.'">
             <v-list-search toolbar [(query)]="search" placeholder="Search by name or code" />
@@ -56,27 +62,51 @@ export class Departments {
   private auth = inject(Auth);
   res = catalogueResource<DepartmentRow[]>(() => 'departments');
   search = signal('');
-  filtered = computed(() => (this.res.value()?.data ?? []).filter(r => matchesNameOrCode(this.search(), r.name, r.code)));
+  /** Service line tile selected; null is All. Departments without one are under "Not assigned". */
+  serviceLine = signal<string | null>(null);
+  private static readonly NoServiceLine = 'Not assigned';
+  private searched = computed(() => (this.res.value()?.data ?? []).filter(r => matchesNameOrCode(this.search(), r.name, r.code)));
+  /** Service lines with fewer departments than this share one "Others" tile. */
+  private static readonly OthersBelow = 2;
+  private static readonly Others = 'Others';
+  private lineOf(r: DepartmentRow): string { return r.serviceLine?.trim() || Departments.NoServiceLine; }
+  /** Departments per service line among those matching the search. */
+  private lineCounts = computed(() => {
+    const by = new Map<string, number>();
+    for (const r of this.searched()) { const k = this.lineOf(r); by.set(k, (by.get(k) ?? 0) + 1); }
+    return by;
+  });
+  /** The tile a department falls under: its service line, or Others when that line has fewer than two departments. */
+  private tileOf(r: DepartmentRow): string {
+    const k = this.lineOf(r);
+    return (this.lineCounts().get(k) ?? 0) < Departments.OthersBelow ? Departments.Others : k;
+  }
+  /** Tiles most first, with the small service lines together in Others at the end. */
+  serviceLineCounts = computed<TypeCounts>(() => {
+    const by = this.lineCounts();
+    const big = [...by].filter(([, n]) => n >= Departments.OthersBelow).map(([type, count]) => ({ type, count }))
+      .sort((a, b) => b.count - a.count || a.type.localeCompare(b.type));
+    const others = [...by].filter(([, n]) => n < Departments.OthersBelow).reduce((t, [, n]) => t + n, 0);
+    return { all: this.searched().length, zeroPrice: null, types: others ? [...big, { type: Departments.Others, count: others }] : big };
+  });
+  filtered = computed(() => {
+    const tile = this.serviceLine();
+    return this.searched().filter(r => !tile || this.tileOf(r) === tile);
+  });
   cols = computed<Col<DepartmentRow>[]>(() => {
     const cols: Col<DepartmentRow>[] = [
-      { key: 'code', label: 'Code', value: r => localCode(r.code), minWidth: '9rem' },
       { key: 'name', label: 'Name', link: r => `/departments/${r.id}` },
-      { key: 'deptType', label: 'Type' },
       { key: 'specialty', label: 'Specialty' },
       { key: 'serviceLine', label: 'Service line' },
-      { key: 'costCentres', label: 'Cost centres', type: 'num', dp: 0 },
       { key: 'doctors', label: 'Doctors', type: 'num', dp: 0 },
       { key: 'cases', label: 'Cases', type: 'num', dp: 0, link: () => '/patient-encounters',
         linkParams: r => ({ department: r.id }) },
+      { key: 'packages', label: 'Packages', type: 'num', dp: 0, blankZero: true },
     ];
-    if (this.auth.can('revenue.view')) {
-      cols.push(
-        { key: 'revenue', label: 'Revenue', type: 'money', dp: 0 },
-        { key: 'cost', label: 'Cost', type: 'money', dp: 0, bad: r => Number(r.cost) > Number(r.revenue) },
-      );
-    } else {
-      cols.push({ key: 'cost', label: 'Cost', type: 'money', dp: 0 });
-    }
+    if (this.auth.can('revenue.view')) cols.push(
+      { key: 'amountBilled', label: 'Amount Billed', type: 'money', dp: 0, blankZero: true },
+      { key: 'claimed', label: 'Claimed', type: 'money', dp: 0, blankZero: true },
+    );
     return cols;
   });
 }
@@ -118,6 +148,8 @@ interface WorkEncounter {
   encounterId: string; encounterNo: string; performed: number; feeBilled: Amount; consumablesBilled: Amount; consumablesCovered: Amount;
   medicineBilled: Amount; medicineCovered: Amount; claimed: Amount; consumablesClaimed: Amount; medicineClaimed: Amount;
   settled: Amount; rejectedClaims: Amount; wardDays: Amount; claimsReceived: Amount | null;
+  /** Claims received on the row's own lines only (a package's without the encounter's shared consumable / medicine lines). */
+  claimsReceivedLines?: Amount | null;
 }
 /** The doctor's package work by package or by department (the run's stored rows), as the package page's doctor table shows it. */
 interface PackageWork extends Omit<WorkEncounter, 'encounterId' | 'encounterNo'> {
@@ -228,21 +260,28 @@ export class DoctorDetail {
   });
   /**
    * Package lines billed plus consumables and medicine billed, as on the package page's Amount billed tile; with non-package
-   * items, plus what the doctor's other procedure lines billed.
+   * items, every line under the doctor once (package lines plus procedure lines).
    */
   billedTile = computed(() => {
     const d = this.res.value()?.data;
     const pkgs = d?.packageWork ?? [], procs = this.includeAll() ? d?.procedureWork ?? [] : [];
     if (!pkgs.length && !procs.length) return null;
-    return pkgs.reduce((t, r) => t + Number(r.feeBilled) + Number(r.consumablesBilled) + Number(r.medicineBilled), 0)
-      + procs.reduce((t, r) => t + Number(r.feeBilled), 0);
+    // With non-package items, lines only: the package's shared consumables and medicine are the admission's general lines,
+    // which are procedure lines already, so adding both would count them twice.
+    if (this.includeAll()) return [...pkgs, ...procs].reduce((t, r) => t + Number(r.feeBilled), 0);
+    return pkgs.reduce((t, r) => t + Number(r.feeBilled) + Number(r.consumablesBilled) + Number(r.medicineBilled), 0);
   });
-  /** Claims on invoices HIS put on a claim (IsClaimed); blank until the facts carry the flag. */
+  /**
+   * Claims on invoices HIS put on a claim (IsClaimed); blank until the facts carry the flag. With non-package items, lines
+   * only: the package's own lines plus the procedure lines, since the shared consumable / medicine lines are procedure lines.
+   */
   claimsReceivedTile = computed(() => {
     const d = this.res.value()?.data;
-    const rows = [...(d?.packageWork ?? []), ...(this.includeAll() ? d?.procedureWork ?? [] : [])];
+    const pkgs = d?.packageWork ?? [], procs = this.includeAll() ? d?.procedureWork ?? [] : [];
+    const rows = [...pkgs, ...procs];
     if (!rows.length || rows.every(r => r.claimsReceived == null)) return null;
-    return rows.reduce((t, r) => t + Number(r.claimsReceived ?? 0), 0);
+    if (!this.includeAll()) return pkgs.reduce((t, r) => t + Number(r.claimsReceived ?? 0), 0);
+    return pkgs.reduce((t, r) => t + Number(r.claimsReceivedLines ?? 0), 0) + procs.reduce((t, r) => t + Number(r.claimsReceived ?? 0), 0);
   });
   /** Rows whose encounters are shown under them, per table. */
   openRows = signal<ReadonlySet<string>>(new Set());
@@ -272,6 +311,7 @@ export class DoctorDetail {
       performed: sum(r => r.performed), feeBilled: sum(r => r.feeBilled), consumablesBilled: sum(r => r.consumablesBilled), consumablesCovered: sum(r => r.consumablesCovered),
       medicineBilled: sum(r => r.medicineBilled), medicineCovered: sum(r => r.medicineCovered), wardDays: sum(r => r.wardDays), encounters: sum(r => r.encounters),
       claimed: sum(r => r.claimed), consumablesClaimed: sum(r => r.consumablesClaimed), medicineClaimed: sum(r => r.medicineClaimed), settled: sum(r => r.settled),
+      claimsReceived: sum(r => r.claimsReceived),
     };
   }
   /** The package page's doctor table columns, with the group (department or package) in the first column. */
@@ -293,7 +333,7 @@ export class DoctorDetail {
         value: r => Number(r.encounters) ? Number(r.wardDays ?? 0) / Number(r.encounters) : 0 },
       { key: 'allClaimed', label: 'Claimed', type: 'money', dp: 0, blankZero: true, sortable: false, bad: r => Number(r.rejectedClaims) > 0,
         value: r => Number(r.claimed) + Number(r.consumablesClaimed ?? 0) + Number(r.medicineClaimed ?? 0) },
-      { key: 'settled', label: 'Claims received', type: 'money', dp: 0, blankZero: true, sortable: false },
+      { key: 'claimsReceived', label: 'Claims received', type: 'money', dp: 0, blankZero: true, sortable: false },
     ];
   }
   deptWorkCols = this.workTableCols('Department', r => r.id ? `/departments/${r.id}` : null);

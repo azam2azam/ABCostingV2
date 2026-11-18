@@ -254,6 +254,8 @@ public class RunPackageBilling
     public decimal Claimed { get; set; }
     public decimal Settled { get; set; }
     public decimal Rejected { get; set; }
+    /// <summary>Claims on invoices HIS put on a claim (HIS_InvoiceMain.IsClaimed), as the package's doctor rows add them up; null when the facts do not carry the flag.</summary>
+    public decimal? ClaimsReceived { get; set; }
 }
 
 /// <summary>
@@ -285,6 +287,8 @@ public class RunPackageDoctor
     public decimal Claimed { get; set; }
     /// <summary>Claims on invoices HIS put on a claim (IsClaimed); null when the facts do not carry the flag.</summary>
     public decimal? ClaimsReceived { get; set; }
+    /// <summary>The part of ClaimsReceived on the package's own lines, without the encounter's shared consumable and medicine lines.</summary>
+    public decimal? ClaimsReceivedLines { get; set; }
     public decimal Settled { get; set; }
     public decimal Rejected { get; set; }
     [Precise] public decimal WardDays { get; set; }

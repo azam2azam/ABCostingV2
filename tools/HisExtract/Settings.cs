@@ -23,6 +23,11 @@ public sealed class Settings
     public int QueryTimeoutSeconds { get; set; } = 1800;
     /// <summary>Pharmacy / inventory database holding the item master (PHR_Item) for item names; empty to skip. Same server as HIS.</summary>
     public string PharmacyDb { get; set; } = "PHARMAKON";
+    /// <summary>
+    /// Extract claim, settlement and NPHIES lines (42–45). Off by default: claimed is the invoice's IsClaimed flag on each
+    /// revenue line (hisIsClaimed); received and rejected are to be read from their own database later.
+    /// </summary>
+    public bool Claims { get; set; }
 
     /// <summary>HIS tenant token used in row codes. Not a VERITA Hospital.Code — import maps that.</summary>
     public string H => $"{SetupId}-{ProjectId}";

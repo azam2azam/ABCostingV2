@@ -5406,6 +5406,10 @@ namespace Verita.Infrastructure.Data.Migrations
                         .HasPrecision(19, 4)
                         .HasColumnType("decimal(19,4)");
 
+                    b.Property<decimal?>("ClaimsReceived")
+                        .HasPrecision(19, 4)
+                        .HasColumnType("decimal(19,4)");
+
                     b.Property<decimal?>("DoctorShare")
                         .HasPrecision(19, 4)
                         .HasColumnType("decimal(19,4)");
@@ -5476,6 +5480,10 @@ namespace Verita.Infrastructure.Data.Migrations
                         .HasColumnType("decimal(19,4)");
 
                     b.Property<decimal?>("ClaimsReceived")
+                        .HasPrecision(19, 4)
+                        .HasColumnType("decimal(19,4)");
+
+                    b.Property<decimal?>("ClaimsReceivedLines")
                         .HasPrecision(19, 4)
                         .HasColumnType("decimal(19,4)");
 

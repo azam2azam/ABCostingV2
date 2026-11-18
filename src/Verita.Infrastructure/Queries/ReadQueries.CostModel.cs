@@ -29,8 +29,12 @@ public sealed partial class ReadQueries
     // ═══ Departments ═════════════════════════════════════════════════════════════════
 
     /// <summary>Catalogue departments for the hospital. A run, when present, adds cases/revenue/cost.</summary>
+    /// <param name="Packages">Package cases (billings) on the department's encounters in the run.</param>
+    /// <param name="AmountBilled">Every counted line on the department's encounters, once: package lines (own and child) plus the
+    /// other procedure lines, net of refunds plus VAT. From the run's stored package and procedure rows.</param>
+    /// <param name="Claimed">What HIS claimed on those same lines.</param>
     public sealed record DepartmentRow(Guid Id, string Code, string Name, string DeptType, string? Specialty, string? ServiceLine,
-        int CostCentres, int Cases, decimal Revenue, decimal Cost, int Doctors);
+        int CostCentres, int Cases, decimal Revenue, decimal Cost, int Doctors, int Packages = 0, decimal AmountBilled = 0, decimal Claimed = 0);
 
     public async Task<DepartmentRow[]> DepartmentsAsync(ScopedRun s, Principal p, CancellationToken ct)
     {
@@ -52,6 +56,20 @@ public sealed partial class ReadQueries
         var figures = await db.RunDimensionCosts.AsNoTracking()
             .Where(x => x.RunId == s.Run.Id && x.Dimension == "department" && x.Key != "")
             .ToDictionaryAsync(x => x.Key, ct);
+        // Package and procedure lines from the run's stored rows, by the encounter's department. Lines only (not the shared
+        // consumables / medicine shares), so the admission's general lines, which are procedure rows, count once.
+        var pkg = await (from r in db.RunPackageDoctors.AsNoTracking()
+                         join e in db.Encounters.AsNoTracking() on r.EncounterId equals e.Id
+                         where r.RunId == s.Run.Id
+                         group r by e.DepartmentId into g
+                         select new { g.Key, Packages = g.Sum(x => x.Performed), Billed = g.Sum(x => x.FeeBilled), Claimed = g.Sum(x => x.Claimed) })
+            .ToDictionaryAsync(x => x.Key, ct);
+        var proc = await (from r in db.RunProcedureDoctors.AsNoTracking()
+                          join e in db.Encounters.AsNoTracking() on r.EncounterId equals e.Id
+                          where r.RunId == s.Run.Id
+                          group r by e.DepartmentId into g
+                          select new { g.Key, Billed = g.Sum(x => x.FeeBilled), Claimed = g.Sum(x => x.Claimed) })
+            .ToDictionaryAsync(x => x.Key, ct);
         return depts.Where(d => DeptAllowed(p, deptCodes, d.Id)).Select(d =>
         {
             figures.TryGetValue(d.Id.ToString(), out var f);
@@ -61,7 +79,10 @@ public sealed partial class ReadQueries
                 f?.Encounters ?? 0,
                 showRevenue ? f?.Revenue ?? 0m : 0m,
                 f?.TotalCost ?? 0m,
-                doctors.GetValueOrDefault(d.Id));
+                doctors.GetValueOrDefault(d.Id),
+                pkg.TryGetValue(d.Id, out var k) ? k.Packages : 0,
+                showRevenue ? (k?.Billed ?? 0m) + (proc.TryGetValue(d.Id, out var pr) ? pr.Billed : 0m) : 0m,
+                showRevenue ? (k?.Claimed ?? 0m) + (proc.TryGetValue(d.Id, out var pc) ? pc.Claimed : 0m) : 0m);
         }).ToArray();
     }
 
@@ -202,7 +223,11 @@ public sealed partial class ReadQueries
     private async Task<PackageWorkRow[]> DepartmentWorkAllAsync(PackageWorkRow[] packageWork, PackageWorkRow[] procedureWork,
         Dictionary<Guid, Department> depts, CancellationToken ct)
     {
-        var units = packageWork.Concat(procedureWork).SelectMany(w => w.EncounterRows).ToList();
+        // A package's consumables and medicine claims are the admission's general lines, which are procedure lines here
+        // already: drop them from the package side so Claimed counts each line once.
+        var units = packageWork.SelectMany(w => w.EncounterRows)
+            .Select(e => e with { ConsumablesClaimed = 0, MedicineClaimed = 0, ClaimsReceived = e.ClaimsReceivedLines })
+            .Concat(procedureWork.SelectMany(w => w.EncounterRows)).ToList();
         if (units.Count == 0) return [];
         var encIds = units.Select(u => u.EncounterId).Distinct().ToList();
         var deptOf = await db.Encounters.AsNoTracking().Where(e => encIds.Contains(e.Id)).ToDictionaryAsync(e => e.Id, e => e.DepartmentId, ct);
@@ -242,6 +267,7 @@ public sealed partial class ReadQueries
             new(encounter, encs.GetValueOrDefault(encounter)?.EncounterNo ?? "", (int)Math.Round(g.Sum(r => r.Performed)),
                 money ? g.Sum(r => r.FeeBilled) : 0, g.Sum(r => r.Consumables), 0, g.Sum(r => r.Medicine), 0,
                 money ? g.Sum(r => r.Claimed) : 0, 0, 0, money ? g.Sum(r => r.Settled) : 0, money ? g.Sum(r => r.Rejected) : 0, 0,
+                money && g.Any(r => r.ClaimsReceived != null) ? g.Sum(r => r.ClaimsReceived ?? 0m) : null,
                 money && g.Any(r => r.ClaimsReceived != null) ? g.Sum(r => r.ClaimsReceived ?? 0m) : null);
         return rows.GroupBy(r => r.ProcedureId).Select(g =>
         {
@@ -252,7 +278,8 @@ public sealed partial class ReadQueries
                 list.Sum(r => r.Medicine), 0, money ? list.Sum(r => r.Claimed) : 0, 0, 0,
                 money && list.Any(r => r.ClaimsReceived != null) ? list.Sum(r => r.ClaimsReceived ?? 0m) : null,
                 money ? list.Sum(r => r.Settled) : 0, money ? list.Sum(r => r.Rejected) : 0, 0,
-                list.GroupBy(r => r.EncounterId).Select(e => Enc(e.Key, e.ToList())).OrderBy(e => e.EncounterNo).ToArray());
+                list.GroupBy(r => r.EncounterId).Select(e => Enc(e.Key, e.ToList())).OrderBy(e => e.EncounterNo).ToArray(),
+                money && list.Any(r => r.ClaimsReceived != null) ? list.Sum(r => r.ClaimsReceived ?? 0m) : null);
         }).OrderByDescending(x => x.Performed).ThenBy(x => x.Name).ToArray();
     }
 

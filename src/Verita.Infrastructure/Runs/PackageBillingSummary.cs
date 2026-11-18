@@ -51,6 +51,13 @@ public static class PackageBillingSummary
         var data = await LoadAsync(db, run.Id, hospital, period, null, ct);
         var rows = Count(run.Id, data);
         var doctors = await DoctorRowsAsync(db, run.Id, data, ct);
+        // Claims received per package: what its doctor rows add up to (package lines plus the encounter's shared consumable
+        // and medicine claims, on invoices HIS put on a claim), so Packages matches the package page.
+        if (data.ClaimFlagKnown)
+        {
+            var received = doctors.GroupBy(d => d.PackageId).ToDictionary(g => g.Key, g => g.Sum(d => d.ClaimsReceived ?? 0m));
+            foreach (var r in rows) r.ClaimsReceived = Money.R4(received.GetValueOrDefault(r.PackageId));
+        }
         await db.RunPackageBillings.Where(x => x.RunId == run.Id).ExecuteDeleteAsync(ct);
         await db.RunPackageDoctors.Where(x => x.RunId == run.Id).ExecuteDeleteAsync(ct);
         db.RunPackageBillings.AddRange(rows);
@@ -105,6 +112,7 @@ public static class PackageBillingSummary
                         ClaimsReceived = data.ClaimFlagKnown
                             ? Money.R4(m.Sum(x => x.ClaimedOnClaimedInvoice) + E(e => e.MaterialsClaimedOnClaimed + e.MedicineClaimedOnClaimed))
                             : null,
+                        ClaimsReceivedLines = data.ClaimFlagKnown ? Money.R4(m.Sum(x => x.ClaimedOnClaimedInvoice)) : null,
                         WardDays = E(e => e.Ward), StaffMinutes = E(e => e.Staff),
                     });
                 }

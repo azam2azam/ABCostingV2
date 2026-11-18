@@ -12,8 +12,10 @@ public static class FactsExtract
         await PatientsAsync(db, s, c, pack, asOf);
         await EncountersAsync(db, s, c, pack);
         await BillingAsync(db, s, c, pack);
-        // Claims, settlements and NPHIES responses on the same invoices (#ip / #op / #er from billing).
-        await ClaimsExtract.RunAsync(db, s, c, pack);
+        // Claims, settlements and NPHIES responses on the same invoices (#ip / #op / #er from billing), only with --claims:
+        // claimed is the invoice's IsClaimed flag on each revenue line; received / rejected come from their own database later.
+        if (s.Claims) await ClaimsExtract.RunAsync(db, s, c, pack);
+        else pack.Note("Claims: claim, settlement and NPHIES lines not extracted (pass --claims). Claimed is hisIsClaimed on 36_RevenueTransaction (HIS_InvoiceMain.IsClaimed).");
         // No 35_ActivityTransaction — utilization is StaffTime / EncounterTransfer / ConsumptionItem only.
         await ConsumptionExtract.RunAsync(db, s, c, pack);
         if (c.SkippedEncounters.Count > 0)

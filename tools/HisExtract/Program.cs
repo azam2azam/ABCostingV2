@@ -52,6 +52,7 @@ static class App
             }
             s.PharmacyDb = phrDb;
         }
+        s.Claims = args.Any(a => string.Equals(a, "--claims", StringComparison.OrdinalIgnoreCase));
         if (Flag(args, "--query-timeout") is { } qt)
         {
             if (!int.TryParse(qt, out var qts) || qts < 0)
@@ -449,8 +450,10 @@ static class App
               --cc-map     reviewed CSV (costCentreCode, departmentCode) that overrides
                            the derived cost centre → department link (catalogue)
               --ward-nurse-min  ward nursing minutes per patient-day   default 260
-              --pharmacy-db     pharmacy database with the item master (PHR_Item), for
-                                item names; "" to skip                    default PHARMAKON
+              --pharmacy-db     pharmacy database with the item master (PHR_Item, PHR_Medicine),
+                                for item names and medicine prices; "" to skip   default PHARMAKON
+              --claims          also extract claim, settlement and NPHIES lines (42–45);
+                                without it, claimed is hisIsClaimed on revenue lines
               --query-timeout   seconds one HIS query may run, 0 = no limit   default 1800
                                 (a step that times out is skipped and noted in extract-log.txt)
 

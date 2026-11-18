@@ -234,6 +234,8 @@ public sealed partial class ReadQueries
         public decimal Claimed { get; init; }
         public decimal ClaimSettled { get; init; }
         public decimal ClaimRejected { get; init; }
+        /// <summary>Claims on invoices HIS put on a claim (IsClaimed); null until the facts carry the flag.</summary>
+        public decimal? ClaimsReceived { get; init; }
     }
     public sealed record ProcedureCostingItem(Guid Id, string Code, string Name, decimal? MarginPct, decimal ListPrice, Guid? PackageId = null, decimal? CompositionCost = null);
     public sealed record ProcedureTypeRow(string Code, string Name, int Procedures, decimal? MarginPct, ProcedureCostingItem[] Items);
@@ -255,9 +257,10 @@ public sealed partial class ReadQueries
         decimal Claimed = 0, decimal Settled = 0, decimal RejectedClaims = 0, decimal WardDays = 0, decimal StaffMinutes = 0, decimal MedicineClaimed = 0, decimal ConsumablesClaimed = 0, decimal ConsumablesCovered = 0, decimal MedicineCovered = 0, decimal MedicineCoveredQty = 0, decimal? ClaimsReceived = null, PackageDoctorEncounterRow[]? EncounterRows = null);
 
     /// <summary>One encounter of a doctor's row on a package, with that encounter's own figures (from the run's stored rows).</summary>
+    /// <param name="ClaimsReceivedLines">ClaimsReceived on the row's own lines only (a package's without the encounter's shared consumable and medicine lines).</param>
     public sealed record PackageDoctorEncounterRow(Guid EncounterId, string EncounterNo, int Performed, decimal FeeBilled, decimal ConsumablesBilled, decimal ConsumablesCovered,
         decimal MedicineBilled, decimal MedicineCovered, decimal Claimed, decimal ConsumablesClaimed, decimal MedicineClaimed, decimal Settled, decimal RejectedClaims,
-        decimal WardDays, decimal? ClaimsReceived);
+        decimal WardDays, decimal? ClaimsReceived, decimal? ClaimsReceivedLines = null);
 
     /// <summary>The hospital's packages, or only <paramref name="only"/> when a detail screen needs one row.</summary>
     public async Task<PackageRow[]> PackagesAsync(ScopedRun s, Principal p, CancellationToken ct, Guid? only = null)
@@ -328,6 +331,7 @@ public sealed partial class ReadQueries
                 WardDays = b?.WardDays ?? 0, StaffMinutes = b?.StaffMinutes ?? 0, NurseMinutes = b?.NurseMinutes ?? 0,
                 MaterialsBilled = b?.MaterialsBilled ?? 0, MaterialItems = b?.MaterialItems ?? 0, MedicineBilled = b?.MedicineBilled ?? 0, MedicineQuantity = b?.MedicineQuantity ?? 0,
                 Claimed = showRevenue ? b?.Claimed ?? 0 : 0, ClaimSettled = showRevenue ? b?.Settled ?? 0 : 0, ClaimRejected = showRevenue ? b?.Rejected ?? 0 : 0,
+                ClaimsReceived = showRevenue ? b?.ClaimsReceived : null,
             };
         }).ToArray();
     }
@@ -1000,7 +1004,8 @@ public sealed partial class ReadQueries
                     e.Sum(r => r.MedicineBilled), e.Sum(r => r.MedicineCovered),
                     money ? e.Sum(r => r.Claimed) : 0, money ? e.Sum(r => r.ConsumablesClaimed) : 0, money ? e.Sum(r => r.MedicineClaimed) : 0,
                     money ? e.Sum(r => r.Settled) : 0, money ? e.Sum(r => r.Rejected) : 0, Money.R4(e.Sum(r => r.WardDays)),
-                    money && e.Any(r => r.ClaimsReceived != null) ? e.Sum(r => r.ClaimsReceived ?? 0m) : null))
+                    money && e.Any(r => r.ClaimsReceived != null) ? e.Sum(r => r.ClaimsReceived ?? 0m) : null,
+                    money && e.Any(r => r.ClaimsReceivedLines != null) ? e.Sum(r => r.ClaimsReceivedLines ?? 0m) : null))
             .OrderBy(e => e.EncounterNo).ToArray();
 
     /// <summary>
@@ -1010,7 +1015,7 @@ public sealed partial class ReadQueries
     public sealed record PackageWorkRow(Guid? Id, string Code, string Name, int Encounters, int Performed, decimal FeeBilled,
         decimal ConsumablesBilled, decimal ConsumablesCovered, decimal MedicineBilled, decimal MedicineCovered,
         decimal Claimed, decimal ConsumablesClaimed, decimal MedicineClaimed, decimal? ClaimsReceived, decimal Settled, decimal RejectedClaims,
-        decimal WardDays, PackageDoctorEncounterRow[] EncounterRows);
+        decimal WardDays, PackageDoctorEncounterRow[] EncounterRows, decimal? ClaimsReceivedLines = null);
 
     internal static PackageWorkRow WorkRowOf(Guid? id, string code, string name, IReadOnlyCollection<RunPackageDoctor> rows, IReadOnlyDictionary<Guid, string> encNo, bool money) =>
         new(id, code, name, rows.Select(r => r.EncounterId).Distinct().Count(), rows.Sum(r => r.Performed),
@@ -1019,7 +1024,8 @@ public sealed partial class ReadQueries
             money ? rows.Sum(r => r.Claimed) : 0, money ? rows.Sum(r => r.ConsumablesClaimed) : 0, money ? rows.Sum(r => r.MedicineClaimed) : 0,
             money && rows.Any(r => r.ClaimsReceived != null) ? rows.Sum(r => r.ClaimsReceived ?? 0m) : null,
             money ? rows.Sum(r => r.Settled) : 0, money ? rows.Sum(r => r.Rejected) : 0, Money.R4(rows.Sum(r => r.WardDays)),
-            EncounterRowsOf(rows, encNo, money));
+            EncounterRowsOf(rows, encNo, money),
+            money && rows.Any(r => r.ClaimsReceivedLines != null) ? rows.Sum(r => r.ClaimsReceivedLines ?? 0m) : null);
 
     /// <summary>
     /// The doctor table from the run's stored rows (see PackageBillingSummary.DoctorRowsAsync), limited to the departments
