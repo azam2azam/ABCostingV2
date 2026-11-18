@@ -177,7 +177,33 @@ public static class ConsumptionExtract
             await db.ExecAsync($"IF OBJECT_ID('tempdb..{table}') IS NOT NULL DROP TABLE {table}; CREATE TABLE {table} (No int NOT NULL PRIMARY KEY);", _ => { });
             return await db.ExecAsync($"INSERT INTO {table} (No) SELECT DISTINCT x.No FROM ({set}) x WHERE x.No > 0", s.BindPeriod);
         }
-        return (await Fill("#ip", IpSet), await Fill("#op", OpSet), await Fill("#er", ErSet));
+        var ip = await Fill("#ip", IpSet);
+        var op = await Fill("#op", OpSet);
+        var er = await Fill("#er", ErSet);
+        // ER visits selected by AssessmentDate often bill on AppointmentNo. Those appointments (and their
+        // invoices) can fall outside the short window — fold them into #op so billing/claims still follow.
+        op += await db.ExecAsync("""
+            INSERT INTO #op (No)
+            SELECT DISTINCT x.AppointmentNo
+            FROM (
+                SELECT a.AppointmentID AS AppointmentNo
+                FROM #er e
+                INNER JOIN dbo.INP_ERAssessment a WITH (NOLOCK)
+                  ON a.SetupID=@SetupId AND a.ProjectID=@ProjectId AND a.AssessmentNo=e.No
+                WHERE a.AppointmentID > 0
+                UNION
+                SELECT m.AppointmentNo
+                FROM #er e
+                INNER JOIN dbo.INP_ERAssessment a WITH (NOLOCK)
+                  ON a.SetupID=@SetupId AND a.ProjectID=@ProjectId AND a.AssessmentNo=e.No AND a.InvoiceNo > 0
+                INNER JOIN dbo.HIS_InvoiceMain m WITH (NOLOCK)
+                  ON m.SetupID=a.SetupID AND m.ProjectID=a.ProjectID AND m.InvoiceNo=a.InvoiceNo
+                 AND m.CancelledOn IS NULL AND m.AppointmentNo > 0
+            ) x
+            WHERE x.AppointmentNo > 0
+              AND NOT EXISTS (SELECT 1 FROM #op o WHERE o.No = x.AppointmentNo)
+            """, s.BindTenant);
+        return (ip, op, er);
     }
 
     /// <summary>The link targets, indexed so each item finds its lines without scanning them all.</summary>
@@ -871,7 +897,7 @@ public static class ConsumptionExtract
             string costCentre, string? location, decimal? billed, decimal? hisUnitPrice, DateTime at, string sourceTable, string sourceRef,
             ItemHis? his = null)
         {
-            if (enc.Length == 0 || itemKey.Length == 0 || !_refs.Add(sourceRef)) return;
+            if (enc.Length == 0 || itemKey.Length == 0 || c.Skip(enc, "39_ConsumptionItem", sourceRef) || !_refs.Add(sourceRef)) return;
             his ??= new ItemHis();
             static string N(int? v) => v?.ToString() ?? "";
             static string D(decimal? v) => v is null ? "" : Maps.Dec(v.Value);
@@ -895,7 +921,7 @@ public static class ConsumptionExtract
             string providerCode, decimal minutes, string basis, decimal? volume, string? volumeUom, string costCentre, DateTime at,
             string sourceTable, string sourceRef, string? startTime = null, string? endTime = null, int? otId = null, int? clinicId = null)
         {
-            if (enc.Length == 0 || minutes <= 0 || !_refs.Add(sourceRef)) return;
+            if (enc.Length == 0 || minutes <= 0 || c.Skip(enc, "40_StaffTime", sourceRef) || !_refs.Add(sourceRef)) return;
             csv.Write(c.Hospital, enc, enc, serviceRef ?? "", linkMethod, otReservation?.ToString() ?? "", otId?.ToString() ?? "", clinicId?.ToString() ?? "",
                 role, staffType ?? "", staffId ?? "", providerCode, Maps.Dec(minutes), basis, volume is null ? "" : Maps.Dec(volume.Value), volumeUom ?? "",
                 Nz(startTime) ?? "", Nz(endTime) ?? "", costCentre, Maps.DateTime(at), sourceTable, "VIDA-HIS", sourceRef);
@@ -914,7 +940,7 @@ public static class ConsumptionExtract
             int? nursingStationId = null, decimal? charges = null, string? remarks = null, int? status = null, int? patientStatus = null,
             int? performingClinicId = null, int? performingDoctorId = null)
         {
-            if (enc.Length == 0 || transferNo <= 0 || !_refs.Add(sourceRef)) return;
+            if (enc.Length == 0 || transferNo <= 0 || c.Skip(enc, "41_EncounterTransfer", sourceRef) || !_refs.Add(sourceRef)) return;
             static string N(int? v) => v?.ToString() ?? "";
             csv.Write(c.Hospital, enc, enc, transferNo.ToString(), Maps.DateTime(transferDate),
                 Nz(startTime) ?? "", Nz(endTime) ?? "", duration?.ToString() ?? "",

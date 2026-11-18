@@ -12,8 +12,12 @@ public static class FactsExtract
         await PatientsAsync(db, s, c, pack, asOf);
         await EncountersAsync(db, s, c, pack);
         await BillingAsync(db, s, c, pack);
+        // Claims, settlements and NPHIES responses on the same invoices (#ip / #op / #er from billing).
+        await ClaimsExtract.RunAsync(db, s, c, pack);
         // No 35_ActivityTransaction — utilization is StaffTime / EncounterTransfer / ConsumptionItem only.
         await ConsumptionExtract.RunAsync(db, s, c, pack);
+        if (c.SkippedEncounters.Count > 0)
+            pack.Note($"Skipped encounters (no patient): rows left out — {string.Join(", ", c.SkippedRows.Select(x => $"{x.File} {x.Rows}"))}{(c.SkippedRows.Any() ? "" : "none")}.");
         pack.Note("Facts extract finished (no invented ActivityTransaction ACT/RES volumes)");
     }
 
@@ -50,6 +54,7 @@ public static class FactsExtract
         {
             var mrn = c.Mrn(HisConnection.I(r, "PatientID"));
             if (mrn.Length == 0 || !seen.Add(mrn)) return;
+            c.AddPatient(mrn);
             var dob = HisConnection.Dt(r, "DateofBirth");
             var year = dob?.Year ?? 1900;
             csv.Write(c.Hospital, mrn,
@@ -83,6 +88,7 @@ public static class FactsExtract
             var mrn = c.Mrn(HisConnection.I(r, "PatientID"));
             if (mrn.Length == 0 || !seen.Add(mrn)) return;
             stubs++;
+            c.AddPatient(mrn);
             csv.Write(c.Hospital, mrn, "Unknown patient", "1900", "M", "ADULT", "");
         });
         if (stubs > 0) pack.Note($"Patient: {stubs} encounter PatientIDs had no HIS_Patient row and were added as stubs.");
@@ -96,6 +102,15 @@ public static class FactsExtract
             "admitAt", "dischargeAt", "lengthOfStay", "isSurgical", "acuity", "sourceAssessmentNo",
             "hisStatus", "hisErStatus", "hisVisitClosed", "hisArrivedAt");
         var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        // An encounter whose patient is not in 32_Patient.csv would be rejected on import (and every row on it
+        // with it), so it is left out here. Typically an in-window invoice pointing at another patient's old appointment.
+        var noPatient = new List<string>();
+        void NoPatient(string no, string mrn, string type)
+        {
+            if (c.SkippedEncounters.Contains(no)) return;
+            c.SkipEncounter(no);
+            noPatient.Add($"{type} {no} (patient {mrn})");
+        }
         // Mapping §9.2: service line comes from the performing clinic's HIS_ClinicGroup, same as Department.
         var slByClinic = new Dictionary<int, string>();
         await db.QueryAsync("""
@@ -148,7 +163,10 @@ public static class FactsExtract
             var mrn = c.Mrn(HisConnection.I(r, "PatientID"));
             if (mrn.Length == 0) return;
             var no = c.IpEncounter(HisConnection.I(r, "AdmissionNo"));
-            if (!seen.Add(no)) return;
+            if (seen.Contains(no)) return;
+            if (!c.HasPatient(mrn)) { NoPatient(no, mrn, "IP"); return; }
+            seen.Add(no);
+            c.WroteEncounter(no);
             var admit = HisConnection.Dt(r, "AdmissionDate") ?? s.From!.Value;
             var disch = HisConnection.Dt(r, "DischargeDate");
             var los = HisConnection.I(r, "DaysStayed");
@@ -227,11 +245,14 @@ public static class FactsExtract
             if (appointment is { } linked) c.LinkErToAppointment(assessment, linked);
             var no = c.ErEncounter(assessment);
             if (HisConnection.B(r, "AppointmentRefused")) erRefused++;
-            if (!seen.Add(no))
+            if (seen.Contains(no))
             {
                 if (appointment is not null) erSharing++;
                 return;
             }
+            if (!c.HasPatient(mrn)) { NoPatient(no, mrn, "ER"); return; }
+            seen.Add(no);
+            c.WroteEncounter(no);
             if (byAppointment is not null) erByAppointment++;
             else if (byInvoice is not null) erByInvoice++;
             else erStandalone++;
@@ -314,7 +335,10 @@ public static class FactsExtract
             var mrn = c.Mrn(HisConnection.I(r, "PatientID"));
             if (mrn.Length == 0) return;
             var no = c.OpEncounter(HisConnection.I(r, "AppointmentNo"));
-            if (!seen.Add(no)) return;
+            if (seen.Contains(no)) return;
+            if (!c.HasPatient(mrn)) { NoPatient(no, mrn, "OP"); return; }
+            seen.Add(no);
+            c.WroteEncounter(no);
             var day = HisConnection.Dt(r, "AppointmentDate") ?? s.From!.Value;
             var start = Maps.Combine(day, FirstTime(HisConnection.S(r, "ActualVisitStartTime"), HisConnection.S(r, "StartTime")));
             var endSrc = HisConnection.Dt(r, "EndDate");
@@ -327,6 +351,8 @@ public static class FactsExtract
                 no, "OP", Maps.DateTime(start), Maps.DateTime(end), "0", "false", "ROUTINE", "",
                 HisConnection.S(r, "Status"), "", Flag(r, "IsVisitClosed"), When(HisConnection.Dt(r, "ArrivedOn")));
         });
+        if (noPatient.Count > 0)
+            pack.Note($"Encounter: {noPatient.Count} skipped because the patient is not in 32_Patient.csv, with all their rows: {string.Join(", ", noPatient.Take(20))}{(noPatient.Count > 20 ? ", …" : "")}.");
     }
 
     private static async Task BillingAsync(HisConnection db, Settings s, Codes c, CsvZipWriter pack)
@@ -374,6 +400,10 @@ public static class FactsExtract
              AND ISNULL(m.AppointmentNo,0)=0 AND ISNULL(m.AdmissionNo,0)=0
             """;
 
+        // No InvoiceDate filter: every invoice of the pack encounters (claims ride on the line).
+        // ER appointment-billed invoices arrive via #op (EncounterSets expands ER→AppointmentNo).
+        // Standalone ER InvoiceNo rows arrive via #er even when that invoice also carries AppointmentNo
+        // (seenRev/seenSvc dedupe against the #op branch).
         await db.QueryAsync($"""
             SELECT {cols}
             FROM #ip i
@@ -395,7 +425,7 @@ public static class FactsExtract
               ON a.SetupID=@SetupId AND a.ProjectID=@ProjectId AND a.AssessmentNo=e.No AND a.InvoiceNo > 0
             INNER JOIN dbo.HIS_InvoiceMain m WITH (NOLOCK)
               ON m.SetupID=a.SetupID AND m.ProjectID=a.ProjectID AND m.InvoiceNo=a.InvoiceNo
-             AND ISNULL(m.AppointmentNo,0)=0 AND ISNULL(m.AdmissionNo,0)=0
+             AND ISNULL(m.AdmissionNo,0)=0
             {detailJoins}
             WHERE m.CancelledOn IS NULL
             """, s.BindTenant, r =>
@@ -407,8 +437,7 @@ public static class FactsExtract
                 return;
             }
             var posted = HisConnection.Dt(r, "InvoiceDate") ?? s.From!.Value;
-            if (posted.Date < s.From!.Value.Date || posted.Date >= s.To!.Value.Date)
-                outsideWindow++;
+            var outside = posted.Date < s.From!.Value.Date || posted.Date >= s.To!.Value.Date;
             var performed = HisConnection.Dt(r, "PerformDate") ?? posted;
             var qty = Math.Max(1, HisConnection.I(r, "Quantity"));
             var price = Maps.Round4(HisConnection.F(r, "Price"));
@@ -428,6 +457,7 @@ public static class FactsExtract
             var child = Maps.Bool(HisConnection.I(r, "InvoiceType") == 2);
             var invRef = $"INV-{tt}-{inv}-{line}";
             var revRef = $"REV-{tt}-{inv}-{line}";
+            if (c.Skip(enc, "34_EncounterService / 36_RevenueTransaction", revRef)) return;
 
             if (procCode.Length > 0 && seenSvc.Add(invRef))
             {
@@ -437,6 +467,7 @@ public static class FactsExtract
             }
 
             if (!seenRev.Add(revRef)) return;
+            if (outside) outsideWindow++;
             rev.Write(enc, procCode, payer, Maps.Money(gross), Maps.Money(discount), Maps.Money(net),
                 Maps.DateTime(posted), "VIDA-HIS", revRef,
                 HisConnection.S(r, "Status"), Flag(r, "IsPerformed"), HisConnection.S(r, "PerformType"), Flag(r, "IsReturned"), Flag(r, "IsRefunded"),
@@ -452,7 +483,7 @@ public static class FactsExtract
                 // Doctor share as HIS holds it: type V = a value, P = a percentage of the line amount.
                 Stored(r, "PrimaryDoctorShare"), HisConnection.S(r, "PrimaryDoctorShareType").Trim().ToUpperInvariant());
         });
-        pack.Note($"Billing encounter-driven: {seenRev.Count} revenue lines ({outsideWindow} with InvoiceDate outside the pack window). No encounter: {noEncounter}.");
+        pack.Note($"Billing encounter-driven: {seenRev.Count} revenue lines ({outsideWindow} with InvoiceDate outside the pack window — kept for claims). No encounter: {noEncounter}.");
         await RefundsAsync(db, s, c, pack);
         await PackageItemsAsync(db, s, c, pack);
     }
@@ -480,6 +511,7 @@ public static class FactsExtract
               ON er.SetupID=m.SetupID AND er.ProjectID=m.ProjectID AND er.InvoiceNo=m.InvoiceNo
              AND ISNULL(m.AppointmentNo,0)=0 AND ISNULL(m.AdmissionNo,0)=0
             """;
+        int outsideWindow = 0;
         await db.QueryAsync($"""
             SELECT {cols}
             FROM #ip i
@@ -501,7 +533,7 @@ public static class FactsExtract
               ON a.SetupID=@SetupId AND a.ProjectID=@ProjectId AND a.AssessmentNo=e.No AND a.InvoiceNo > 0
             INNER JOIN dbo.HIS_InvoiceMain m WITH (NOLOCK)
               ON m.SetupID=a.SetupID AND m.ProjectID=a.ProjectID AND m.InvoiceNo=a.InvoiceNo
-             AND ISNULL(m.AppointmentNo,0)=0 AND ISNULL(m.AdmissionNo,0)=0
+             AND ISNULL(m.AdmissionNo,0)=0
             {joins}
             WHERE m.CancelledOn IS NULL
             """, s.BindTenant, r =>
@@ -512,18 +544,22 @@ public static class FactsExtract
             var inv = HisConnection.I(r, "InvoiceNo");
             var line = HisConnection.I(r, "LineItemNo");
             var sourceRef = $"PKG-{tt}-{inv}-{line}";
+            if (c.Skip(enc, "38_InvoicePackageItem", sourceRef)) return;
             if (!seen.Add(sourceRef)) return;
             lines++;
             if (enc.Length == 0) noEncounter++;
+            var invDate = HisConnection.Dt(r, "InvoiceDate");
+            if (invDate is { } d && (d.Date < s.From!.Value.Date || d.Date >= s.To!.Value.Date))
+                outsideWindow++;
             csv.Write(
                 c.Hospital, enc, enc, procId.Length == 0 ? "" : c.Procedure(procId), procId, HisConnection.S(r, "ProcedurePackageID"),
                 HisConnection.S(r, "ProcedurePackageLineItemNo"), HisConnection.S(r, "ProcedurePackageSequence"),
-                $"{tt}", $"{inv}", Maps.Int(line), When(HisConnection.Dt(r, "InvoiceDate")),
+                $"{tt}", $"{inv}", Maps.Int(line), When(invDate),
                 Stored(r, "Price"), Stored(r, "DiscountedCharge"), Stored(r, "PatientShare"), Stored(r, "PatientPaid"), Stored(r, "CompanyShare"), Stored(r, "CompanyPaid"),
                 HisConnection.S(r, "ChildInvoiceNo"), HisConnection.S(r, "ChildInvoiceLineItemNo"), Flag(r, "IsCompleted"), Flag(r, "IsRefunded"),
                 "VIDA-HIS", sourceRef);
         });
-        pack.Note($"InvoicePackageItem {lines} lines (encounter-driven): {noEncounter} with no encounter. Not written as services or revenue.");
+        pack.Note($"InvoicePackageItem {lines} lines (encounter-driven; {outsideWindow} with InvoiceDate outside the pack window). No encounter: {noEncounter}. Not written as services or revenue.");
     }
 
     /// <summary>
@@ -558,6 +594,7 @@ public static class FactsExtract
             var enc = EncounterOf(c, HisConnection.Ni(r, "AdmissionNo"), HisConnection.Ni(r, "AppointmentNo"), HisConnection.Ni(r, "AssessmentNo")) ?? "";
             var refundNo = HisConnection.I(r, "RefundNo");
             var line = HisConnection.I(r, "InvoiceLineItemNo");
+            if (c.Skip(enc, "37_RefundTransaction", $"{refundNo}-{line}")) return;
             if (!written.Add((refundNo, line))) return;
             var procId = HisConnection.S(r, "ProcedureID");
             static string Money(double v) => Maps.Money(Maps.Round4(v));
@@ -604,7 +641,7 @@ public static class FactsExtract
               ON a.SetupID=@SetupId AND a.ProjectID=@ProjectId AND a.AssessmentNo=e.No AND a.InvoiceNo > 0
             INNER JOIN dbo.HIS_InvoiceMain m WITH (NOLOCK)
               ON m.SetupID=a.SetupID AND m.ProjectID=a.ProjectID AND m.InvoiceNo=a.InvoiceNo
-             AND ISNULL(m.AppointmentNo,0)=0 AND ISNULL(m.AdmissionNo,0)=0
+             AND ISNULL(m.AdmissionNo,0)=0
             INNER JOIN dbo.HIS_RefundMain r WITH (NOLOCK)
               ON r.SetupID=m.SetupID AND r.ProjectID=m.ProjectID
              AND r.OriginalTransactionType=m.TransactionType AND r.OriginalTransactionRef=m.InvoiceNo
@@ -630,7 +667,7 @@ public static class FactsExtract
     private static string Flag(Microsoft.Data.SqlClient.SqlDataReader r, string col) =>
         HisConnection.S(r, col).Length == 0 ? "" : Maps.Bool(HisConnection.B(r, col));
 
-    private static string? EncounterOf(Codes c, int? admissionNo, int? appointmentNo, int? assessmentNo)
+    internal static string? EncounterOf(Codes c, int? admissionNo, int? appointmentNo, int? assessmentNo)
     {
         if (admissionNo is > 0) return c.IpEncounter(admissionNo.Value);
         if (appointmentNo is > 0) return c.OpEncounter(appointmentNo.Value);

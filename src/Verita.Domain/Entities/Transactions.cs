@@ -394,6 +394,247 @@ public class StaffTime
     public string SourceRef { get; set; } = "";
 }
 
+// ═══ Claims (HIS) ══════════════════════════════════════════════════════════════════
+// Claimed, approved, paid and rejected per invoice line, as HIS holds them. Reference data for evaluating
+// claims against RevenueTransaction (join RevenueRef = RevenueTransaction.SourceRef); no calculation reads them.
+
+/// <summary>HIS_ClaimProcedure line on a claim, with its HIS_ClaimInvoice (incl. NPHIES submission / response) and HIS_ClaimMain header. Every HIS column as stored, for evaluating claims; no calculation reads it.</summary>
+public class ClaimLine
+{
+    public Guid Id { get; set; }
+    public Guid HospitalId { get; set; }
+    public Guid? EncounterId { get; set; }
+    public string? HisEncounterNo { get; set; }
+    public string? PatientMrn { get; set; }
+    public Guid? PayerId { get; set; }
+    /// <summary>The RevenueTransaction.SourceRef of the invoice line: REV-{type}-{invoice}-{line}.</summary>
+    public string? RevenueRef { get; set; }
+    public int? ClaimNo { get; set; }
+    public DateTime? ClaimDate { get; set; }
+    public int? InvoiceTransactionType { get; set; }
+    public int? InvoiceNo { get; set; }
+    public int? MainInvoiceNo { get; set; }
+    public int? LineItemNo { get; set; }
+    public int? HisPatientType { get; set; }
+    public string? HisProcedureId { get; set; }
+    public decimal? ClaimAmount { get; set; }
+    public decimal? InvoiceAmount { get; set; }
+    public decimal? SettlementAmount { get; set; }
+    public decimal? RejectedAmount { get; set; }
+    public decimal? TaxAmount { get; set; }
+    public int? PrimaryDoctorId { get; set; }
+    public decimal? PrimaryDoctorShare { get; set; }
+    public string? PrimaryDoctorShareType { get; set; }
+    public int? ReferralClinicId { get; set; }
+    public int? ReferralDoctorId { get; set; }
+    public decimal? ReferralDoctorShare { get; set; }
+    public string? ReferralDoctorShareType { get; set; }
+    public string? Remarks { get; set; }
+    public int? EClaimStatus { get; set; }
+    public int? EClaimRejectionReason { get; set; }
+    public string? EClaimRemarks { get; set; }
+    public DateTime? LineCreatedOn { get; set; }
+    public DateTime? LineEditedOn { get; set; }
+    public decimal? InvInvoiceAmount { get; set; }
+    public decimal? InvClaimAmount { get; set; }
+    public decimal? InvSettlementAmount { get; set; }
+    public decimal? InvTaxAmount { get; set; }
+    public string? InvRemarks { get; set; }
+    public bool? InvIsPackageInvoice { get; set; }
+    public bool? InvIsActive { get; set; }
+    public int? InvEClaimStatus { get; set; }
+    public string? InvEClaimRefNum { get; set; }
+    public string? InvEClaimRemarks { get; set; }
+    public int? NphiesClaimStatus { get; set; }
+    public string? NphiesClaimRefNum { get; set; }
+    public string? NphiesClaimRemarks { get; set; }
+    public decimal? NphiesTaxAmount { get; set; }
+    public string? NphiesBatchIdentifier { get; set; }
+    public int? NphiesBatchNumber { get; set; }
+    public string? NphiesClaimRemarks2 { get; set; }
+    public DateTime? NphiesSubmittedOn { get; set; }
+    public DateTime? NphiesResponseReceivedOn { get; set; }
+    public decimal? NphiesAmountSubmitted { get; set; }
+    public decimal? NphiesAmountApproved { get; set; }
+    public string? ClaimBundleId { get; set; }
+    public string? ClaimBatchBundleId { get; set; }
+    public bool? IsPendedReceived { get; set; }
+    public string? ReconciliationBundleId { get; set; }
+    public int? ResubmissionStatus { get; set; }
+    public int? AttachmentStatus { get; set; }
+    public DateTime? InvCreatedOn { get; set; }
+    public int? ClaimCompanyId { get; set; }
+    public DateTime? ClaimInvoiceFromDate { get; set; }
+    public DateTime? ClaimInvoiceToDate { get; set; }
+    public decimal? ClaimInvoiceAmount { get; set; }
+    public decimal? ClaimTotalAmount { get; set; }
+    public decimal? ClaimSettledAmount { get; set; }
+    public int? ClaimNoOfSettlement { get; set; }
+    public int? ClaimLastSettlementNo { get; set; }
+    public DateTime? ClaimLastSettlementDate { get; set; }
+    public bool? ClaimIsPosted2Gl { get; set; }
+    public bool? ClaimIsTransactionClosed { get; set; }
+    public int? ClaimStatus { get; set; }
+    public bool? ClaimIsEClaimed { get; set; }
+    public int? ClaimEClaimStatus { get; set; }
+    public int? ClaimInvoiceTypeId { get; set; }
+    public decimal? ClaimTaxAmount { get; set; }
+    public DateTime? ClaimUpdateDate { get; set; }
+    public int? ClaimNphiesStatus { get; set; }
+    public DateTime? ClaimNphiesUpdateDate { get; set; }
+    public string? ClaimNphiesReference { get; set; }
+    public DateTime? ClaimEClaimSubmittedOn { get; set; }
+    public DateTime? ClaimNphiesSubmittedOn { get; set; }
+    public DateTime? ClaimNphiesReSubmittedOn { get; set; }
+    public bool? ClaimIsPostedToZatca { get; set; }
+    public string? ClaimOracleBatchNo { get; set; }
+    public DateTime? ClaimCreatedOn { get; set; }
+    public string SourceSystem { get; set; } = "VIDA-HIS";
+    public string SourceRef { get; set; } = "";
+}
+
+/// <summary>HIS_SettlementProcedure line: what the company paid and rejected, with its HIS_SettlementInvoice and HIS_SettlementMain receipt. Every HIS column as stored, for evaluating claims; no calculation reads it.</summary>
+public class SettlementLine
+{
+    public Guid Id { get; set; }
+    public Guid HospitalId { get; set; }
+    public Guid? EncounterId { get; set; }
+    public string? HisEncounterNo { get; set; }
+    public string? PatientMrn { get; set; }
+    public Guid? PayerId { get; set; }
+    /// <summary>The RevenueTransaction.SourceRef of the invoice line: REV-{type}-{invoice}-{line}.</summary>
+    public string? RevenueRef { get; set; }
+    public int? SettlementTransactionType { get; set; }
+    public int? SettlementNo { get; set; }
+    public DateTime? SettlementDate { get; set; }
+    public int? ClaimNo { get; set; }
+    public int? InvoiceTransactionType { get; set; }
+    public int? InvoiceNo { get; set; }
+    public int? MainInvoiceNo { get; set; }
+    public int? LineItemNo { get; set; }
+    public string? HisProcedureId { get; set; }
+    public decimal? ClaimedAmount { get; set; }
+    public decimal? PaidAmount { get; set; }
+    public decimal? RejectedAmount { get; set; }
+    public int? RejectionReasonId { get; set; }
+    public int? PrimaryDoctorId { get; set; }
+    public decimal? PrimaryDoctorShare { get; set; }
+    public string? PrimaryDoctorShareType { get; set; }
+    public int? ReferralClinicId { get; set; }
+    public int? ReferralDoctorId { get; set; }
+    public decimal? ReferralDoctorShare { get; set; }
+    public string? ReferralDoctorShareType { get; set; }
+    public int? PartnerId { get; set; }
+    public decimal? PartnerShare { get; set; }
+    public string? PartnerShareType { get; set; }
+    public string? Remarks { get; set; }
+    public DateTime? LineCreatedOn { get; set; }
+    public DateTime? LineEditedOn { get; set; }
+    public decimal? InvInvoiceAmount { get; set; }
+    public decimal? InvClaimedAmount { get; set; }
+    public decimal? InvSettledAmount { get; set; }
+    public decimal? InvRejectedAmount { get; set; }
+    public decimal? InvTaxAmount { get; set; }
+    public string? InvRemarks { get; set; }
+    public bool? InvIsActive { get; set; }
+    public bool? InvIsPackageInvoice { get; set; }
+    public int? SettlementCompanyId { get; set; }
+    public string? OfficialReceiptNo { get; set; }
+    public DateTime? OfficialReceiptDate { get; set; }
+    public string? OfficialReceiptReference { get; set; }
+    public decimal? ReceiptAmount { get; set; }
+    public bool? IsIncomeShared { get; set; }
+    public DateTime? IncShareProcessedOn { get; set; }
+    public bool? IsPosted2Gl { get; set; }
+    public bool? IsTransactionClosed { get; set; }
+    public int? SettlementStatus { get; set; }
+    public decimal? SettlementTaxAmount { get; set; }
+    public string? ErpInterfaceId { get; set; }
+    public DateTime? SettlementCreatedOn { get; set; }
+    public string SourceSystem { get; set; } = "VIDA-HIS";
+    public string SourceRef { get; set; } = "";
+}
+
+/// <summary>HIS_NPHIESClaimProcedure_Log line: NPHIES submitted / approved per procedure, with reason code and HIS_NPHIESClaimRejectionRemarks. Every HIS column as stored, for evaluating claims; no calculation reads it.</summary>
+public class NphiesClaimLine
+{
+    public Guid Id { get; set; }
+    public Guid HospitalId { get; set; }
+    public Guid? EncounterId { get; set; }
+    public string? HisEncounterNo { get; set; }
+    public string? PatientMrn { get; set; }
+    public Guid? PayerId { get; set; }
+    public int? ClaimType { get; set; }
+    public int? InvoiceTransactionType { get; set; }
+    public int? InvoiceNo { get; set; }
+    public string? ClaimIdentifier { get; set; }
+    public int? SequenceNo { get; set; }
+    public string? HisProcedureId { get; set; }
+    public decimal? AmountSubmitted { get; set; }
+    public decimal? AmountApproved { get; set; }
+    public bool? IsApproved { get; set; }
+    public string? Remarks { get; set; }
+    public decimal? PatientShare { get; set; }
+    public decimal? CompanyTax { get; set; }
+    public int? NphiesStatus { get; set; }
+    public string? SubmittedQuantity { get; set; }
+    public string? ApprovedQuantity { get; set; }
+    public string? ReasonCode { get; set; }
+    public string? TaxApproved { get; set; }
+    public int? ClaimStatus { get; set; }
+    public string? ClaimBundleId { get; set; }
+    public DateTime? LineCreatedOn { get; set; }
+    public DateTime? LineEditedOn { get; set; }
+    public string? RejectionRemarks { get; set; }
+    public string SourceSystem { get; set; } = "VIDA-HIS";
+    public string SourceRef { get; set; } = "";
+}
+
+/// <summary>HIS_NPHIESPaymentReconciliation_Detail line with its payment notice header. Every HIS column as stored, for evaluating claims; no calculation reads it.</summary>
+public class NphiesPayment
+{
+    public Guid Id { get; set; }
+    public Guid HospitalId { get; set; }
+    public string? PaymentReconIdentifier { get; set; }
+    public int? LineItemNo { get; set; }
+    public string? ComponentPayment { get; set; }
+    public string? ComponentEarlyFee { get; set; }
+    public string? ComponentNphiesFee { get; set; }
+    public string? Identifier { get; set; }
+    public string? Predecessor { get; set; }
+    public string? Type { get; set; }
+    public string? ClaimRequestIdentifier { get; set; }
+    public string? ClaimRequestSystem { get; set; }
+    public string? ClaimResponseIdentifier { get; set; }
+    public string? ClaimResponseSystem { get; set; }
+    public string? PayeeOrg { get; set; }
+    public string? SubmitterOrg { get; set; }
+    public string? Amount { get; set; }
+    public decimal? AmountValue { get; set; }
+    public decimal? ComponentPaymentValue { get; set; }
+    public DateTime? Date { get; set; }
+    public DateTime? LineCreatedOn { get; set; }
+    public string? IdentifierSystem { get; set; }
+    public string? PaymentIssuer { get; set; }
+    public string? Status { get; set; }
+    public DateTime? StartDate { get; set; }
+    public DateTime? EndDate { get; set; }
+    public DateTime? PaymentCreatedOn { get; set; }
+    public string? Outcome { get; set; }
+    public string? Disposition { get; set; }
+    public DateTime? PaymentDate { get; set; }
+    public string? PaymentAmount { get; set; }
+    public decimal? PaymentAmountValue { get; set; }
+    public string? PaymentIdentifier { get; set; }
+    public string? PaymentIdentifierSystem { get; set; }
+    public bool? IsPaymentNoticeSent { get; set; }
+    public DateTime? PaymentNoticeSentOn { get; set; }
+    public DateTime? CreatedOn { get; set; }
+    public string SourceSystem { get; set; } = "VIDA-HIS";
+    public string SourceRef { get; set; } = "";
+}
+
+
 // ═══ Staging contract (BRD 22.2) ═══════════════════════════════════════════════════
 
 /// <summary>Every inbound load, with accepted and rejected counts.</summary>

@@ -57,7 +57,7 @@ public sealed class PeriodFactsService(IDbContextFactory<VeritaDbContext> factor
     [
         new("Encounter", "Encounters", "Clinical", "Encounter",
             "t.HospitalId = @h AND t.AdmitAt >= @s AND t.AdmitAt < @e", true,
-            ["EncounterService", "ActivityTransaction", "RevenueTransaction", "RefundTransaction", "InvoicePackageItem", "ConsumptionItem", "StaffTime", "EncounterTransfer", "Patient"],
+            ["EncounterService", "ActivityTransaction", "RevenueTransaction", "RefundTransaction", "InvoicePackageItem", "ConsumptionItem", "StaffTime", "EncounterTransfer", "ClaimLine", "SettlementLine", "NphiesClaimLine", "Patient"],
             "Admitted in this period."),
         new("Patient", "Patients", "Clinical", "Patient",
             $"t.Id IN (SELECT x.PatientId FROM [Encounter] x WHERE x.Id IN ({Enc})) AND NOT EXISTS (SELECT 1 FROM [Encounter] o WHERE o.PatientId = t.Id AND o.Id NOT IN ({Enc}))",
@@ -83,6 +83,18 @@ public sealed class PeriodFactsService(IDbContextFactory<VeritaDbContext> factor
         new("EncounterTransfer", "Bed / ward transfers", "Clinical", "EncounterTransfer",
             $"t.HospitalId = @h AND (t.EncounterId IN ({Enc}) OR (t.EncounterId IS NULL AND t.TransferDate >= @s AND t.TransferDate < @e))", true, [],
             "HIS INP_Transfer as stored (TransferDate, StartTime, EndTime, Duration). Unlinked rows count by TransferDate."),
+        new("ClaimLine", "Claim lines", "Financial", "ClaimLine",
+            $"t.HospitalId = @h AND (t.EncounterId IN ({Enc}) OR (t.EncounterId IS NULL AND t.ClaimDate >= @s AND t.ClaimDate < @e))", true, [],
+            "HIS claim lines on this period's encounters, or claimed in it when not linked."),
+        new("SettlementLine", "Settlement lines", "Financial", "SettlementLine",
+            $"t.HospitalId = @h AND (t.EncounterId IN ({Enc}) OR (t.EncounterId IS NULL AND t.SettlementDate >= @s AND t.SettlementDate < @e))", true, [],
+            "Paid and rejected per line, on this period's encounters, or settled in it when not linked."),
+        new("NphiesClaimLine", "NPHIES claim lines", "Financial", "NphiesClaimLine",
+            $"t.HospitalId = @h AND (t.EncounterId IN ({Enc}) OR (t.EncounterId IS NULL AND t.LineCreatedOn >= @s AND t.LineCreatedOn < @e))", true, [],
+            "NPHIES submitted / approved per procedure."),
+        new("NphiesPayment", "NPHIES payments", "Financial", "NphiesPayment",
+            "t.HospitalId = @h AND t.PaymentDate >= @s AND t.PaymentDate < @e", true, [],
+            "NPHIES payment reconciliation lines, by payment date."),
         new("GLPosting", "GL postings", "Ledger", "GLPosting",
             "t.HospitalId = @h AND t.PeriodId = @p", true, []),
         new("DriverVolume", "Driver volumes", "Ledger", "DriverVolume",
@@ -91,7 +103,7 @@ public sealed class PeriodFactsService(IDbContextFactory<VeritaDbContext> factor
 
     // Children before parents: NoAction foreign keys.
     private static readonly string[] DeleteOrder =
-        ["ActivityTransaction", "EncounterService", "RevenueTransaction", "RefundTransaction", "InvoicePackageItem", "ConsumptionItem", "StaffTime", "EncounterTransfer", "GLPosting", "DriverVolume", "Encounter", "Patient"];
+        ["ActivityTransaction", "EncounterService", "RevenueTransaction", "RefundTransaction", "InvoicePackageItem", "ConsumptionItem", "StaffTime", "EncounterTransfer", "ClaimLine", "SettlementLine", "NphiesClaimLine", "NphiesPayment", "GLPosting", "DriverVolume", "Encounter", "Patient"];
 
     private sealed record Scope(Guid PeriodId, string PeriodCode, DateOnly Start, DateOnly End, string PeriodStatus, Guid HospitalId, string HospitalCode);
 

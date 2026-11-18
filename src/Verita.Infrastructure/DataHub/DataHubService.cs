@@ -188,7 +188,7 @@ public sealed class DataHubService(IDbContextFactory<VeritaDbContext> factory, I
             .Where(m => m.FromId != m.ToId).DistinctBy(m => m.FromId).ToList();
         if (moves.Count == 0) return;
         var json = JsonSerializer.Serialize(moves);
-        foreach (var table in new[] { "ActivityTransaction", "EncounterService", "RevenueTransaction", "RefundTransaction", "InvoicePackageItem", "ConsumptionItem", "StaffTime", "EncounterTransfer" })
+        foreach (var table in new[] { "ActivityTransaction", "EncounterService", "RevenueTransaction", "RefundTransaction", "InvoicePackageItem", "ConsumptionItem", "StaffTime", "EncounterTransfer", "ClaimLine", "SettlementLine", "NphiesClaimLine" })
             await db.Database.ExecuteSqlRawAsync(
                 $"UPDATE t SET EncounterId = m.ToId FROM [{table}] t JOIN OPENJSON({{0}}) WITH (FromId uniqueidentifier, ToId uniqueidentifier) m ON t.EncounterId = m.FromId", [json], ct);
         await db.Database.ExecuteSqlRawAsync(
@@ -202,7 +202,7 @@ public sealed class DataHubService(IDbContextFactory<VeritaDbContext> factory, I
     private async Task LinkHisEncountersAsync(CancellationToken ct)
     {
         await using var db = await Db(ct);
-        foreach (var table in new[] { "ConsumptionItem", "StaffTime", "EncounterTransfer" })
+        foreach (var table in new[] { "ConsumptionItem", "StaffTime", "EncounterTransfer", "ClaimLine", "SettlementLine", "NphiesClaimLine" })
             await db.Database.ExecuteSqlRawAsync(
                 $"UPDATE t SET EncounterId = e.Id FROM [{table}] t JOIN [Encounter] e ON e.HospitalId = t.HospitalId AND e.EncounterNo = t.HisEncounterNo WHERE t.EncounterId IS NULL", ct);
     }
@@ -769,7 +769,8 @@ public sealed class DataHubService(IDbContextFactory<VeritaDbContext> factory, I
             await RemoveRefundsFromRevenueAsync(refunds.Where(r => !refused.Contains(r.Key)).ToList(), ct);
             if (spec.Type == typeof(Payer)) await MapPayerPartiesAsync(ct);
             if (marksChildLines) await MarkChildInvoiceLinesAsync(ct);
-            if (spec.Type == typeof(Encounter) || spec.Type == typeof(ConsumptionItem) || spec.Type == typeof(StaffTime) || spec.Type == typeof(EncounterTransfer)) await LinkHisEncountersAsync(ct);
+            if (spec.Type == typeof(Encounter) || spec.Type == typeof(ConsumptionItem) || spec.Type == typeof(StaffTime) || spec.Type == typeof(EncounterTransfer)
+                || spec.Type == typeof(ClaimLine) || spec.Type == typeof(SettlementLine) || spec.Type == typeof(NphiesClaimLine)) await LinkHisEncountersAsync(ct);
 
             await using var log = await Db(ct);
             var batch = new ImportBatch

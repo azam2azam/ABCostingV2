@@ -219,7 +219,8 @@ static class App
         is omitted (no ACT-/RES- invent from HIS clocks). Invoice price is not cost. Each day
         carries every invoice (incl. claimed/settled/rejected), item and minute of the
         encounters admitted or invoiced that day — encounter-driven, not only rows dated in
-        the window. Rows are keyed by sourceRef. Import remaps SetupID-ProjectID onto VERITA.
+        the window (ER appointment links folded into the day's appointment set so claims
+        still follow). Rows are keyed by sourceRef. Import remaps SetupID-ProjectID onto VERITA.
         """;
 
     private static int SelfTest()

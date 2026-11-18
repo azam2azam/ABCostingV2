@@ -966,6 +966,333 @@ namespace Verita.Infrastructure.Data.Migrations
                         });
                 });
 
+            modelBuilder.Entity("Verita.Domain.Entities.ClaimLine", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<int?>("AttachmentStatus")
+                        .HasColumnType("int");
+
+                    b.Property<decimal?>("ClaimAmount")
+                        .HasPrecision(19, 4)
+                        .HasColumnType("decimal(19,4)");
+
+                    b.Property<string>("ClaimBatchBundleId")
+                        .HasMaxLength(200)
+                        .HasColumnType("nvarchar(200)");
+
+                    b.Property<string>("ClaimBundleId")
+                        .HasMaxLength(200)
+                        .HasColumnType("nvarchar(200)");
+
+                    b.Property<int?>("ClaimCompanyId")
+                        .HasColumnType("int");
+
+                    b.Property<DateTime?>("ClaimCreatedOn")
+                        .HasColumnType("datetime2(3)");
+
+                    b.Property<DateTime?>("ClaimDate")
+                        .HasColumnType("datetime2(3)");
+
+                    b.Property<int?>("ClaimEClaimStatus")
+                        .HasColumnType("int");
+
+                    b.Property<DateTime?>("ClaimEClaimSubmittedOn")
+                        .HasColumnType("datetime2(3)");
+
+                    b.Property<decimal?>("ClaimInvoiceAmount")
+                        .HasPrecision(19, 4)
+                        .HasColumnType("decimal(19,4)");
+
+                    b.Property<DateTime?>("ClaimInvoiceFromDate")
+                        .HasColumnType("datetime2(3)");
+
+                    b.Property<DateTime?>("ClaimInvoiceToDate")
+                        .HasColumnType("datetime2(3)");
+
+                    b.Property<int?>("ClaimInvoiceTypeId")
+                        .HasColumnType("int");
+
+                    b.Property<bool?>("ClaimIsEClaimed")
+                        .HasColumnType("bit");
+
+                    b.Property<bool?>("ClaimIsPosted2Gl")
+                        .HasColumnType("bit");
+
+                    b.Property<bool?>("ClaimIsPostedToZatca")
+                        .HasColumnType("bit");
+
+                    b.Property<bool?>("ClaimIsTransactionClosed")
+                        .HasColumnType("bit");
+
+                    b.Property<DateTime?>("ClaimLastSettlementDate")
+                        .HasColumnType("datetime2(3)");
+
+                    b.Property<int?>("ClaimLastSettlementNo")
+                        .HasColumnType("int");
+
+                    b.Property<int?>("ClaimNo")
+                        .HasColumnType("int");
+
+                    b.Property<int?>("ClaimNoOfSettlement")
+                        .HasColumnType("int");
+
+                    b.Property<DateTime?>("ClaimNphiesReSubmittedOn")
+                        .HasColumnType("datetime2(3)");
+
+                    b.Property<string>("ClaimNphiesReference")
+                        .HasMaxLength(200)
+                        .HasColumnType("nvarchar(200)");
+
+                    b.Property<int?>("ClaimNphiesStatus")
+                        .HasColumnType("int");
+
+                    b.Property<DateTime?>("ClaimNphiesSubmittedOn")
+                        .HasColumnType("datetime2(3)");
+
+                    b.Property<DateTime?>("ClaimNphiesUpdateDate")
+                        .HasColumnType("datetime2(3)");
+
+                    b.Property<string>("ClaimOracleBatchNo")
+                        .HasMaxLength(200)
+                        .HasColumnType("nvarchar(200)");
+
+                    b.Property<decimal?>("ClaimSettledAmount")
+                        .HasPrecision(19, 4)
+                        .HasColumnType("decimal(19,4)");
+
+                    b.Property<int?>("ClaimStatus")
+                        .HasColumnType("int");
+
+                    b.Property<decimal?>("ClaimTaxAmount")
+                        .HasPrecision(19, 4)
+                        .HasColumnType("decimal(19,4)");
+
+                    b.Property<decimal?>("ClaimTotalAmount")
+                        .HasPrecision(19, 4)
+                        .HasColumnType("decimal(19,4)");
+
+                    b.Property<DateTime?>("ClaimUpdateDate")
+                        .HasColumnType("datetime2(3)");
+
+                    b.Property<int?>("EClaimRejectionReason")
+                        .HasColumnType("int");
+
+                    b.Property<string>("EClaimRemarks")
+                        .HasMaxLength(200)
+                        .HasColumnType("nvarchar(200)");
+
+                    b.Property<int?>("EClaimStatus")
+                        .HasColumnType("int");
+
+                    b.Property<Guid?>("EncounterId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<string>("HisEncounterNo")
+                        .HasMaxLength(50)
+                        .HasColumnType("nvarchar(50)");
+
+                    b.Property<int?>("HisPatientType")
+                        .HasColumnType("int");
+
+                    b.Property<string>("HisProcedureId")
+                        .HasMaxLength(200)
+                        .HasColumnType("nvarchar(200)");
+
+                    b.Property<Guid>("HospitalId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<decimal?>("InvClaimAmount")
+                        .HasPrecision(19, 4)
+                        .HasColumnType("decimal(19,4)");
+
+                    b.Property<DateTime?>("InvCreatedOn")
+                        .HasColumnType("datetime2(3)");
+
+                    b.Property<string>("InvEClaimRefNum")
+                        .HasMaxLength(200)
+                        .HasColumnType("nvarchar(200)");
+
+                    b.Property<string>("InvEClaimRemarks")
+                        .HasMaxLength(200)
+                        .HasColumnType("nvarchar(200)");
+
+                    b.Property<int?>("InvEClaimStatus")
+                        .HasColumnType("int");
+
+                    b.Property<decimal?>("InvInvoiceAmount")
+                        .HasPrecision(19, 4)
+                        .HasColumnType("decimal(19,4)");
+
+                    b.Property<bool?>("InvIsActive")
+                        .HasColumnType("bit");
+
+                    b.Property<bool?>("InvIsPackageInvoice")
+                        .HasColumnType("bit");
+
+                    b.Property<string>("InvRemarks")
+                        .HasMaxLength(200)
+                        .HasColumnType("nvarchar(200)");
+
+                    b.Property<decimal?>("InvSettlementAmount")
+                        .HasPrecision(19, 4)
+                        .HasColumnType("decimal(19,4)");
+
+                    b.Property<decimal?>("InvTaxAmount")
+                        .HasPrecision(19, 4)
+                        .HasColumnType("decimal(19,4)");
+
+                    b.Property<decimal?>("InvoiceAmount")
+                        .HasPrecision(19, 4)
+                        .HasColumnType("decimal(19,4)");
+
+                    b.Property<int?>("InvoiceNo")
+                        .HasColumnType("int");
+
+                    b.Property<int?>("InvoiceTransactionType")
+                        .HasColumnType("int");
+
+                    b.Property<bool?>("IsPendedReceived")
+                        .HasColumnType("bit");
+
+                    b.Property<DateTime?>("LineCreatedOn")
+                        .HasColumnType("datetime2(3)");
+
+                    b.Property<DateTime?>("LineEditedOn")
+                        .HasColumnType("datetime2(3)");
+
+                    b.Property<int?>("LineItemNo")
+                        .HasColumnType("int");
+
+                    b.Property<int?>("MainInvoiceNo")
+                        .HasColumnType("int");
+
+                    b.Property<decimal?>("NphiesAmountApproved")
+                        .HasPrecision(19, 4)
+                        .HasColumnType("decimal(19,4)");
+
+                    b.Property<decimal?>("NphiesAmountSubmitted")
+                        .HasPrecision(19, 4)
+                        .HasColumnType("decimal(19,4)");
+
+                    b.Property<string>("NphiesBatchIdentifier")
+                        .HasMaxLength(200)
+                        .HasColumnType("nvarchar(200)");
+
+                    b.Property<int?>("NphiesBatchNumber")
+                        .HasColumnType("int");
+
+                    b.Property<string>("NphiesClaimRefNum")
+                        .HasMaxLength(200)
+                        .HasColumnType("nvarchar(200)");
+
+                    b.Property<string>("NphiesClaimRemarks")
+                        .HasMaxLength(200)
+                        .HasColumnType("nvarchar(200)");
+
+                    b.Property<string>("NphiesClaimRemarks2")
+                        .HasMaxLength(200)
+                        .HasColumnType("nvarchar(200)");
+
+                    b.Property<int?>("NphiesClaimStatus")
+                        .HasColumnType("int");
+
+                    b.Property<DateTime?>("NphiesResponseReceivedOn")
+                        .HasColumnType("datetime2(3)");
+
+                    b.Property<DateTime?>("NphiesSubmittedOn")
+                        .HasColumnType("datetime2(3)");
+
+                    b.Property<decimal?>("NphiesTaxAmount")
+                        .HasPrecision(19, 4)
+                        .HasColumnType("decimal(19,4)");
+
+                    b.Property<string>("PatientMrn")
+                        .HasMaxLength(200)
+                        .HasColumnType("nvarchar(200)");
+
+                    b.Property<Guid?>("PayerId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<int?>("PrimaryDoctorId")
+                        .HasColumnType("int");
+
+                    b.Property<decimal?>("PrimaryDoctorShare")
+                        .HasPrecision(19, 4)
+                        .HasColumnType("decimal(19,4)");
+
+                    b.Property<string>("PrimaryDoctorShareType")
+                        .HasMaxLength(200)
+                        .HasColumnType("nvarchar(200)");
+
+                    b.Property<string>("ReconciliationBundleId")
+                        .HasMaxLength(200)
+                        .HasColumnType("nvarchar(200)");
+
+                    b.Property<int?>("ReferralClinicId")
+                        .HasColumnType("int");
+
+                    b.Property<int?>("ReferralDoctorId")
+                        .HasColumnType("int");
+
+                    b.Property<decimal?>("ReferralDoctorShare")
+                        .HasPrecision(19, 4)
+                        .HasColumnType("decimal(19,4)");
+
+                    b.Property<string>("ReferralDoctorShareType")
+                        .HasMaxLength(200)
+                        .HasColumnType("nvarchar(200)");
+
+                    b.Property<decimal?>("RejectedAmount")
+                        .HasPrecision(19, 4)
+                        .HasColumnType("decimal(19,4)");
+
+                    b.Property<string>("Remarks")
+                        .HasMaxLength(200)
+                        .HasColumnType("nvarchar(200)");
+
+                    b.Property<int?>("ResubmissionStatus")
+                        .HasColumnType("int");
+
+                    b.Property<string>("RevenueRef")
+                        .HasMaxLength(100)
+                        .HasColumnType("nvarchar(100)");
+
+                    b.Property<decimal?>("SettlementAmount")
+                        .HasPrecision(19, 4)
+                        .HasColumnType("decimal(19,4)");
+
+                    b.Property<string>("SourceRef")
+                        .IsRequired()
+                        .HasMaxLength(150)
+                        .HasColumnType("nvarchar(150)");
+
+                    b.Property<string>("SourceSystem")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("nvarchar(200)");
+
+                    b.Property<decimal?>("TaxAmount")
+                        .HasPrecision(19, 4)
+                        .HasColumnType("decimal(19,4)");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("EncounterId");
+
+                    b.HasIndex("PayerId");
+
+                    b.HasIndex("HospitalId", "HisEncounterNo");
+
+                    b.HasIndex("HospitalId", "RevenueRef");
+
+                    b.HasIndex("HospitalId", "SourceRef")
+                        .IsUnique();
+
+                    b.ToTable("ClaimLine", (string)null);
+                });
+
             modelBuilder.Entity("Verita.Domain.Entities.ConsumptionItem", b =>
                 {
                     b.Property<Guid>("Id")
@@ -3035,6 +3362,291 @@ namespace Verita.Infrastructure.Data.Migrations
                     b.ToTable("InvoicePackageItem", (string)null);
                 });
 
+            modelBuilder.Entity("Verita.Domain.Entities.NphiesClaimLine", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<decimal?>("AmountApproved")
+                        .HasPrecision(19, 4)
+                        .HasColumnType("decimal(19,4)");
+
+                    b.Property<decimal?>("AmountSubmitted")
+                        .HasPrecision(19, 4)
+                        .HasColumnType("decimal(19,4)");
+
+                    b.Property<string>("ApprovedQuantity")
+                        .HasMaxLength(200)
+                        .HasColumnType("nvarchar(200)");
+
+                    b.Property<string>("ClaimBundleId")
+                        .HasMaxLength(200)
+                        .HasColumnType("nvarchar(200)");
+
+                    b.Property<string>("ClaimIdentifier")
+                        .HasMaxLength(50)
+                        .HasColumnType("nvarchar(50)");
+
+                    b.Property<int?>("ClaimStatus")
+                        .HasColumnType("int");
+
+                    b.Property<int?>("ClaimType")
+                        .HasColumnType("int");
+
+                    b.Property<decimal?>("CompanyTax")
+                        .HasPrecision(19, 4)
+                        .HasColumnType("decimal(19,4)");
+
+                    b.Property<Guid?>("EncounterId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<string>("HisEncounterNo")
+                        .HasMaxLength(50)
+                        .HasColumnType("nvarchar(50)");
+
+                    b.Property<string>("HisProcedureId")
+                        .HasMaxLength(200)
+                        .HasColumnType("nvarchar(200)");
+
+                    b.Property<Guid>("HospitalId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<int?>("InvoiceNo")
+                        .HasColumnType("int");
+
+                    b.Property<int?>("InvoiceTransactionType")
+                        .HasColumnType("int");
+
+                    b.Property<bool?>("IsApproved")
+                        .HasColumnType("bit");
+
+                    b.Property<DateTime?>("LineCreatedOn")
+                        .HasColumnType("datetime2(3)");
+
+                    b.Property<DateTime?>("LineEditedOn")
+                        .HasColumnType("datetime2(3)");
+
+                    b.Property<int?>("NphiesStatus")
+                        .HasColumnType("int");
+
+                    b.Property<string>("PatientMrn")
+                        .HasMaxLength(200)
+                        .HasColumnType("nvarchar(200)");
+
+                    b.Property<decimal?>("PatientShare")
+                        .HasPrecision(19, 4)
+                        .HasColumnType("decimal(19,4)");
+
+                    b.Property<Guid?>("PayerId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<string>("ReasonCode")
+                        .HasMaxLength(200)
+                        .HasColumnType("nvarchar(200)");
+
+                    b.Property<string>("RejectionRemarks")
+                        .HasMaxLength(200)
+                        .HasColumnType("nvarchar(200)");
+
+                    b.Property<string>("Remarks")
+                        .HasMaxLength(200)
+                        .HasColumnType("nvarchar(200)");
+
+                    b.Property<int?>("SequenceNo")
+                        .HasColumnType("int");
+
+                    b.Property<string>("SourceRef")
+                        .IsRequired()
+                        .HasMaxLength(150)
+                        .HasColumnType("nvarchar(150)");
+
+                    b.Property<string>("SourceSystem")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("nvarchar(200)");
+
+                    b.Property<string>("SubmittedQuantity")
+                        .HasMaxLength(200)
+                        .HasColumnType("nvarchar(200)");
+
+                    b.Property<string>("TaxApproved")
+                        .HasMaxLength(200)
+                        .HasColumnType("nvarchar(200)");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("EncounterId");
+
+                    b.HasIndex("PayerId");
+
+                    b.HasIndex("HospitalId", "ClaimIdentifier");
+
+                    b.HasIndex("HospitalId", "HisEncounterNo");
+
+                    b.HasIndex("HospitalId", "SourceRef")
+                        .IsUnique();
+
+                    b.ToTable("NphiesClaimLine", (string)null);
+                });
+
+            modelBuilder.Entity("Verita.Domain.Entities.NphiesPayment", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<string>("Amount")
+                        .HasMaxLength(200)
+                        .HasColumnType("nvarchar(200)");
+
+                    b.Property<decimal?>("AmountValue")
+                        .HasPrecision(19, 4)
+                        .HasColumnType("decimal(19,4)");
+
+                    b.Property<string>("ClaimRequestIdentifier")
+                        .HasMaxLength(50)
+                        .HasColumnType("nvarchar(50)");
+
+                    b.Property<string>("ClaimRequestSystem")
+                        .HasMaxLength(200)
+                        .HasColumnType("nvarchar(200)");
+
+                    b.Property<string>("ClaimResponseIdentifier")
+                        .HasMaxLength(200)
+                        .HasColumnType("nvarchar(200)");
+
+                    b.Property<string>("ClaimResponseSystem")
+                        .HasMaxLength(200)
+                        .HasColumnType("nvarchar(200)");
+
+                    b.Property<string>("ComponentEarlyFee")
+                        .HasMaxLength(200)
+                        .HasColumnType("nvarchar(200)");
+
+                    b.Property<string>("ComponentNphiesFee")
+                        .HasMaxLength(200)
+                        .HasColumnType("nvarchar(200)");
+
+                    b.Property<string>("ComponentPayment")
+                        .HasMaxLength(200)
+                        .HasColumnType("nvarchar(200)");
+
+                    b.Property<decimal?>("ComponentPaymentValue")
+                        .HasPrecision(19, 4)
+                        .HasColumnType("decimal(19,4)");
+
+                    b.Property<DateTime?>("CreatedOn")
+                        .HasColumnType("datetime2(3)");
+
+                    b.Property<DateTime?>("Date")
+                        .HasColumnType("datetime2(3)");
+
+                    b.Property<string>("Disposition")
+                        .HasMaxLength(200)
+                        .HasColumnType("nvarchar(200)");
+
+                    b.Property<DateTime?>("EndDate")
+                        .HasColumnType("datetime2(3)");
+
+                    b.Property<Guid>("HospitalId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<string>("Identifier")
+                        .HasMaxLength(200)
+                        .HasColumnType("nvarchar(200)");
+
+                    b.Property<string>("IdentifierSystem")
+                        .HasMaxLength(200)
+                        .HasColumnType("nvarchar(200)");
+
+                    b.Property<bool?>("IsPaymentNoticeSent")
+                        .HasColumnType("bit");
+
+                    b.Property<DateTime?>("LineCreatedOn")
+                        .HasColumnType("datetime2(3)");
+
+                    b.Property<int?>("LineItemNo")
+                        .HasColumnType("int");
+
+                    b.Property<string>("Outcome")
+                        .HasMaxLength(200)
+                        .HasColumnType("nvarchar(200)");
+
+                    b.Property<string>("PayeeOrg")
+                        .HasMaxLength(200)
+                        .HasColumnType("nvarchar(200)");
+
+                    b.Property<string>("PaymentAmount")
+                        .HasMaxLength(200)
+                        .HasColumnType("nvarchar(200)");
+
+                    b.Property<decimal?>("PaymentAmountValue")
+                        .HasPrecision(19, 4)
+                        .HasColumnType("decimal(19,4)");
+
+                    b.Property<DateTime?>("PaymentCreatedOn")
+                        .HasColumnType("datetime2(3)");
+
+                    b.Property<DateTime?>("PaymentDate")
+                        .HasColumnType("datetime2(3)");
+
+                    b.Property<string>("PaymentIdentifier")
+                        .HasMaxLength(200)
+                        .HasColumnType("nvarchar(200)");
+
+                    b.Property<string>("PaymentIdentifierSystem")
+                        .HasMaxLength(200)
+                        .HasColumnType("nvarchar(200)");
+
+                    b.Property<string>("PaymentIssuer")
+                        .HasMaxLength(200)
+                        .HasColumnType("nvarchar(200)");
+
+                    b.Property<DateTime?>("PaymentNoticeSentOn")
+                        .HasColumnType("datetime2(3)");
+
+                    b.Property<string>("PaymentReconIdentifier")
+                        .HasMaxLength(200)
+                        .HasColumnType("nvarchar(200)");
+
+                    b.Property<string>("Predecessor")
+                        .HasMaxLength(200)
+                        .HasColumnType("nvarchar(200)");
+
+                    b.Property<string>("SourceRef")
+                        .IsRequired()
+                        .HasMaxLength(150)
+                        .HasColumnType("nvarchar(150)");
+
+                    b.Property<string>("SourceSystem")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("nvarchar(200)");
+
+                    b.Property<DateTime?>("StartDate")
+                        .HasColumnType("datetime2(3)");
+
+                    b.Property<string>("Status")
+                        .HasMaxLength(200)
+                        .HasColumnType("nvarchar(200)");
+
+                    b.Property<string>("SubmitterOrg")
+                        .HasMaxLength(200)
+                        .HasColumnType("nvarchar(200)");
+
+                    b.Property<string>("Type")
+                        .HasMaxLength(200)
+                        .HasColumnType("nvarchar(200)");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("HospitalId", "ClaimRequestIdentifier");
+
+                    b.HasIndex("HospitalId", "SourceRef")
+                        .IsUnique();
+
+                    b.ToTable("NphiesPayment", (string)null);
+                });
+
             modelBuilder.Entity("Verita.Domain.Entities.Package", b =>
                 {
                     b.Property<Guid>("Id")
@@ -5011,6 +5623,221 @@ namespace Verita.Infrastructure.Data.Migrations
                             }));
                 });
 
+            modelBuilder.Entity("Verita.Domain.Entities.SettlementLine", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<int?>("ClaimNo")
+                        .HasColumnType("int");
+
+                    b.Property<decimal?>("ClaimedAmount")
+                        .HasPrecision(19, 4)
+                        .HasColumnType("decimal(19,4)");
+
+                    b.Property<Guid?>("EncounterId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<string>("ErpInterfaceId")
+                        .HasMaxLength(200)
+                        .HasColumnType("nvarchar(200)");
+
+                    b.Property<string>("HisEncounterNo")
+                        .HasMaxLength(50)
+                        .HasColumnType("nvarchar(50)");
+
+                    b.Property<string>("HisProcedureId")
+                        .HasMaxLength(200)
+                        .HasColumnType("nvarchar(200)");
+
+                    b.Property<Guid>("HospitalId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<DateTime?>("IncShareProcessedOn")
+                        .HasColumnType("datetime2(3)");
+
+                    b.Property<decimal?>("InvClaimedAmount")
+                        .HasPrecision(19, 4)
+                        .HasColumnType("decimal(19,4)");
+
+                    b.Property<decimal?>("InvInvoiceAmount")
+                        .HasPrecision(19, 4)
+                        .HasColumnType("decimal(19,4)");
+
+                    b.Property<bool?>("InvIsActive")
+                        .HasColumnType("bit");
+
+                    b.Property<bool?>("InvIsPackageInvoice")
+                        .HasColumnType("bit");
+
+                    b.Property<decimal?>("InvRejectedAmount")
+                        .HasPrecision(19, 4)
+                        .HasColumnType("decimal(19,4)");
+
+                    b.Property<string>("InvRemarks")
+                        .HasMaxLength(200)
+                        .HasColumnType("nvarchar(200)");
+
+                    b.Property<decimal?>("InvSettledAmount")
+                        .HasPrecision(19, 4)
+                        .HasColumnType("decimal(19,4)");
+
+                    b.Property<decimal?>("InvTaxAmount")
+                        .HasPrecision(19, 4)
+                        .HasColumnType("decimal(19,4)");
+
+                    b.Property<int?>("InvoiceNo")
+                        .HasColumnType("int");
+
+                    b.Property<int?>("InvoiceTransactionType")
+                        .HasColumnType("int");
+
+                    b.Property<bool?>("IsIncomeShared")
+                        .HasColumnType("bit");
+
+                    b.Property<bool?>("IsPosted2Gl")
+                        .HasColumnType("bit");
+
+                    b.Property<bool?>("IsTransactionClosed")
+                        .HasColumnType("bit");
+
+                    b.Property<DateTime?>("LineCreatedOn")
+                        .HasColumnType("datetime2(3)");
+
+                    b.Property<DateTime?>("LineEditedOn")
+                        .HasColumnType("datetime2(3)");
+
+                    b.Property<int?>("LineItemNo")
+                        .HasColumnType("int");
+
+                    b.Property<int?>("MainInvoiceNo")
+                        .HasColumnType("int");
+
+                    b.Property<DateTime?>("OfficialReceiptDate")
+                        .HasColumnType("datetime2(3)");
+
+                    b.Property<string>("OfficialReceiptNo")
+                        .HasMaxLength(200)
+                        .HasColumnType("nvarchar(200)");
+
+                    b.Property<string>("OfficialReceiptReference")
+                        .HasMaxLength(200)
+                        .HasColumnType("nvarchar(200)");
+
+                    b.Property<decimal?>("PaidAmount")
+                        .HasPrecision(19, 4)
+                        .HasColumnType("decimal(19,4)");
+
+                    b.Property<int?>("PartnerId")
+                        .HasColumnType("int");
+
+                    b.Property<decimal?>("PartnerShare")
+                        .HasPrecision(19, 4)
+                        .HasColumnType("decimal(19,4)");
+
+                    b.Property<string>("PartnerShareType")
+                        .HasMaxLength(200)
+                        .HasColumnType("nvarchar(200)");
+
+                    b.Property<string>("PatientMrn")
+                        .HasMaxLength(200)
+                        .HasColumnType("nvarchar(200)");
+
+                    b.Property<Guid?>("PayerId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<int?>("PrimaryDoctorId")
+                        .HasColumnType("int");
+
+                    b.Property<decimal?>("PrimaryDoctorShare")
+                        .HasPrecision(19, 4)
+                        .HasColumnType("decimal(19,4)");
+
+                    b.Property<string>("PrimaryDoctorShareType")
+                        .HasMaxLength(200)
+                        .HasColumnType("nvarchar(200)");
+
+                    b.Property<decimal?>("ReceiptAmount")
+                        .HasPrecision(19, 4)
+                        .HasColumnType("decimal(19,4)");
+
+                    b.Property<int?>("ReferralClinicId")
+                        .HasColumnType("int");
+
+                    b.Property<int?>("ReferralDoctorId")
+                        .HasColumnType("int");
+
+                    b.Property<decimal?>("ReferralDoctorShare")
+                        .HasPrecision(19, 4)
+                        .HasColumnType("decimal(19,4)");
+
+                    b.Property<string>("ReferralDoctorShareType")
+                        .HasMaxLength(200)
+                        .HasColumnType("nvarchar(200)");
+
+                    b.Property<decimal?>("RejectedAmount")
+                        .HasPrecision(19, 4)
+                        .HasColumnType("decimal(19,4)");
+
+                    b.Property<int?>("RejectionReasonId")
+                        .HasColumnType("int");
+
+                    b.Property<string>("Remarks")
+                        .HasMaxLength(200)
+                        .HasColumnType("nvarchar(200)");
+
+                    b.Property<string>("RevenueRef")
+                        .HasMaxLength(100)
+                        .HasColumnType("nvarchar(100)");
+
+                    b.Property<int?>("SettlementCompanyId")
+                        .HasColumnType("int");
+
+                    b.Property<DateTime?>("SettlementCreatedOn")
+                        .HasColumnType("datetime2(3)");
+
+                    b.Property<DateTime?>("SettlementDate")
+                        .HasColumnType("datetime2(3)");
+
+                    b.Property<int?>("SettlementNo")
+                        .HasColumnType("int");
+
+                    b.Property<int?>("SettlementStatus")
+                        .HasColumnType("int");
+
+                    b.Property<decimal?>("SettlementTaxAmount")
+                        .HasPrecision(19, 4)
+                        .HasColumnType("decimal(19,4)");
+
+                    b.Property<int?>("SettlementTransactionType")
+                        .HasColumnType("int");
+
+                    b.Property<string>("SourceRef")
+                        .IsRequired()
+                        .HasMaxLength(150)
+                        .HasColumnType("nvarchar(150)");
+
+                    b.Property<string>("SourceSystem")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("nvarchar(200)");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("EncounterId");
+
+                    b.HasIndex("PayerId");
+
+                    b.HasIndex("HospitalId", "HisEncounterNo");
+
+                    b.HasIndex("HospitalId", "RevenueRef");
+
+                    b.HasIndex("HospitalId", "SourceRef")
+                        .IsUnique();
+
+                    b.ToTable("SettlementLine", (string)null);
+                });
+
             modelBuilder.Entity("Verita.Domain.Entities.StaffTime", b =>
                 {
                     b.Property<Guid>("Id")
@@ -5524,6 +6351,25 @@ namespace Verita.Infrastructure.Data.Migrations
                         .IsRequired();
                 });
 
+            modelBuilder.Entity("Verita.Domain.Entities.ClaimLine", b =>
+                {
+                    b.HasOne("Verita.Domain.Entities.Encounter", null)
+                        .WithMany()
+                        .HasForeignKey("EncounterId")
+                        .OnDelete(DeleteBehavior.NoAction);
+
+                    b.HasOne("Verita.Domain.Entities.Hospital", null)
+                        .WithMany()
+                        .HasForeignKey("HospitalId")
+                        .OnDelete(DeleteBehavior.NoAction)
+                        .IsRequired();
+
+                    b.HasOne("Verita.Domain.Entities.Payer", null)
+                        .WithMany()
+                        .HasForeignKey("PayerId")
+                        .OnDelete(DeleteBehavior.NoAction);
+                });
+
             modelBuilder.Entity("Verita.Domain.Entities.ConsumptionItem", b =>
                 {
                     b.HasOne("Verita.Domain.Entities.Encounter", null)
@@ -5912,6 +6758,34 @@ namespace Verita.Infrastructure.Data.Migrations
                         .OnDelete(DeleteBehavior.NoAction);
                 });
 
+            modelBuilder.Entity("Verita.Domain.Entities.NphiesClaimLine", b =>
+                {
+                    b.HasOne("Verita.Domain.Entities.Encounter", null)
+                        .WithMany()
+                        .HasForeignKey("EncounterId")
+                        .OnDelete(DeleteBehavior.NoAction);
+
+                    b.HasOne("Verita.Domain.Entities.Hospital", null)
+                        .WithMany()
+                        .HasForeignKey("HospitalId")
+                        .OnDelete(DeleteBehavior.NoAction)
+                        .IsRequired();
+
+                    b.HasOne("Verita.Domain.Entities.Payer", null)
+                        .WithMany()
+                        .HasForeignKey("PayerId")
+                        .OnDelete(DeleteBehavior.NoAction);
+                });
+
+            modelBuilder.Entity("Verita.Domain.Entities.NphiesPayment", b =>
+                {
+                    b.HasOne("Verita.Domain.Entities.Hospital", null)
+                        .WithMany()
+                        .HasForeignKey("HospitalId")
+                        .OnDelete(DeleteBehavior.NoAction)
+                        .IsRequired();
+                });
+
             modelBuilder.Entity("Verita.Domain.Entities.Package", b =>
                 {
                     b.HasOne("Verita.Domain.Entities.Hospital", null)
@@ -6284,6 +7158,25 @@ namespace Verita.Infrastructure.Data.Migrations
                         .HasForeignKey("ScenarioId")
                         .OnDelete(DeleteBehavior.Cascade)
                         .IsRequired();
+                });
+
+            modelBuilder.Entity("Verita.Domain.Entities.SettlementLine", b =>
+                {
+                    b.HasOne("Verita.Domain.Entities.Encounter", null)
+                        .WithMany()
+                        .HasForeignKey("EncounterId")
+                        .OnDelete(DeleteBehavior.NoAction);
+
+                    b.HasOne("Verita.Domain.Entities.Hospital", null)
+                        .WithMany()
+                        .HasForeignKey("HospitalId")
+                        .OnDelete(DeleteBehavior.NoAction)
+                        .IsRequired();
+
+                    b.HasOne("Verita.Domain.Entities.Payer", null)
+                        .WithMany()
+                        .HasForeignKey("PayerId")
+                        .OnDelete(DeleteBehavior.NoAction);
                 });
 
             modelBuilder.Entity("Verita.Domain.Entities.StaffTime", b =>

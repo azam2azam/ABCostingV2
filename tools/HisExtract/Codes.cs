@@ -37,6 +37,32 @@ public sealed class Codes(Settings s)
     public bool IsErAppointment(int appointmentNo) => _erAppointments.Contains(appointmentNo);
     private readonly Dictionary<int, int> _erAppointment = [];
     private readonly HashSet<int> _erAppointments = [];
+
+    /// <summary>MRNs written to 32_Patient.csv. An encounter whose patient is not among them is skipped.</summary>
+    public void AddPatient(string mrn) => _patients.Add(mrn);
+    public bool HasPatient(string mrn) => _patients.Contains(mrn);
+    /// <summary>
+    /// Encounters left out of 33_Encounter.csv because their patient is not in the pack (e.g. an in-window
+    /// invoice that points at an old appointment of another patient). Their services, revenue, refunds,
+    /// package items, consumption, staff time and transfers are left out too, so the import has no orphans.
+    /// </summary>
+    public void SkipEncounter(string encounterNo) { if (!_written.Contains(encounterNo)) _skipped.Add(encounterNo); }
+    public void WroteEncounter(string encounterNo) { _written.Add(encounterNo); _skipped.Remove(encounterNo); }
+    /// <summary>True when this row's encounter was skipped, so the row must not be written. Counted once per file and ref.</summary>
+    public bool Skip(string? encounterNo, string file, string sourceRef)
+    {
+        if (encounterNo is null || !_skipped.Contains(encounterNo)) return false;
+        _skippedRefs.Add($"{file}|{sourceRef}");
+        return true;
+    }
+    public IReadOnlyCollection<string> SkippedEncounters => _skipped;
+    /// <summary>Rows left out because their encounter was skipped, per file.</summary>
+    public IEnumerable<(string File, int Rows)> SkippedRows =>
+        _skippedRefs.GroupBy(k => k[..k.IndexOf('|')]).Select(g => (g.Key, g.Count())).OrderBy(x => x.Key, StringComparer.Ordinal);
+    private readonly HashSet<string> _skippedRefs = new(StringComparer.Ordinal);
+    private readonly HashSet<string> _patients = new(StringComparer.OrdinalIgnoreCase);
+    private readonly HashSet<string> _written = new(StringComparer.OrdinalIgnoreCase);
+    private readonly HashSet<string> _skipped = new(StringComparer.OrdinalIgnoreCase);
     public string Activity(string token) => $"{s.H}.ACT-{token}";
     public string Resource(string token) => $"{s.H}.RES-{token}";
 

@@ -288,6 +288,84 @@ public sealed class ApiTests : IClassFixture<WebApplicationFactory<Program>>
     }
 
     [Fact]
+    public async Task Import_stores_his_claim_settlement_and_nphies_lines_as_stored()
+    {
+        using var scope = _factory.Services.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<VeritaDbContext>();
+        var hub = scope.ServiceProvider.GetRequiredService<DataHubService>();
+        var user = Everywhere(await db.Users.FirstAsync(u => u.Email == "costing.manager@verita.health"));
+        var encounter = await db.Encounters.FirstAsync();
+        var hospital = await db.Hospitals.FirstAsync(h => h.Id == encounter.HospitalId);
+        var payer = await db.Payers.FirstAsync();
+        var tag = Guid.NewGuid().ToString("N")[..10];
+        string clm = $"CLM-T-{tag}", stl = $"STL-T-{tag}", nph = $"NPH-T-{tag}", npp = $"NPP-T-{tag}";
+        Dictionary<string, string> Linked(string sourceRef) => new()
+        {
+            ["hospitalCode"] = hospital.Code, ["encounterNo"] = encounter.EncounterNo, ["hisEncounterNo"] = encounter.EncounterNo,
+            ["patientMrn"] = "123", ["payerCode"] = payer.Code, ["sourceSystem"] = "VIDA-HIS", ["sourceRef"] = sourceRef,
+        };
+        try
+        {
+            var claim = Linked(clm);
+            foreach (var (k, v) in new Dictionary<string, string>
+            {
+                ["revenueRef"] = $"REV-1-{tag}-1", ["claimNo"] = "77", ["claimDate"] = "2026-10-05 10:15:00", ["invoiceTransactionType"] = "1",
+                ["invoiceNo"] = "5001", ["lineItemNo"] = "1", ["claimAmount"] = "115", ["taxAmount"] = "15", ["rejectedAmount"] = "0",
+                ["eClaimStatus"] = "3", ["nphiesClaimRefNum"] = "NPH-REF-1", ["nphiesAmountApproved"] = "100", ["invIsActive"] = "true", ["claimIsPostedToZatca"] = "false",
+            }) claim[k] = v;
+            var settlement = Linked(stl);
+            foreach (var (k, v) in new Dictionary<string, string>
+            {
+                ["revenueRef"] = $"REV-1-{tag}-1", ["settlementTransactionType"] = "1", ["settlementNo"] = "900", ["settlementDate"] = "2026-11-10 00:00:00",
+                ["invoiceTransactionType"] = "1", ["invoiceNo"] = "5001", ["lineItemNo"] = "1", ["claimedAmount"] = "115", ["paidAmount"] = "90.5",
+                ["rejectedAmount"] = "24.5", ["rejectionReasonId"] = "4", ["officialReceiptNo"] = "OR-1", ["erpInterfaceId"] = "9876543210123",
+            }) settlement[k] = v;
+            var nphies = Linked(nph);
+            foreach (var (k, v) in new Dictionary<string, string>
+            {
+                ["claimType"] = "1", ["invoiceNo"] = "5001", ["claimIdentifier"] = "CLAIM-ID-1", ["sequenceNo"] = "1", ["amountSubmitted"] = "115",
+                ["amountApproved"] = "90.5", ["isApproved"] = "false", ["reasonCode"] = "MN-1-1", ["rejectionRemarks"] = "Not medically necessary | Resubmit",
+            }) nphies[k] = v;
+            var results = await hub.ImportSetAsync([
+                (EntitySpecs.Find("ClaimLine")!, [claim]),
+                (EntitySpecs.Find("SettlementLine")!, [settlement]),
+                (EntitySpecs.Find("NphiesClaimLine")!, [nphies]),
+                (EntitySpecs.Find("NphiesPayment")!, [new()
+                {
+                    ["hospitalCode"] = hospital.Code, ["paymentReconIdentifier"] = "PR-1", ["lineItemNo"] = "1", ["claimRequestIdentifier"] = "CLAIM-ID-1",
+                    ["amount"] = "90.50", ["amountValue"] = "90.5", ["paymentDate"] = "2026-11-12 00:00:00", ["sourceSystem"] = "VIDA-HIS", ["sourceRef"] = npp,
+                }]),
+            ], user, dryRun: false, "TEST", default, hospital.Code);
+            Assert.All(results, r => Assert.Equal(0, r.Rejected));
+            var c = await db.ClaimLines.AsNoTracking().FirstAsync(r => r.SourceRef == clm);
+            Assert.Equal(encounter.Id, c.EncounterId);
+            Assert.Equal(payer.Id, c.PayerId);
+            Assert.Equal(115m, c.ClaimAmount);
+            Assert.Equal(100m, c.NphiesAmountApproved);
+            Assert.Equal(new DateTime(2026, 10, 5, 10, 15, 0), c.ClaimDate);
+            Assert.True(c.InvIsActive);
+            var s = await db.SettlementLines.AsNoTracking().FirstAsync(r => r.SourceRef == stl);
+            Assert.Equal(c.RevenueRef, s.RevenueRef);
+            Assert.Equal(90.5m, s.PaidAmount);
+            Assert.Equal(24.5m, s.RejectedAmount);
+            Assert.Equal("9876543210123", s.ErpInterfaceId);
+            var n = await db.NphiesClaimLines.AsNoTracking().FirstAsync(r => r.SourceRef == nph);
+            Assert.False(n.IsApproved);
+            Assert.Equal("MN-1-1", n.ReasonCode);
+            var p = await db.NphiesPayments.AsNoTracking().FirstAsync(r => r.SourceRef == npp);
+            Assert.Equal(n.ClaimIdentifier, p.ClaimRequestIdentifier);
+            Assert.Equal(90.5m, p.AmountValue);
+        }
+        finally
+        {
+            await db.ClaimLines.Where(r => r.SourceRef == clm).ExecuteDeleteAsync();
+            await db.SettlementLines.Where(r => r.SourceRef == stl).ExecuteDeleteAsync();
+            await db.NphiesClaimLines.Where(r => r.SourceRef == nph).ExecuteDeleteAsync();
+            await db.NphiesPayments.Where(r => r.SourceRef == npp).ExecuteDeleteAsync();
+        }
+    }
+
+    [Fact]
     public async Task CostingVersions_BelongToOneHospital()
     {
         using var scope = _factory.Services.CreateScope();

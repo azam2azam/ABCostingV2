@@ -119,6 +119,14 @@ public static class EntitySpecs
             [Hosp, R("encounterNo", "EncounterId", typeof(Encounter), "EncounterNo", opt: true)]),
         new("StaffTime", typeof(StaffTime), "Monthly data", "Measured HIS staff clocks and named OR/ER/OP nurses/doctors (plus raw start/end strings). Ward nursing standards are not invented here (see EncounterTransfer).", ["HospitalId", "SourceRef"],
             [Hosp, R("encounterNo", "EncounterId", typeof(Encounter), "EncounterNo", opt: true), R("providerCode", "ProviderId", typeof(Provider), opt: true)]),
+        new("ClaimLine", typeof(ClaimLine), "Monthly data", "HIS claim line (HIS_ClaimProcedure) with its claim invoice, NPHIES submission / response and claim header, every column as stored. revenueRef is the RevenueTransaction sourceRef. For evaluating claims; no calculation reads it.", ["HospitalId", "SourceRef"],
+            [Hosp, R("encounterNo", "EncounterId", typeof(Encounter), "EncounterNo", opt: true), R("payerCode", "PayerId", typeof(Payer), opt: true)]),
+        new("SettlementLine", typeof(SettlementLine), "Monthly data", "HIS settlement line (HIS_SettlementProcedure): claimed, paid and rejected per invoice line with rejection reason, settlement invoice and receipt header, every column as stored. revenueRef is the RevenueTransaction sourceRef.", ["HospitalId", "SourceRef"],
+            [Hosp, R("encounterNo", "EncounterId", typeof(Encounter), "EncounterNo", opt: true), R("payerCode", "PayerId", typeof(Payer), opt: true)]),
+        new("NphiesClaimLine", typeof(NphiesClaimLine), "Monthly data", "NPHIES adjudication per procedure (HIS_NPHIESClaimProcedure_Log): submitted, approved, reason code and rejection remarks, as stored.", ["HospitalId", "SourceRef"],
+            [Hosp, R("encounterNo", "EncounterId", typeof(Encounter), "EncounterNo", opt: true), R("payerCode", "PayerId", typeof(Payer), opt: true)]),
+        new("NphiesPayment", typeof(NphiesPayment), "Monthly data", "NPHIES payment reconciliation line (HIS_NPHIESPaymentReconciliation_Detail + header) naming a claim of the pack, as stored.", ["HospitalId", "SourceRef"],
+            [Hosp]),
 
         // ── Access ───────────────────────────────────────────────────────────────
         new("User", typeof(User), "Access", "A person who signs in. hospitalScope is a comma-separated list of hospital codes, or *.", ["Email"], [],

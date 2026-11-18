@@ -975,6 +975,8 @@ export class DataImport {
     try {
       await firstValueFrom(this.api.post<ImportFileDto>(`data/files/${f.id}/import`, { hospital: hospital || null, dryRun: false }));
       this.files.reload();
+      // Show the file's detail view, where its progress is tracked while it runs.
+      void this.open(f.id, true);
     } catch (e) {
       this.error.set(toApiError(e).message);
     } finally {
