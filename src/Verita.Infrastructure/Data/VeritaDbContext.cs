@@ -47,6 +47,7 @@ public sealed class VeritaDbContext(DbContextOptions<VeritaDbContext> options) :
     public DbSet<ProcedureMargin> ProcedureMargins => Set<ProcedureMargin>();
     public DbSet<EncounterOverhead> EncounterOverheads => Set<EncounterOverhead>();
     public DbSet<Package> Packages => Set<Package>();
+    public DbSet<MedicinePrice> MedicinePrices => Set<MedicinePrice>();
     public DbSet<PackageComponent> PackageComponents => Set<PackageComponent>();
     public DbSet<Drg> Drgs => Set<Drg>();
     // Clinical
@@ -84,6 +85,9 @@ public sealed class VeritaDbContext(DbContextOptions<VeritaDbContext> options) :
     public DbSet<RunDimensionCost> RunDimensionCosts => Set<RunDimensionCost>();
     public DbSet<RunHisInvoicing> RunHisInvoicings => Set<RunHisInvoicing>();
     public DbSet<PackageCost> PackageCosts => Set<PackageCost>();
+    public DbSet<RunPackageBilling> RunPackageBillings => Set<RunPackageBilling>();
+    public DbSet<RunPackageDoctor> RunPackageDoctors => Set<RunPackageDoctor>();
+    public DbSet<RunProcedureDoctor> RunProcedureDoctors => Set<RunProcedureDoctor>();
     public DbSet<DrgCostSummary> DrgCostSummaries => Set<DrgCostSummary>();
     public DbSet<CostComponent> CostComponents => Set<CostComponent>();
     public DbSet<ResidualBucket> ResidualBuckets => Set<ResidualBucket>();
@@ -200,6 +204,10 @@ public sealed class VeritaDbContext(DbContextOptions<VeritaDbContext> options) :
         mb.Entity<RunDimensionCost>().Property(x => x.Dimension).HasMaxLength(32);
         mb.Entity<RunDimensionCost>().HasIndex(x => new { x.RunId, x.Dimension });
         mb.Entity<RunHisInvoicing>().HasIndex(x => new { x.RunId, x.InvoiceType }).IsUnique();
+        mb.Entity<RunPackageBilling>().HasIndex(x => new { x.RunId, x.PackageId }).IsUnique();
+        mb.Entity<RunPackageDoctor>().HasIndex(x => new { x.RunId, x.PackageId });
+        mb.Entity<RunPackageDoctor>().HasIndex(x => new { x.RunId, x.ProviderId });
+        mb.Entity<RunProcedureDoctor>().HasIndex(x => new { x.RunId, x.ProviderId });
         mb.Entity<EncounterCost>().HasIndex(x => new { x.RunId, x.EncounterId }).IsUnique().IsClustered();
         mb.Entity<GLPosting>().HasKey(x => x.Id).IsClustered(false);
         // Clustered, so the index covers Amount, GLAccountId and CostCenterId without an INCLUDE.
@@ -265,6 +273,7 @@ public sealed class VeritaDbContext(DbContextOptions<VeritaDbContext> options) :
         Fk<ProcedureResourceLine, CostingDefinition>(x => x.DefinitionId);
         Fk<ProcedureResourceLine, Resource>(x => x.ResourceId);
         Fk<Package, Hospital>(x => x.HospitalId);
+        Fk<MedicinePrice, Hospital>(x => x.HospitalId);
         Fk<PackageComponent, Package>(x => x.PackageId);
         Fk<PackageComponent, Procedure>(x => x.ProcedureId);
         Fk<Patient, Hospital>(x => x.HospitalId);
@@ -334,7 +343,7 @@ public sealed class VeritaDbContext(DbContextOptions<VeritaDbContext> options) :
         void RunFk<T>() where T : class =>
             mb.Entity<T>().HasOne<CalculationRun>().WithMany().HasForeignKey("RunId").OnDelete(DeleteBehavior.Cascade);
         RunFk<RunStep>(); RunFk<ResourceUnitCost>(); RunFk<CostPoolBalance>(); RunFk<CostCenterBalance>(); RunFk<AllocationResult>();
-        RunFk<ActivityCost>(); RunFk<ProcedureCost>(); RunFk<EncounterCost>(); RunFk<RunDimensionCost>(); RunFk<RunHisInvoicing>(); RunFk<PackageCost>(); RunFk<DrgCostSummary>();
+        RunFk<ActivityCost>(); RunFk<ProcedureCost>(); RunFk<EncounterCost>(); RunFk<RunDimensionCost>(); RunFk<RunHisInvoicing>(); RunFk<RunPackageBilling>(); RunFk<RunPackageDoctor>(); RunFk<RunProcedureDoctor>(); RunFk<PackageCost>(); RunFk<DrgCostSummary>();
         RunFk<CostComponent>(); RunFk<ResidualBucket>(); RunFk<Variance>(); RunFk<Reconciliation>();
         mb.Entity<DataQualityIssue>().HasOne<CalculationRun>().WithMany().HasForeignKey(x => x.RunId).OnDelete(DeleteBehavior.Cascade);
         mb.Entity<VarianceComponent>().HasOne<Variance>().WithMany().HasForeignKey(x => x.VarianceId).OnDelete(DeleteBehavior.Cascade);
@@ -360,7 +369,7 @@ public sealed class VeritaDbContext(DbContextOptions<VeritaDbContext> options) :
         Unique<CostCenter>(x => new { x.HospitalId, x.Code }); Unique<GLAccount>(x => x.Code); mb.Entity<Period>().HasIndex(x => new { x.HospitalId, x.Code }).IsUnique(); Unique<CostPool>(x => x.Code);
         Unique<CostDriver>(x => x.Code); Unique<Resource>(x => x.Code); Unique<Provider>(x => x.Code); Unique<Activity>(x => x.Code);
         Unique<ProviderClinic>(x => new { x.ProviderId, x.HisClinicId });
-        Unique<Procedure>(x => new { x.HospitalId, x.Code }); Unique<Package>(x => new { x.HospitalId, x.Code }); Unique<Drg>(x => x.Code); Unique<Payer>(x => x.Code);
+        Unique<Procedure>(x => new { x.HospitalId, x.Code }); Unique<Package>(x => new { x.HospitalId, x.Code }); Unique<MedicinePrice>(x => new { x.HospitalId, x.MedicineCode }); Unique<Drg>(x => x.Code); Unique<Payer>(x => x.Code);
         Unique<Patient>(x => new { x.HospitalId, x.Mrn }); Unique<Encounter>(x => new { x.HospitalId, x.EncounterNo }); Unique<AllocationRule>(x => x.Code);
         Unique<CostingVersion>(x => new { x.HospitalId, x.Code }); Unique<CalculationRun>(x => x.Code); Unique<Scenario>(x => x.Code); Unique<User>(x => x.Email);
         Unique<ActivityResource>(x => new { x.ActivityId, x.ResourceId });

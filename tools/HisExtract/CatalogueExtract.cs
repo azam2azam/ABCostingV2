@@ -1,3 +1,5 @@
+using Microsoft.Data.SqlClient;
+
 namespace HisExtract;
 
 public static class CatalogueExtract
@@ -17,6 +19,7 @@ public static class CatalogueExtract
         await ProviderAsync(db, s, c, pack);
         await ProcedureAsync(db, s, c, pack);
         await ProcedureRateAsync(db, s, c, pack);
+        await MedicinePriceAsync(db, s, c, pack);
         await PackageAsync(db, s, c, pack);
         await DrgExtract.CatalogueAsync(db, s, pack);
         await PayerAsync(db, s, c, pack);
@@ -363,6 +366,67 @@ public static class CatalogueExtract
             var price = pub != 0 ? pub : HisConnection.F(r, "Price");
             csv.Write(c.Procedure(pid), c.Hospital, Maps.Money(Maps.Round4(price)), "2000-01-01");
         });
+    }
+
+    /// <summary>
+    /// Standard medicine prices from the pharmacy master, by HIS medicine code (the code medicine consumption carries).
+    /// Read from {PharmacyDb}.dbo.PHR_Medicine under the pharmacy project, as HIS's own procedures do; without access to
+    /// the pharmacy database, from the HIS database's own PHR_Medicine. Prices are as stored (per dispensing unit, before VAT).
+    /// </summary>
+    private static async Task MedicinePriceAsync(HisConnection db, Settings s, Codes c, CsvZipWriter pack)
+    {
+        using var csv = pack.Create("28_MedicinePrice.csv", "hospitalCode", "medicineCode", "name", "genericName", "strength",
+            "packQuantity", "quantityUnit", "stdSellingPrice", "stdPurchasePrice", "vat", "hisStatus", "source");
+        static string Num(SqlDataReader r, string col) =>
+            r.IsDBNull(r.GetOrdinal(col)) ? "" : Maps.Money(Maps.Round4(HisConnection.F(r, col)));
+        var n = 0;
+        void Row(SqlDataReader r)
+        {
+            var code = HisConnection.S(r, "MedicineCode").Trim();
+            if (code.Length == 0) return;
+            var name = HisConnection.S(r, "Description");
+            if (name.Length == 0) name = HisConnection.S(r, "Alias");
+            csv.Write(c.Hospital, code, name, HisConnection.S(r, "GenericName"), HisConnection.S(r, "Strength"),
+                Num(r, "Quantity"), HisConnection.S(r, "QuantityUnit"), Num(r, "StdSellingPrice"), Num(r, "StdPurchasePrice"),
+                Num(r, "VAT"), HisConnection.S(r, "Status"), "PHR_Medicine");
+            n++;
+        }
+        const string columns = "m.MedicineCode, m.Description, m.Alias, m.GenericName, m.Strength, m.Quantity, m.QuantityUnit, m.StdSellingPrice, m.StdPurchasePrice, m.VAT, m.Status";
+        var phr = s.PharmacyDb;
+        if (!string.IsNullOrWhiteSpace(phr))
+        {
+            try
+            {
+                await db.QueryAsync($"""
+                    WITH p AS (SELECT dbo.fn_Get_PharmaKonProjectID(@SetupId, @ProjectId) AS ProjectID)
+                    SELECT {columns}
+                    FROM [{phr}].dbo.PHR_Medicine m WITH (NOLOCK)
+                    CROSS JOIN p
+                    WHERE m.SetupID = @SetupId AND m.ProjectID = p.ProjectID
+                    """, s.BindTenant, Row);
+                pack.Note($"MedicinePrice: {n} medicines from {phr}.dbo.PHR_Medicine");
+                return;
+            }
+            catch (SqlException ex)
+            {
+                pack.Warn($"Medicine prices from {phr}.dbo.PHR_Medicine; trying the HIS database's PHR_Medicine", ex);
+                n = 0;
+            }
+        }
+        try
+        {
+            await db.QueryAsync($"""
+                SELECT {columns}
+                FROM dbo.PHR_Medicine m WITH (NOLOCK)
+                WHERE m.SetupID = @SetupId AND m.ProjectID = @ProjectId
+                """, s.BindTenant, Row);
+            pack.Note($"MedicinePrice: {n} medicines from the HIS database's PHR_Medicine");
+        }
+        catch (SqlException ex)
+        {
+            // Optional: without prices, medicine that was not billed is left unvalued.
+            pack.Warn("Medicine prices from PHR_Medicine", ex);
+        }
     }
 
     private static async Task PackageAsync(HisConnection db, Settings s, Codes c, CsvZipWriter pack)

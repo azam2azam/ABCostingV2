@@ -132,11 +132,12 @@ public sealed partial class ReadQueries
                                    join e in periodEncounters on t.EncounterId equals e.Id
                                    group t by e.ProviderId!.Value into g
                                    select new { g.Key, Minutes = g.Sum(x => x.Minutes) }).ToDictionaryAsync(x => x.Key, x => x.Minutes, ct);
+        // Materials billed: the invoice lines consumption points to, each once, including VAT (see MaterialLines).
         var materialsByDoctor = showRevenue
-            ? await (from c in db.ConsumptionItems.AsNoTracking()
-                     join e in periodEncounters on c.EncounterId equals e.Id
-                     group c by e.ProviderId!.Value into g
-                     select new { g.Key, Billed = g.Sum(x => x.BilledAmount ?? 0m) }).ToDictionaryAsync(x => x.Key, x => x.Billed, ct)
+            ? await (from m in MaterialLines(s)
+                     join e in periodEncounters on m.EncounterId equals e.Id
+                     group m by e.ProviderId!.Value into g
+                     select new { g.Key, Billed = g.Sum(x => x.Amount) }).ToDictionaryAsync(x => x.Key, x => x.Billed, ct)
             : [];
         return providers.Select(x =>
         {
@@ -158,7 +159,11 @@ public sealed partial class ReadQueries
     }
 
     public sealed record DoctorDepartmentRow(Guid Id, string Code, string Name, string? HisClinicId, bool IsHome, bool IsDefault, int Cases);
-    public sealed record DoctorDetail(DoctorRow Doctor, DoctorDepartmentRow[] Departments, DoctorWorkRow[] Packages, DoctorWorkRow[] Procedures);
+    /// <param name="PackageWork">The doctor's packages from the run's stored rows, as the package page's doctor table adds them up.</param>
+    /// <param name="DepartmentWork">The same work grouped by the encounter's department.</param>
+    public sealed record DoctorDetail(DoctorRow Doctor, DoctorDepartmentRow[] Departments, DoctorWorkRow[] Packages, DoctorWorkRow[] Procedures,
+        PackageWorkRow[]? PackageWork = null, PackageWorkRow[]? DepartmentWork = null, PackageWorkRow[]? ProcedureWork = null,
+        PackageWorkRow[]? DepartmentWorkAll = null);
 
     /// <summary>One doctor: their figures for the run and the departments (home and HIS clinics) they work in.</summary>
     public async Task<DoctorDetail> DoctorAsync(ScopedRun s, Principal p, Guid id, CancellationToken ct)
@@ -184,7 +189,97 @@ public sealed partial class ReadQueries
                 d == row.DepartmentId, c.Any(x => x.IsDefault), cases.GetValueOrDefault(d));
         }).OrderByDescending(x => x.IsHome).ThenByDescending(x => x.Cases).ThenBy(x => x.Name).ToArray();
         var (packages, procedures) = await DoctorWorkAsync(s, p, id, ct);
-        return new DoctorDetail(row, rows, packages, procedures);
+        var (packageWork, departmentWork) = await DoctorPackageWorkAsync(s, p, id, depts, ct);
+        var procedureWork = await DoctorProcedureWorkAsync(s, p, id, depts, ct);
+        var departmentWorkAll = await DepartmentWorkAllAsync(packageWork, procedureWork, depts, ct);
+        return new DoctorDetail(row, rows, packages, procedures, packageWork, departmentWork, procedureWork, departmentWorkAll);
+    }
+
+    /// <summary>
+    /// Package and non-package work together, by the encounter's department: each encounter's package and procedure figures
+    /// added up, so a department row is everything billed under the doctor on its encounters.
+    /// </summary>
+    private async Task<PackageWorkRow[]> DepartmentWorkAllAsync(PackageWorkRow[] packageWork, PackageWorkRow[] procedureWork,
+        Dictionary<Guid, Department> depts, CancellationToken ct)
+    {
+        var units = packageWork.Concat(procedureWork).SelectMany(w => w.EncounterRows).ToList();
+        if (units.Count == 0) return [];
+        var encIds = units.Select(u => u.EncounterId).Distinct().ToList();
+        var deptOf = await db.Encounters.AsNoTracking().Where(e => encIds.Contains(e.Id)).ToDictionaryAsync(e => e.Id, e => e.DepartmentId, ct);
+        static PackageDoctorEncounterRow Sum(Guid id, string no, IReadOnlyCollection<PackageDoctorEncounterRow> g) =>
+            new(id, no, g.Sum(x => x.Performed), g.Sum(x => x.FeeBilled), g.Sum(x => x.ConsumablesBilled), g.Sum(x => x.ConsumablesCovered),
+                g.Sum(x => x.MedicineBilled), g.Sum(x => x.MedicineCovered), g.Sum(x => x.Claimed), g.Sum(x => x.ConsumablesClaimed), g.Sum(x => x.MedicineClaimed),
+                g.Sum(x => x.Settled), g.Sum(x => x.RejectedClaims), g.Sum(x => x.WardDays),
+                g.Any(x => x.ClaimsReceived != null) ? g.Sum(x => x.ClaimsReceived ?? 0m) : null);
+        return units.GroupBy(u => deptOf.GetValueOrDefault(u.EncounterId)).Select(g =>
+        {
+            var encounters = g.GroupBy(u => u.EncounterId).Select(e => Sum(e.Key, e.First().EncounterNo, e.ToList())).OrderBy(e => e.EncounterNo).ToArray();
+            var t = Sum(Guid.Empty, "", encounters);
+            var (id, code, name) = depts.TryGetValue(g.Key, out var d) ? ((Guid?)d.Id, d.Code, d.Name) : (null, "", "Not assigned");
+            return new PackageWorkRow(id, code, name, encounters.Length, t.Performed, t.FeeBilled, t.ConsumablesBilled, t.ConsumablesCovered,
+                t.MedicineBilled, t.MedicineCovered, t.Claimed, t.ConsumablesClaimed, t.MedicineClaimed, t.ClaimsReceived, t.Settled, t.RejectedClaims,
+                t.WardDays, encounters);
+        }).OrderByDescending(x => x.FeeBilled).ThenBy(x => x.Name).ToArray();
+    }
+
+    /// <summary>
+    /// The doctor's procedures not billed as or under a package, from the run's stored rows (see ProcedureBillingSummary), one
+    /// row per procedure with its encounters; Consumables and Medicine are what consumption ties to the lines. No stay.
+    /// </summary>
+    private async Task<PackageWorkRow[]> DoctorProcedureWorkAsync(ScopedRun s, Principal p, Guid doctorId, Dictionary<Guid, Department> depts, CancellationToken ct)
+    {
+        if (s.Run.Id == Guid.Empty) return [];
+        var rows = await db.RunProcedureDoctors.AsNoTracking().Where(x => x.RunId == s.Run.Id && x.ProviderId == doctorId).ToListAsync(ct);
+        if (rows.Count == 0) return [];
+        var encIds = rows.Select(r => r.EncounterId).Distinct().ToList();
+        var encs = await db.Encounters.AsNoTracking().Where(e => encIds.Contains(e.Id)).Select(e => new { e.Id, e.EncounterNo, e.DepartmentId }).ToDictionaryAsync(e => e.Id, ct);
+        if (!p.AllDepartments)
+            rows = rows.Where(r => encs.TryGetValue(r.EncounterId, out var e) && depts.TryGetValue(e.DepartmentId, out var d) && p.HasDepartment(d.Code)).ToList();
+        var money = p.Can("revenue.view");
+        var procIds = rows.Select(r => r.ProcedureId).Distinct().ToList();
+        var procs = await db.Procedures.AsNoTracking().Where(x => procIds.Contains(x.Id)).ToDictionaryAsync(x => x.Id, ct);
+        PackageDoctorEncounterRow Enc(Guid encounter, IReadOnlyCollection<RunProcedureDoctor> g) =>
+            new(encounter, encs.GetValueOrDefault(encounter)?.EncounterNo ?? "", (int)Math.Round(g.Sum(r => r.Performed)),
+                money ? g.Sum(r => r.FeeBilled) : 0, g.Sum(r => r.Consumables), 0, g.Sum(r => r.Medicine), 0,
+                money ? g.Sum(r => r.Claimed) : 0, 0, 0, money ? g.Sum(r => r.Settled) : 0, money ? g.Sum(r => r.Rejected) : 0, 0,
+                money && g.Any(r => r.ClaimsReceived != null) ? g.Sum(r => r.ClaimsReceived ?? 0m) : null);
+        return rows.GroupBy(r => r.ProcedureId).Select(g =>
+        {
+            var list = g.ToList();
+            var proc = procs.GetValueOrDefault(g.Key);
+            return new PackageWorkRow(g.Key, proc?.Code ?? "", proc?.Name ?? "", list.Select(r => r.EncounterId).Distinct().Count(),
+                (int)Math.Round(list.Sum(r => r.Performed)), money ? list.Sum(r => r.FeeBilled) : 0, list.Sum(r => r.Consumables), 0,
+                list.Sum(r => r.Medicine), 0, money ? list.Sum(r => r.Claimed) : 0, 0, 0,
+                money && list.Any(r => r.ClaimsReceived != null) ? list.Sum(r => r.ClaimsReceived ?? 0m) : null,
+                money ? list.Sum(r => r.Settled) : 0, money ? list.Sum(r => r.Rejected) : 0, 0,
+                list.GroupBy(r => r.EncounterId).Select(e => Enc(e.Key, e.ToList())).OrderBy(e => e.EncounterNo).ToArray());
+        }).OrderByDescending(x => x.Performed).ThenBy(x => x.Name).ToArray();
+    }
+
+    /// <summary>The doctor's stored package rows in the run (see PackageBillingSummary.DoctorRowsAsync), by package and by encounter department.</summary>
+    private async Task<(PackageWorkRow[] Packages, PackageWorkRow[] Departments)> DoctorPackageWorkAsync(ScopedRun s, Principal p, Guid doctorId,
+        Dictionary<Guid, Department> depts, CancellationToken ct)
+    {
+        if (s.Run.Id == Guid.Empty) return ([], []);
+        var rows = await db.RunPackageDoctors.AsNoTracking().Where(x => x.RunId == s.Run.Id && x.ProviderId == doctorId).ToListAsync(ct);
+        if (rows.Count == 0) return ([], []);
+        var encIds = rows.Select(r => r.EncounterId).Distinct().ToList();
+        var encs = await db.Encounters.AsNoTracking().Where(e => encIds.Contains(e.Id)).Select(e => new { e.Id, e.EncounterNo, e.DepartmentId }).ToDictionaryAsync(e => e.Id, ct);
+        if (!p.AllDepartments)
+            rows = rows.Where(r => encs.TryGetValue(r.EncounterId, out var e) && depts.TryGetValue(e.DepartmentId, out var d) && p.HasDepartment(d.Code)).ToList();
+        var encNo = encs.ToDictionary(e => e.Key, e => e.Value.EncounterNo);
+        var money = p.Can("revenue.view");
+        var pkgIds = rows.Select(r => r.PackageId).Distinct().ToList();
+        var packages = await db.Packages.AsNoTracking().Where(k => pkgIds.Contains(k.Id)).ToDictionaryAsync(k => k.Id, ct);
+        var byPackage = rows.GroupBy(r => r.PackageId)
+            .Select(g => WorkRowOf(g.Key, packages.GetValueOrDefault(g.Key)?.Code ?? "", packages.GetValueOrDefault(g.Key)?.Name ?? "", g.ToList(), encNo, money))
+            .OrderByDescending(x => x.Performed).ThenBy(x => x.Name).ToArray();
+        var byDepartment = rows.GroupBy(r => encs.TryGetValue(r.EncounterId, out var e) ? e.DepartmentId : Guid.Empty)
+            .Select(g => depts.TryGetValue(g.Key, out var d)
+                ? WorkRowOf(d.Id, d.Code, d.Name, g.ToList(), encNo, money)
+                : WorkRowOf(null, "", "Not assigned", g.ToList(), encNo, money))
+            .OrderByDescending(x => x.Performed).ThenBy(x => x.Name).ToArray();
+        return (byPackage, byDepartment);
     }
 
     // ═══ Cost centres ════════════════════════════════════════════════════════════════

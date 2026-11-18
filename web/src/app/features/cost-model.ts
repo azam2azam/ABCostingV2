@@ -106,7 +106,25 @@ interface DoctorDetailDto {
   departments: { id: string; code: string; name: string; hisClinicId: string | null; isHome: boolean; isDefault: boolean; cases: number }[];
   packages: DoctorWork[];
   procedures: DoctorWork[];
+  packageWork?: PackageWork[] | null;
+  departmentWork?: PackageWork[] | null;
+  procedureWork?: PackageWork[] | null;
+  departmentWorkAll?: PackageWork[] | null;
 }
+
+type Amount = number | string;
+/** One encounter of a package-work row, with that encounter's own figures. */
+interface WorkEncounter {
+  encounterId: string; encounterNo: string; performed: number; feeBilled: Amount; consumablesBilled: Amount; consumablesCovered: Amount;
+  medicineBilled: Amount; medicineCovered: Amount; claimed: Amount; consumablesClaimed: Amount; medicineClaimed: Amount;
+  settled: Amount; rejectedClaims: Amount; wardDays: Amount; claimsReceived: Amount | null;
+}
+/** The doctor's package work by package or by department (the run's stored rows), as the package page's doctor table shows it. */
+interface PackageWork extends Omit<WorkEncounter, 'encounterId' | 'encounterNo'> {
+  id: string | null; code: string; name: string; encounters: number; encounterRows: WorkEncounter[];
+}
+/** A work row, or one of its encounters shown under it. */
+type WorkTableRow = PackageWork & { kind: 'group' | 'encounter'; encounterId?: string; groupKey: string };
 
 interface DoctorWork {
   id: string; code: string; name: string; category: string; encounters: number; quantity: number | string;
@@ -162,33 +180,31 @@ type DoctorWorkRow = DoctorDetailDto['packages'][number];
     <v-state [loading]="res.isLoading()" [error]="res.error()">
       @if (res.value(); as r) {
         <v-page [title]="r.data.doctor.name" [purpose]="purpose(r.data.doctor)">
+          <label class="check" style="display:inline-flex;gap:6px;align-items:center;margin:0 0 10px">
+            <input type="checkbox" [checked]="includeAll()" (change)="includeAll.set($any($event.target).checked)" /> Include non-package items
+          </label>
           <div class="grid tiles">
-            <v-tile label="Cases" [value]="r.data.doctor.cases" unit="" />
-            @if (canRevenue()) { <v-tile label="Revenue" [value]="r.data.doctor.revenue" /> }
-            <v-tile label="Cost" [value]="r.data.doctor.cost" />
-            @if (canRevenue()) {
-              <v-tile label="Margin" [value]="margin(r.data.doctor)" direction="higher-better" />
-              <v-tile label="Margin %" [value]="marginPct(r.data.doctor)" unit="%" direction="higher-better" />
-            }
-            <v-tile label="Departments" [value]="r.data.departments.length" unit="" />
+            <v-tile label="Cases" [value]="casesTile()" unit="" />
+            <v-tile label="Amount billed" [value]="billedTile()" />
+            <v-tile label="Claims Received" [value]="claimsReceivedTile()" />
           </div>
           <section class="card" style="margin-top:14px">
             <h2>Departments</h2>
-            <v-table [rows]="r.data.departments" [columns]="deptCols" sortBy="cases" caption="Departments this doctor works in"
-              empty="This doctor is not linked to any department." />
-          </section>
-          <section class="card">
-            <h2>Packages performed</h2>
-            <p class="muted">Billed package lines in {{ r.meta.period }} where this doctor is the line's doctor.</p>
-            <v-table paged [rows]="r.data.packages" [columns]="workCols('packages')" [total]="workTotal(r.data.packages)" caption="Packages performed"
+            <v-table [rows]="deptRows()" [columns]="deptWorkCols" [total]="workSum(includeAll() ? r.data.departmentWorkAll : r.data.departmentWork)" caption="Departments"
               empty="No packages billed under this doctor in this period." />
           </section>
           <section class="card">
+            <h2>Packages performed</h2>
+            <v-table [rows]="packageRows()" [columns]="packageWorkCols" [total]="workSum(r.data.packageWork)" caption="Packages performed"
+              empty="No packages billed under this doctor in this period." />
+          </section>
+          @if (includeAll()) {
+          <section class="card">
             <h2>Procedures performed (not packaged)</h2>
-            <p class="muted">Billed procedure lines in {{ r.meta.period }} where this doctor is the line's doctor, excluding package lines.</p>
-            <v-table paged [rows]="r.data.procedures" [columns]="workCols('procedures')" [total]="workTotal(r.data.procedures)" caption="Procedures performed (not packaged)"
+            <v-table paged [rows]="procedureRows()" [columns]="procedureWorkCols" [total]="workSum(r.data.procedureWork)" caption="Procedures performed (not packaged)"
               empty="No procedures billed under this doctor in this period." />
           </section>
+          }
         </v-page>
       }
     </v-state>
@@ -199,6 +215,90 @@ export class DoctorDetail {
   private auth = inject(Auth);
   res = catalogueResource<DoctorDetailDto>(() => `doctors/${this.id()}`);
   canRevenue = computed(() => this.auth.can('revenue.view'));
+  /** Adds the doctor's non-package procedures to the tiles and the Departments list, and shows the procedures list. */
+  includeAll = signal(false);
+  /**
+   * The Performed totals of the lists: package cases (one admission can bill several packages), plus, with non-package
+   * items, the procedures performed (not packaged).
+   */
+  casesTile = computed(() => {
+    const d = this.res.value()?.data;
+    const sum = (rows: PackageWork[] | null | undefined) => (rows ?? []).reduce((t, r) => t + Number(r.performed), 0);
+    return sum(d?.packageWork) + (this.includeAll() ? sum(d?.procedureWork) : 0);
+  });
+  /**
+   * Package lines billed plus consumables and medicine billed, as on the package page's Amount billed tile; with non-package
+   * items, plus what the doctor's other procedure lines billed.
+   */
+  billedTile = computed(() => {
+    const d = this.res.value()?.data;
+    const pkgs = d?.packageWork ?? [], procs = this.includeAll() ? d?.procedureWork ?? [] : [];
+    if (!pkgs.length && !procs.length) return null;
+    return pkgs.reduce((t, r) => t + Number(r.feeBilled) + Number(r.consumablesBilled) + Number(r.medicineBilled), 0)
+      + procs.reduce((t, r) => t + Number(r.feeBilled), 0);
+  });
+  /** Claims on invoices HIS put on a claim (IsClaimed); blank until the facts carry the flag. */
+  claimsReceivedTile = computed(() => {
+    const d = this.res.value()?.data;
+    const rows = [...(d?.packageWork ?? []), ...(this.includeAll() ? d?.procedureWork ?? [] : [])];
+    if (!rows.length || rows.every(r => r.claimsReceived == null)) return null;
+    return rows.reduce((t, r) => t + Number(r.claimsReceived ?? 0), 0);
+  });
+  /** Rows whose encounters are shown under them, per table. */
+  openRows = signal<ReadonlySet<string>>(new Set());
+  private toggleRow(r: WorkTableRow): void {
+    this.openRows.update(open => { const next = new Set(open); if (next.has(r.groupKey)) next.delete(r.groupKey); else next.add(r.groupKey); return next; });
+  }
+  private flatten(rows: PackageWork[] | null | undefined, table: string): WorkTableRow[] {
+    const open = this.openRows();
+    return (rows ?? []).flatMap(g => {
+      const groupKey = `${table}:${g.id ?? 'none'}`;
+      const row: WorkTableRow = { ...g, kind: 'group', groupKey };
+      if (!open.has(groupKey)) return [row];
+      return [row, ...g.encounterRows.map(e => ({ ...g, ...e, kind: 'encounter' as const, groupKey, name: e.encounterNo, encounters: 1, performed: 0 }))];
+    });
+  }
+  deptRows = computed(() => {
+    const d = this.res.value()?.data;
+    return this.flatten(this.includeAll() ? d?.departmentWorkAll : d?.departmentWork, 'dept');
+  });
+  packageRows = computed(() => this.flatten(this.res.value()?.data.packageWork, 'pkg'));
+  procedureRows = computed(() => this.flatten(this.res.value()?.data.procedureWork, 'proc'));
+  /** Totals of the group rows (encounter rows are not added again). */
+  workSum(rows: PackageWork[] | null | undefined): Record<string, number> | null {
+    if (!rows?.length) return null;
+    const sum = (f: (r: PackageWork) => Amount | null) => rows.reduce((t, r) => t + Number(f(r) ?? 0), 0);
+    return {
+      performed: sum(r => r.performed), feeBilled: sum(r => r.feeBilled), consumablesBilled: sum(r => r.consumablesBilled), consumablesCovered: sum(r => r.consumablesCovered),
+      medicineBilled: sum(r => r.medicineBilled), medicineCovered: sum(r => r.medicineCovered), wardDays: sum(r => r.wardDays), encounters: sum(r => r.encounters),
+      claimed: sum(r => r.claimed), consumablesClaimed: sum(r => r.consumablesClaimed), medicineClaimed: sum(r => r.medicineClaimed), settled: sum(r => r.settled),
+    };
+  }
+  /** The package page's doctor table columns, with the group (department or package) in the first column. */
+  private workTableCols(label: string, link: (r: WorkTableRow) => string | null): Col<WorkTableRow>[] {
+    return [
+      { key: 'toggle', label: '', type: 'button', sortable: false, icon: () => 'chevron',
+        button: r => r.kind === 'group' && r.encounterRows.length ? (this.openRows().has(r.groupKey) ? 'Hide encounters' : 'Show encounters') : null,
+        expanded: r => r.kind === 'group' && this.openRows().has(r.groupKey), onButton: r => this.toggleRow(r) },
+      { key: 'name', label, minWidth: '16rem', sortable: false,
+        value: r => r.kind === 'encounter' ? `\u00a0\u00a0\u00a0${r.name}` : r.kind === 'group' && r.code && label !== 'Department' ? `${hisProcedureId(r.code)} - ${r.name}` : r.name,
+        link: r => r.kind === 'encounter' ? `/patient-encounters/${r.encounterId}` : link(r) },
+      { key: 'performed', label: 'Performed', type: 'num', dp: 0, sortable: false, blankZero: true },
+      { key: 'feeBilled', label: 'Amount billed', type: 'money', dp: 0, blankZero: true, sortable: false },
+      { key: 'consumablesAll', label: 'Consumables', type: 'money', dp: 0, blankZero: true, sortable: false,
+        value: r => Number(r.consumablesBilled ?? 0) + Number(r.consumablesCovered ?? 0) },
+      { key: 'medicineAll', label: 'Medicine', type: 'money', dp: 0, blankZero: true, sortable: false,
+        value: r => Number(r.medicineBilled ?? 0) + Number(r.medicineCovered ?? 0) },
+      { key: 'avgLos', label: 'Avg. LOS', type: 'num', dp: 1, blankZero: true, sortable: false,
+        value: r => Number(r.encounters) ? Number(r.wardDays ?? 0) / Number(r.encounters) : 0 },
+      { key: 'allClaimed', label: 'Claimed', type: 'money', dp: 0, blankZero: true, sortable: false, bad: r => Number(r.rejectedClaims) > 0,
+        value: r => Number(r.claimed) + Number(r.consumablesClaimed ?? 0) + Number(r.medicineClaimed ?? 0) },
+      { key: 'settled', label: 'Claims received', type: 'money', dp: 0, blankZero: true, sortable: false },
+    ];
+  }
+  deptWorkCols = this.workTableCols('Department', r => r.id ? `/departments/${r.id}` : null);
+  packageWorkCols = this.workTableCols('Package', r => r.id ? `/packages/${r.id}` : null);
+  procedureWorkCols = this.workTableCols('Procedure', r => r.id ? `/procedures/${r.id}` : null);
   deptCols: Col<DoctorDetailDto['departments'][number]>[] = [
     { key: 'code', label: 'Code', value: r => localCode(r.code) },
     { key: 'name', label: 'Department', link: r => `/departments/${r.id}` },

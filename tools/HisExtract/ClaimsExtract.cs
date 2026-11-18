@@ -26,6 +26,7 @@ public static class ClaimsExtract
             pack.Warn("Claims and settlements", ex);
             return;
         }
+        await Safe(pack, "Claims: HIS columns", () => ColumnsAsync(db, pack));
         await Safe(pack, "Claim lines", () => ClaimLinesAsync(db, s, c, pack));
         await Safe(pack, "Settlement lines", () => SettlementLinesAsync(db, s, c, pack));
         await Safe(pack, "NPHIES claim lines", () => NphiesLinesAsync(db, s, c, pack));
@@ -179,7 +180,41 @@ public static class ClaimsExtract
         ("paymentNoticeSentOn", "h.PaymentNoticeSentOn"), ("createdOn", "h.CreatedOn"),
     ];
 
-    private static string Select((string Col, string Sql)[] cols) => string.Join(",\n            ", cols.Select(x => $"{x.Sql} AS [{x.Col}]"));
+    /// <summary>Query alias → HIS table, for checking each selected column exists in this HIS version.</summary>
+    private static readonly Dictionary<string, string> Tables = new(StringComparer.OrdinalIgnoreCase)
+    {
+        ["cp"] = "HIS_ClaimProcedure", ["ci"] = "HIS_ClaimInvoice", ["cm"] = "HIS_ClaimMain",
+        ["sp"] = "HIS_SettlementProcedure", ["si"] = "HIS_SettlementInvoice", ["sm"] = "HIS_SettlementMain",
+        ["l"] = "HIS_NPHIESClaimProcedure_Log", ["rr"] = "HIS_NPHIESClaimRejectionRemarks",
+        ["d"] = "HIS_NPHIESPaymentReconciliation_Detail", ["h"] = "HIS_NPHIESPaymentReconciliation",
+    };
+    /// <summary>"table.column" (lower case) present in this HIS; null until read, then every expression is used as written.</summary>
+    private static HashSet<string>? _columns;
+
+    /// <summary>
+    /// HIS versions differ (e.g. UAT has no HIS_ClaimInvoice.NPHIESClaimRemarks): a column this HIS lacks is written blank
+    /// instead of failing the whole file, and the pack log lists them.
+    /// </summary>
+    private static async Task ColumnsAsync(HisConnection db, CsvZipWriter pack)
+    {
+        var have = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var list = string.Join(",", Tables.Values.Distinct().Select(x => $"OBJECT_ID('dbo.{x}')"));
+        await db.QueryAsync($"SELECT OBJECT_NAME(object_id) AS T, name AS C FROM sys.columns WHERE object_id IN ({list})", _ => { },
+            r => have.Add($"{HisConnection.S(r, "T")}.{HisConnection.S(r, "C")}"));
+        _columns = have;
+        var missing = new[] { ClaimCols, SettlementCols, NphiesCols, PaymentCols }.SelectMany(cols => cols)
+            .SelectMany(x => Refs(x.Sql)).Where(x => !have.Contains(x)).Distinct(StringComparer.OrdinalIgnoreCase).Order().ToList();
+        if (missing.Count > 0) pack.Note($"Claims: {missing.Count} HIS column(s) not in this HIS, written blank: {string.Join(", ", missing)}.");
+    }
+
+    /// <summary>The "table.column" an expression reads, e.g. ci.NPHIESTaxAmount → HIS_ClaimInvoice.NPHIESTaxAmount.</summary>
+    private static IEnumerable<string> Refs(string sql) =>
+        System.Text.RegularExpressions.Regex.Matches(sql, @"\b([A-Za-z]+)\.([A-Za-z_][A-Za-z0-9_]*)\b")
+            .Where(m => Tables.ContainsKey(m.Groups[1].Value))
+            .Select(m => $"{Tables[m.Groups[1].Value]}.{m.Groups[2].Value}");
+
+    private static string Select((string Col, string Sql)[] cols) => string.Join(",\n            ", cols.Select(x =>
+        $"{(_columns is { } have && !Refs(x.Sql).All(have.Contains) ? "NULL" : x.Sql)} AS [{x.Col}]"));
     private static string[] Headers((string Col, string Sql)[] cols) => cols.Select(x => x.Col).Where(x => !x.StartsWith('_')).ToArray();
 
     /// <summary>Encounter columns first, then every HIS column as stored, then sourceSystem / sourceRef.</summary>

@@ -188,6 +188,32 @@ public sealed partial class ReadQueries
         return db.RevenueTransactions.AsNoTracking().Where(HisInvoiceRules.Counts).Where(r => r.PostedAt >= start && r.PostedAt < end);
     }
 
+    private sealed class EncounterAmount
+    {
+        public Guid EncounterId { get; init; }
+        public decimal Amount { get; init; }
+    }
+
+    /// <summary>
+    /// Materials billed: the counted invoice lines HIS consumption records point to (mostly INPATIENT CONSUMABLE CHARGES), each
+    /// line once, net of refunds plus VAT. A record's BilledAmount is its line's amount copied onto every item on the line,
+    /// so adding records counts a line once per item. Lines of medicine procedures are medicine's. Same rule as Packages.
+    /// </summary>
+    private IQueryable<EncounterAmount> MaterialLines(ScopedRun s) =>
+        from r in CountedRevenue(s)
+        where !(r.RefundedAmount != null && r.NetAmount > 0m && r.RefundedAmount >= r.NetAmount)
+              && !db.Procedures.Any(pr => pr.Id == r.ProcedureId && pr.Category == "MEDICINE")
+              && db.ConsumptionItems.Any(c => c.EncounterId == r.EncounterId && c.Category != "MEDICINE" && c.ServiceRef != null
+                                              && c.ServiceRef.Substring(4, 200) == r.SourceRef.Substring(4, 200))
+        select new EncounterAmount { EncounterId = r.EncounterId, Amount = r.NetAmount - (r.RefundedAmount ?? 0m) + (r.TaxAmount ?? 0m) };
+
+    /// <summary>Medicine billed: counted invoice lines of medicine procedures (INPATIENT MEDICATION, vials, …), net of refunds plus VAT. Same rule as Packages.</summary>
+    private IQueryable<EncounterAmount> MedicineLines(ScopedRun s) =>
+        from r in CountedRevenue(s)
+        where !(r.RefundedAmount != null && r.NetAmount > 0m && r.RefundedAmount >= r.NetAmount)
+              && db.Procedures.Any(pr => pr.Id == r.ProcedureId && pr.Category == "MEDICINE")
+        select new EncounterAmount { EncounterId = r.EncounterId, Amount = r.NetAmount - (r.RefundedAmount ?? 0m) + (r.TaxAmount ?? 0m) };
+
     /// <summary>INV-2-7-1 and REV-2-7-1 are the same invoice line, so a service counts when its revenue line does.</summary>
     /// <summary>How many distinct encounters each procedure was performed in, in this run (counted lines only, as the screens count them).</summary>
     public async Task<Dictionary<Guid, int>> ProcedureEncounterCountsAsync(ScopedRun s, CancellationToken ct) =>
@@ -291,16 +317,15 @@ public sealed partial class ReadQueries
                 .Select(g => new { g.Key, Claimed = g.Sum(x => x.ClaimedAmount!.Value) })
                 .ToDictionaryAsync(x => x.Key, x => x.Claimed, ct)
             : [];
-        var materials = money
-            ? await db.ConsumptionItems.AsNoTracking().Where(x => x.EncounterId != null && ids.Contains(x.EncounterId.Value)).GroupBy(x => x.EncounterId!.Value)
-                .Select(g => new
-                {
-                    g.Key,
-                    Materials = g.Sum(x => x.Category == "MEDICINE" ? 0m : x.BilledAmount ?? 0m),
-                    Medicine = g.Sum(x => x.Category == "MEDICINE" ? x.BilledAmount ?? 0m : 0m),
-                })
-                .ToDictionaryAsync(x => x.Key, x => (x.Materials, x.Medicine), ct)
+        var materialLines = money
+            ? await MaterialLines(s).Where(x => ids.Contains(x.EncounterId)).GroupBy(x => x.EncounterId)
+                .Select(g => new { g.Key, Amount = g.Sum(x => x.Amount) }).ToDictionaryAsync(x => x.Key, x => x.Amount, ct)
             : [];
+        var medicineLines = money
+            ? await MedicineLines(s).Where(x => ids.Contains(x.EncounterId)).GroupBy(x => x.EncounterId)
+                .Select(g => new { g.Key, Amount = g.Sum(x => x.Amount) }).ToDictionaryAsync(x => x.Key, x => x.Amount, ct)
+            : [];
+        var materials = ids.ToDictionary(id => id, id => (Materials: materialLines.GetValueOrDefault(id), Medicine: medicineLines.GetValueOrDefault(id)));
         // Billed on the doctors' lines: each counted service line's revenue (net after refunds), as the detail's Doctors table adds it up.
         var doctorBilled = new Dictionary<Guid, decimal>();
         if (money)
@@ -363,6 +388,9 @@ public sealed partial class ReadQueries
                                    join pk in db.Packages.AsNoTracking() on new { pr.HospitalId, pr.Code } equals new { pk.HospitalId, pk.Code }
                                    where pk.Id == billedPackage
                                    select es.EncounterId;
+            // An inpatient package is billed as child lines that name it in PackageProcedureId, with no line of its own.
+            billedEncounters = billedEncounters.Concat(CountedRevenue(s)
+                .Where(r => db.Packages.Any(pk => pk.Id == billedPackage && pk.Code == r.PackageProcedureId)).Select(r => r.EncounterId));
             query = query.Where(x => billedEncounters.Contains(x.Id));
         }
         // Sorting by an amount the caller cannot see would reveal it, so that falls back to admission.
@@ -620,17 +648,18 @@ public sealed partial class ReadQueries
 
         // Materials: what was consumed, per item.
         var items = await db.ConsumptionItems.AsNoTracking().Where(c => c.EncounterId == id)
-            .Select(c => new { c.Category, c.ItemKey, c.Description, c.OracleItemCode, c.Quantity, c.Uom, c.BilledAmount, c.PrescribedQty, c.ServiceRef })
+            .Select(c => new { c.Category, c.ItemKey, c.Description, c.OracleItemCode, c.Quantity, c.Uom, c.PrescribedQty, c.ServiceRef })
             .ToListAsync(ct);
         ChargeItem[] Items(bool medicine) => items.Where(c => (c.Category == "MEDICINE") == medicine)
             .GroupBy(c => new { c.Category, c.ItemKey, c.Uom })
             .Select(g => new ChargeItem(g.Key.Category, g.Key.ItemKey, g.Select(x => x.Description).FirstOrDefault(x => !string.IsNullOrWhiteSpace(x)),
                 g.Select(x => x.OracleItemCode).FirstOrDefault(x => !string.IsNullOrWhiteSpace(x)), Money.R4(g.Sum(x => x.Quantity)), g.Key.Uom,
-                showMoney && g.Any(x => x.BilledAmount != null) ? Money.R4(g.Sum(x => x.BilledAmount ?? 0m)) : null,
+                // HIS holds no charge per item: a record's BilledAmount is its invoice line's amount, copied onto every item on the line.
+                null,
                 g.Any(x => x.PrescribedQty != null) ? Money.R4(g.Sum(x => x.PrescribedQty ?? 0m)) : null,
                 g.Count(x => x.ServiceRef != null) == g.Count() ? "Procedure line" : g.Any(x => x.ServiceRef != null) ? "Partly to a procedure line" : "Encounter",
                 g.Count()))
-            .OrderByDescending(x => x.Billed ?? 0m).ThenByDescending(x => x.Quantity).ToArray();
+            .OrderByDescending(x => x.Quantity).ToArray();
 
         ChargeBilled? billed = null;
         ChargeClaims? claims = null;

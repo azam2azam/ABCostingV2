@@ -1,5 +1,4 @@
 import { Component, computed, effect, inject, input, linkedSignal, signal, untracked } from '@angular/core';
-import { RouterLink } from '@angular/router';
 import { firstValueFrom } from 'rxjs';
 import {
   Api, ComponentDto, Envelope, PackageDetail as PackageDetailDto, PackageRow,
@@ -253,11 +252,25 @@ export class ProcedureDetail {
   ];
 }
 
+/** Ward days from HIS transfers (shared among an encounter's packages); blank when there was no ward stay. */
+function wardTime(r: { wardDays: number | string }): string {
+  const d = Number(r.wardDays);
+  return d ? `${formatDec(String(d), d % 1 ? 1 : 0)} ${d === 1 ? 'day' : 'days'}` : '';
+}
+
+/** Measured staff time (all roles, as the encounters screen's Staff min) in minutes, hours, then days. */
+function staffTime(minutes: number): string | null {
+  if (!minutes) return null;
+  if (minutes < 60) return `Staff ${formatDec(String(minutes), 0)} min`;
+  if (minutes < 1440) return `Staff ${formatDec(String(minutes / 60), 1)} h`;
+  return `Staff ${formatDec(String(minutes / 1440), 1)} days`;
+}
+
 @Component({
   selector: 'v-packages',
   imports: [...UI],
   template: `
-    <v-page title="Packages" purpose="HIS package id, name, contracted price, and cases in this run.">
+    <v-page title="Packages" purpose="HIS package id, name, contracted price, cases, and what HIS billed and claimed on the package and its child lines in this run.">
       <v-state [loading]="list.res.isLoading() && !list.last()" [error]="list.res.error()">
         @if (list.last(); as r) {
           @if (!r.meta.run && r.meta.costingVersion) {
@@ -275,13 +288,9 @@ export class ProcedureDetail {
   `,
   styles: LIST_STYLES,
 })
+/** The packages list. Figures beyond the price are what the run stored on the package's own and child lines. */
 export class Packages {
   list = new ServerList<PackageRow>('packages', 'cases');
-  private auth = inject(Auth);
-  /** Only a run holds actual revenue, and a role without revenue.view reads it as 0. */
-  private inLoss(r: { revenue: string; totalCost: string }): boolean {
-    return !!this.list.last()?.meta.run && this.auth.can('revenue.view') && Number(r.totalCost) > Number(r.revenue);
-  }
   cols: Col<PackageRow>[] = [
     { key: 'code', label: 'Id', value: r => hisProcedureId(r.code), link: r => `/packages/${r.id}` },
     { key: 'name', label: 'Name' },
@@ -289,83 +298,42 @@ export class Packages {
     { key: 'compositionPrice', label: 'Composition Price', type: 'money', blankZero: true },
     { key: 'price', label: 'Contracted price', type: 'money', blankZero: true },
     { key: 'cases', label: 'Cases', type: 'num', dp: 0, blankZero: true },
-    { key: 'billedRevenue', label: 'Exp. Revenue', type: 'money', blankZero: true, value: r => Number(r.price) * Number(r.cases) },
-    { key: 'revenue', label: 'Act. Revenue', type: 'money', blankZero: true, bad: r => Number(r.revenue) < Number(r.totalCost) },
-    { key: 'unitCost', label: 'Unit Cost', type: 'money', blankZero: true, bad: r => Number(r.unitCost) > Number(r.price) },
-    { key: 'totalCost', label: 'Total Cost', type: 'money', blankZero: true, bad: r => this.inLoss(r) },
+    { key: 'feeBilled', label: 'Amount Billed', type: 'money', dp: 0, blankZero: true },
+    { key: 'wardDays', label: 'Nurse/Ward', value: r => wardTime(r) || (Number(r.staffMinutes) ? staffTime(Number(r.staffMinutes))! : ''), sub: r => wardTime(r) ? staffTime(Number(r.staffMinutes)) : null },
+    { key: 'materialsBilled', label: 'Materials consumed', type: 'money', dp: 0, blankZero: true,
+      sub: r => r.materialItems ? `${formatDec(String(r.materialItems), 0)} items` : null },
+    { key: 'medicineBilled', label: 'Medicine', type: 'money', dp: 0, blankZero: true,
+      sub: r => Number(r.medicineQuantity) ? `${formatDec(String(r.medicineQuantity), 0)} items` : null },
+    { key: 'claimed', label: 'Claimed Amount', type: 'money', dp: 0, blankZero: true },
+    { key: 'claimSettled', label: 'Claim received', type: 'money', dp: 0, blankZero: true },
+    { key: 'claimRejected', label: 'Claim rejected', type: 'money', dp: 0, blankZero: true, bad: r => Number(r.claimRejected) > 0 },
   ];
 }
 
 
-@Component({
-  selector: 'v-packages-v2',
-  imports: [...UI],
-  template: `
-    <v-page title="Packages V2" purpose="HIS package id, name, contracted price, and cases in this run.">
-      <v-state [loading]="list.res.isLoading() && !list.last()" [error]="list.res.error()">
-        @if (list.last(); as r) {
-          @if (!r.meta.run && r.meta.costingVersion) {
-            <p class="notice">No calculation run for {{ r.meta.period }}. Costs are estimated from costing model {{ r.meta.costingVersion }} ({{ r.meta.costingVersionStatus }}): Package Costing where set, otherwise the package's composition.</p>
-          }
-          <v-type-tiles [counts]="r.data.counts" [selected]="list.type()" (selectedChange)="list.setType($event)" />
-          ${LIST_BAR}
-          <div [class.reloading]="list.res.isLoading()">
-            <v-table [rows]="r.data.rows" [columns]="cols" [serverSort]="list.tableSort()" (sortChange)="list.setSort($event)" caption="Packages V2"
-              [empty]="list.search().trim() ? 'No packages match this search.' : 'No rows.'" />
-          </div>
-        }
-      </v-state>
-    </v-page>
-  `,
-  styles: LIST_STYLES,
-})
-/** A copy of Packages to change independently; same data and detail page. */
-export class PackagesV2 {
-  list = new ServerList<PackageRow>('packages', 'cases');
-  private auth = inject(Auth);
-  /** Only a run holds actual revenue, and a role without revenue.view reads it as 0. */
-  private inLoss(r: { revenue: string; totalCost: string }): boolean {
-    return !!this.list.last()?.meta.run && this.auth.can('revenue.view') && Number(r.totalCost) > Number(r.revenue);
-  }
-  cols: Col<PackageRow>[] = [
-    { key: 'code', label: 'Id', value: r => hisProcedureId(r.code), link: r => `/packages/${r.id}` },
-    { key: 'name', label: 'Name' },
-    { key: 'procType', label: 'Type' },
-    { key: 'compositionPrice', label: 'Composition Price', type: 'money', blankZero: true },
-    { key: 'price', label: 'Contracted price', type: 'money', blankZero: true },
-    { key: 'cases', label: 'Cases', type: 'num', dp: 0, blankZero: true },
-    { key: 'billedRevenue', label: 'Exp. Revenue', type: 'money', blankZero: true, value: r => Number(r.price) * Number(r.cases) },
-    { key: 'revenue', label: 'Act. Revenue', type: 'money', blankZero: true, bad: r => Number(r.revenue) < Number(r.totalCost) },
-    { key: 'unitCost', label: 'Unit Cost', type: 'money', blankZero: true, bad: r => Number(r.unitCost) > Number(r.price) },
-    { key: 'totalCost', label: 'Total Cost', type: 'money', blankZero: true, bad: r => this.inLoss(r) },
-  ];
-}
-
+type DoctorRow = PackageDetailDto['doctors'][number];
+/** A doctor row, or one of its encounters shown under it. */
+type DoctorTableRow = DoctorRow & { kind: 'doctor' | 'encounter'; encounterId?: string; encounterNo?: string };
 
 @Component({
   selector: 'v-package',
-  imports: [RouterLink, ...UI],
+  imports: [...UI],
   template: `
     <v-state [loading]="res.isLoading()" [error]="res.error()">
       @if (res.value(); as r) {
         <v-page [title]="hisProcedureId(r.data.package.code) + ' - ' + r.data.package.name">
           <div class="grid tiles">
-            <v-tile label="Contracted price" [value]="r.data.package.price" />
-            <v-tile label="Encounter count" [value]="encCount()" unit="" />
-            <v-tile label="Package Revenue" [value]="packageRevenue()" />
-            <v-tile label="Average Encounter Invoice" [value]="r.data.averageEncounterFee" />
+            <v-tile label="Performed (cases)" [value]="r.data.package.cases" unit="" />
+            <v-tile label="Resources Consumed" [value]="resourcesTile()?.total ?? null" />
+            <v-tile label="Amount billed" [value]="billedTile()?.total ?? null" />
+            <v-tile label="Claims Received" [value]="claimsReceivedTile()" />
           </div>
-          <section class="card" style="margin-top:14px"><h2>Standard composition</h2><v-table [rows]="r.data.components" [columns]="compCols" [total]="compTotal()" /></section>
-          <section class="card">
+          <section class="card" style="margin-top:14px">
             <h2>Doctors who performed this package</h2>
             <p class="muted">Doctor on each billed package line in {{ r.meta.period }}, counted the same way as the encounter count.</p>
-            <v-table [rows]="r.data.doctors" [columns]="doctorCols" caption="Doctors who performed this package" empty="No billed package lines in this period." />
-            <p class="muted" style="margin:8px 0 0">Doctor fee (share) is the doctor's share on the package lines as HIS holds it (a value, or a percentage of the line), blank for facts extracted before the share was added; underneath is what the hospital billed on those lines. Consumables and medicine are everything billed on the doctor's package encounters, as charged, not cost. Claims are what was claimed from payers, settled and rejected.</p>
+            <v-table [rows]="doctorRows()" [columns]="doctorCols" [total]="doctorTotal()" caption="Doctors who performed this package" empty="No billed package lines in this period." />
           </section>
-          <section class="card">
-            <h2>Encounters</h2>
-            <p><a [routerLink]="['/patient-encounters']" [queryParams]="{ billedPackageId: id() }" queryParamsHandling="merge">View list</a></p>
-          </section>
+          <section class="card"><h2>Standard composition</h2><v-table [rows]="r.data.components" [columns]="compCols" [total]="compTotal()" /></section>
         </v-page>
       }
     </v-state>
@@ -381,27 +349,93 @@ export class PackageDetail {
     { key: 'category', label: 'Category' },
     { key: 'procType', label: 'Type', value: r => r.isMedicine ? 'Medicine' : r.procType },
     { key: 'price', label: 'Contracted price', type: 'money' },
-    { key: 'cost', label: 'Cost', type: 'money' },
   ];
   /** Money columns are what HIS billed and claimed (not cost). Share/Fee is "—" for facts extracted before the share was. */
-  doctorCols: Col<PackageDetailDto['doctors'][number]>[] = [
-    { key: 'name', label: 'Doctor', link: r => r.id ? `/doctors/${r.id}` : null, sub: r => r.isDummy ? 'HIS placeholder' : r.code || null },
-    { key: 'encounters', label: 'Encounters', type: 'num', dp: 0, sub: r => `${formatDec(String(r.quantity), 0)} billed · ${formatDec(String(r.sharePct), 1)}% of cases` },
-    { key: 'doctorShare', label: 'Doctor fee (share)', value: r => r.doctorShare == null ? '—' : formatMoney(String(r.doctorShare), { dp: 0 }),
-      sub: r => `Billed on package lines ${formatMoney(String(r.feeBilled), { dp: 0 })}` },
-    { key: 'consumablesBilled', label: 'Consumables', type: 'money', dp: 0, sub: r => `${formatDec(String(r.consumableItems), 0)} items` },
-    { key: 'medicineBilled', label: 'Medicine', type: 'money', dp: 0, sub: r => `qty ${formatDec(String(r.medicineQuantity), 0)}` },
-    { key: 'claimed', label: 'Claims', type: 'money', dp: 0,
-      sub: r => `settled ${formatMoney(String(r.settled), { dp: 0 })} · rejected ${formatMoney(String(r.rejectedClaims), { dp: 0 })}`,
-      bad: r => Number(r.rejectedClaims) > 0 },
+  /** Doctors whose encounters are shown under them. */
+  openDoctors = signal<ReadonlySet<string>>(new Set());
+  private doctorKey(r: DoctorRow): string { return r.id ?? 'none'; }
+  toggleDoctor(r: DoctorRow): void {
+    const key = this.doctorKey(r);
+    this.openDoctors.update(open => { const next = new Set(open); if (next.has(key)) next.delete(key); else next.add(key); return next; });
+  }
+  /** Doctor rows, each open one followed by its encounters (encounter number under Doctor, Performed blank, that encounter's figures). */
+  doctorRows = computed<DoctorTableRow[]>(() => {
+    const open = this.openDoctors();
+    return (this.res.value()?.data.doctors ?? []).flatMap(d => {
+      const row: DoctorTableRow = { ...d, kind: 'doctor' };
+      if (!open.has(this.doctorKey(d))) return [row];
+      return [row, ...(d.encounterRows ?? []).map(e => ({
+        ...d, ...e, kind: 'encounter' as const, id: d.id, name: e.encounterNo, encounters: 1, quantity: '0', encounterRows: null,
+      }))];
+    });
+  });
+  doctorCols: Col<DoctorTableRow>[] = [
+    { key: 'toggle', label: '', type: 'button', sortable: false, icon: () => 'chevron',
+      button: r => r.kind === 'doctor' && r.encounterRows?.length ? (this.openDoctors().has(this.doctorKey(r)) ? 'Hide encounters' : 'Show encounters') : null,
+      expanded: r => r.kind === 'doctor' && this.openDoctors().has(this.doctorKey(r)), onButton: r => this.toggleDoctor(r) },
+    { key: 'name', label: 'Doctor', minWidth: '16rem', sortable: false,
+      value: r => r.kind === 'encounter' ? `\u00a0\u00a0\u00a0${r.name}` : r.name,
+      link: r => r.kind === 'encounter' ? `/patient-encounters/${r.encounterId}` : r.id ? `/doctors/${r.id}` : null },
+    { key: 'quantity', label: 'Performed', type: 'num', dp: 0, sortable: false, blankZero: true },
+    { key: 'feeBilled', label: 'Amount billed', type: 'money', dp: 0, blankZero: true, sortable: false },
+    { key: 'consumablesAll', label: 'Consumables', type: 'money', dp: 0, blankZero: true, sortable: false,
+      value: r => Number(r.consumablesBilled ?? 0) + Number(r.consumablesCovered ?? 0) },
+    { key: 'medicineAll', label: 'Medicine', type: 'money', dp: 0, blankZero: true, sortable: false,
+      value: r => Number(r.medicineBilled ?? 0) + Number(r.medicineCovered ?? 0) },
+    { key: 'avgLos', label: 'Avg. LOS', type: 'num', dp: 1, blankZero: true, sortable: false,
+      value: r => Number(r.encounters) ? Number(r.wardDays ?? 0) / Number(r.encounters) : 0 },
+    { key: 'allClaimed', label: 'Claimed', type: 'money', dp: 0, blankZero: true, sortable: false, bad: r => Number(r.rejectedClaims) > 0,
+      value: r => Number(r.claimed) + Number(r.consumablesClaimed ?? 0) + Number(r.medicineClaimed ?? 0) },
+    { key: 'settled', label: 'Claims received', type: 'money', dp: 0, blankZero: true, sortable: false },
   ];
-  encCount = computed(() => this.res.value()?.data.encounterCount ?? 0);
-  /** Same as the packages list: contracted list price × billed quantity in this run. */
-  packageRevenue = computed(() => {
-    const pkg = this.res.value()?.data.package;
-    if (!pkg) return null;
-    const cases = Number(pkg.cases);
-    return cases > 0 ? Number(pkg.price) * cases : null;
+  /** Contracted price × cases, the consumables and medicine the package price covered, and those billed separately. */
+  resourcesTile = computed(() => {
+    const d = this.res.value()?.data;
+    if (!d) return null;
+    const t = (this.doctorTotal() ?? {}) as Record<string, number>;
+    const cases = Number(d.package.cases ?? 0);
+    const parts: [number, string][] = [
+      [Number(d.package.price ?? 0) * cases, `contracted price (${formatMoney(String(d.package.price ?? 0), { dp: 0 })} × ${formatDec(String(cases), 0)} ${cases === 1 ? 'case' : 'cases'})`],
+      [Number(t['consumablesCovered'] ?? 0), 'consumables covered'],
+      [Number(t['medicineCovered'] ?? 0), 'medicine covered'],
+      [Number(t['consumablesBilled'] ?? 0), 'consumables billed separately'],
+      [Number(t['medicineBilled'] ?? 0), 'medicine billed separately'],
+    ];
+    return {
+      total: parts.reduce((s, [v]) => s + v, 0),
+      note: parts.map(([v, label]) => `${formatMoney(String(v), { dp: 0 })} ${label}`).join(' + '),
+    };
+  });
+  /** Package lines billed plus medicine, both including VAT: the doctor table's totals, so the tile matches it. */
+  billedTile = computed(() => this.tile(['feeBilled', 'package lines'], ['consumablesBilled', 'consumables'], ['medicineBilled', 'medicine']));
+  /** Claims on invoices HIS put on a claim (HIS_InvoiceMain.IsClaimed = 1): package, consumable and medicine lines. Blank until the facts carry the flag. */
+  claimsReceivedTile = computed(() => {
+    const rows = this.res.value()?.data.doctors ?? [];
+    if (!rows.length || rows.every(r => r.claimsReceived == null)) return null;
+    return rows.reduce((t, r) => t + Number(r.claimsReceived ?? 0), 0);
+  });
+  /** Claims on the package lines, the consumable lines and the medicine lines. */
+  claimedTile = computed(() => this.tile(['claimed', 'package'], ['consumablesClaimed', 'consumables'], ['medicineClaimed', 'medicine']));
+  private tile(...parts: [string, string][]): { total: number; note: string } | null {
+    const t = this.doctorTotal() as Record<string, number> | null;
+    if (!t) return null;
+    const values = parts.map(([key, label]) => [Number(t[key] ?? 0), label] as const);
+    return {
+      total: values.reduce((s, [v]) => s + v, 0),
+      note: values.map(([v, label]) => `${formatMoney(String(v), { dp: 0 })} ${label}`).join(' + '),
+    };
+  }
+  /** Sum of the doctor rows; they add up to the package's figures on Packages (Performed can exceed Cases when an encounter has several doctors). */
+  doctorTotal = computed(() => {
+    const rows = this.res.value()?.data.doctors ?? [];
+    if (!rows.length) return null;
+    const sum = (f: (r: (typeof rows)[number]) => unknown) => rows.reduce((t, r) => t + Number(f(r) ?? 0), 0);
+    return {
+      quantity: sum(r => r.quantity), feeBilled: sum(r => r.feeBilled),
+      consumablesBilled: sum(r => r.consumablesBilled), consumablesCovered: sum(r => r.consumablesCovered), medicineCovered: sum(r => r.medicineCovered), medicineBilled: sum(r => r.medicineBilled), claimed: sum(r => r.claimed), settled: sum(r => r.settled), medicineClaimed: sum(r => r.medicineClaimed), consumablesClaimed: sum(r => r.consumablesClaimed),
+      wardDays: sum(r => r.wardDays), encounters: sum(r => r.encounters),
+      allClaimed: sum(r => Number(r.claimed) + Number(r.consumablesClaimed ?? 0) + Number(r.medicineClaimed ?? 0)),
+    };
   });
   /** Sum of child contracted prices × quantity — same as Composition Price on the list. */
   compTotal = computed(() => {

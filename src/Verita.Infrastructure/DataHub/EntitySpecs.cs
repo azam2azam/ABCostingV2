@@ -72,6 +72,8 @@ public static class EntitySpecs
             [Hosp, R("departmentCode", "DepartmentId", typeof(Department)), R("serviceLineCode", "ServiceLineId", typeof(ServiceLine), opt: true)]),
         new("ProcedureRate", typeof(ProcedureRate), "Catalogue", "Effective-dated list price.", ["ProcedureId", "HospitalId", "EffectiveFrom"],
             [R("procedureCode", "ProcedureId", typeof(Procedure)), Hosp], VersionGroup: ["ProcedureId", "HospitalId"]),
+        new("MedicinePrice", typeof(MedicinePrice), "Catalogue", "A medicine's standard selling and purchase price from the pharmacy master (PHARMAKON PHR_Medicine), by HIS medicine code.", ["HospitalId", "MedicineCode"],
+            [Hosp]),
         new("CostingVersion", typeof(CostingVersion), "Catalogue", "Named set of recipes and rates. New versions start as DRAFT and are published through Governance.", ["HospitalId", "Code"], [Hosp],
             Hidden: ["PublishedAt", "PublishedById", "CreatedAt"]),
         new("CostingDefinition", typeof(CostingDefinition), "Catalogue", "Binds a procedure to its recipe under one costing version.", ["ProcedureId", "CostingVersionId"],

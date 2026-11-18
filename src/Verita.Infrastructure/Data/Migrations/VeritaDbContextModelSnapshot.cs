@@ -3362,6 +3362,67 @@ namespace Verita.Infrastructure.Data.Migrations
                     b.ToTable("InvoicePackageItem", (string)null);
                 });
 
+            modelBuilder.Entity("Verita.Domain.Entities.MedicinePrice", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<string>("GenericName")
+                        .HasMaxLength(200)
+                        .HasColumnType("nvarchar(200)");
+
+                    b.Property<int?>("HisStatus")
+                        .HasColumnType("int");
+
+                    b.Property<Guid>("HospitalId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<string>("MedicineCode")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("nvarchar(200)");
+
+                    b.Property<string>("Name")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("nvarchar(200)");
+
+                    b.Property<decimal?>("PackQuantity")
+                        .HasPrecision(19, 6)
+                        .HasColumnType("decimal(19,6)");
+
+                    b.Property<int?>("QuantityUnit")
+                        .HasColumnType("int");
+
+                    b.Property<string>("Source")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("nvarchar(200)");
+
+                    b.Property<decimal?>("StdPurchasePrice")
+                        .HasPrecision(19, 6)
+                        .HasColumnType("decimal(19,6)");
+
+                    b.Property<decimal?>("StdSellingPrice")
+                        .HasPrecision(19, 6)
+                        .HasColumnType("decimal(19,6)");
+
+                    b.Property<string>("Strength")
+                        .HasMaxLength(200)
+                        .HasColumnType("nvarchar(200)");
+
+                    b.Property<decimal?>("Vat")
+                        .HasPrecision(19, 6)
+                        .HasColumnType("decimal(19,6)");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("HospitalId", "MedicineCode")
+                        .IsUnique();
+
+                    b.ToTable("MedicinePrice", (string)null);
+                });
+
             modelBuilder.Entity("Verita.Domain.Entities.NphiesClaimLine", b =>
                 {
                     b.Property<Guid>("Id")
@@ -5099,6 +5160,9 @@ namespace Verita.Infrastructure.Data.Migrations
                     b.Property<int?>("HisInvoiceType")
                         .HasColumnType("int");
 
+                    b.Property<bool?>("HisIsClaimed")
+                        .HasColumnType("bit");
+
                     b.Property<int?>("HisLineStatus")
                         .HasColumnType("int");
 
@@ -5328,6 +5392,231 @@ namespace Verita.Infrastructure.Data.Migrations
                         .IsUnique();
 
                     b.ToTable("RunHisInvoicing", (string)null);
+                });
+
+            modelBuilder.Entity("Verita.Domain.Entities.RunPackageBilling", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<int?>("Cases")
+                        .HasColumnType("int");
+
+                    b.Property<decimal>("Claimed")
+                        .HasPrecision(19, 4)
+                        .HasColumnType("decimal(19,4)");
+
+                    b.Property<decimal?>("DoctorShare")
+                        .HasPrecision(19, 4)
+                        .HasColumnType("decimal(19,4)");
+
+                    b.Property<int>("Encounters")
+                        .HasColumnType("int");
+
+                    b.Property<decimal>("FeeBilled")
+                        .HasPrecision(19, 4)
+                        .HasColumnType("decimal(19,4)");
+
+                    b.Property<int>("MaterialItems")
+                        .HasColumnType("int");
+
+                    b.Property<decimal>("MaterialsBilled")
+                        .HasPrecision(19, 4)
+                        .HasColumnType("decimal(19,4)");
+
+                    b.Property<decimal>("MedicineBilled")
+                        .HasPrecision(19, 4)
+                        .HasColumnType("decimal(19,4)");
+
+                    b.Property<decimal>("MedicineQuantity")
+                        .HasPrecision(19, 6)
+                        .HasColumnType("decimal(19,6)");
+
+                    b.Property<decimal>("NurseMinutes")
+                        .HasPrecision(19, 6)
+                        .HasColumnType("decimal(19,6)");
+
+                    b.Property<Guid>("PackageId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<decimal>("Rejected")
+                        .HasPrecision(19, 4)
+                        .HasColumnType("decimal(19,4)");
+
+                    b.Property<Guid>("RunId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<decimal>("Settled")
+                        .HasPrecision(19, 4)
+                        .HasColumnType("decimal(19,4)");
+
+                    b.Property<decimal>("StaffMinutes")
+                        .HasPrecision(19, 6)
+                        .HasColumnType("decimal(19,6)");
+
+                    b.Property<decimal>("WardDays")
+                        .HasPrecision(19, 6)
+                        .HasColumnType("decimal(19,6)");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("RunId", "PackageId")
+                        .IsUnique();
+
+                    b.ToTable("RunPackageBilling", (string)null);
+                });
+
+            modelBuilder.Entity("Verita.Domain.Entities.RunPackageDoctor", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<decimal>("Claimed")
+                        .HasPrecision(19, 4)
+                        .HasColumnType("decimal(19,4)");
+
+                    b.Property<decimal?>("ClaimsReceived")
+                        .HasPrecision(19, 4)
+                        .HasColumnType("decimal(19,4)");
+
+                    b.Property<decimal>("ConsumableItems")
+                        .HasPrecision(19, 6)
+                        .HasColumnType("decimal(19,6)");
+
+                    b.Property<decimal>("ConsumablesBilled")
+                        .HasPrecision(19, 4)
+                        .HasColumnType("decimal(19,4)");
+
+                    b.Property<decimal>("ConsumablesClaimed")
+                        .HasPrecision(19, 4)
+                        .HasColumnType("decimal(19,4)");
+
+                    b.Property<decimal>("ConsumablesCovered")
+                        .HasPrecision(19, 4)
+                        .HasColumnType("decimal(19,4)");
+
+                    b.Property<decimal?>("DoctorShare")
+                        .HasPrecision(19, 4)
+                        .HasColumnType("decimal(19,4)");
+
+                    b.Property<Guid>("EncounterId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<decimal>("FeeBilled")
+                        .HasPrecision(19, 4)
+                        .HasColumnType("decimal(19,4)");
+
+                    b.Property<decimal>("MedicineBilled")
+                        .HasPrecision(19, 4)
+                        .HasColumnType("decimal(19,4)");
+
+                    b.Property<decimal>("MedicineClaimed")
+                        .HasPrecision(19, 4)
+                        .HasColumnType("decimal(19,4)");
+
+                    b.Property<decimal>("MedicineCovered")
+                        .HasPrecision(19, 4)
+                        .HasColumnType("decimal(19,4)");
+
+                    b.Property<decimal>("MedicineCoveredQty")
+                        .HasPrecision(19, 6)
+                        .HasColumnType("decimal(19,6)");
+
+                    b.Property<decimal>("MedicineLines")
+                        .HasPrecision(19, 6)
+                        .HasColumnType("decimal(19,6)");
+
+                    b.Property<Guid>("PackageId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<int>("Performed")
+                        .HasColumnType("int");
+
+                    b.Property<Guid?>("ProviderId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<decimal>("Rejected")
+                        .HasPrecision(19, 4)
+                        .HasColumnType("decimal(19,4)");
+
+                    b.Property<Guid>("RunId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<decimal>("Settled")
+                        .HasPrecision(19, 4)
+                        .HasColumnType("decimal(19,4)");
+
+                    b.Property<decimal>("StaffMinutes")
+                        .HasPrecision(19, 6)
+                        .HasColumnType("decimal(19,6)");
+
+                    b.Property<decimal>("WardDays")
+                        .HasPrecision(19, 6)
+                        .HasColumnType("decimal(19,6)");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("RunId", "PackageId");
+
+                    b.HasIndex("RunId", "ProviderId");
+
+                    b.ToTable("RunPackageDoctor", (string)null);
+                });
+
+            modelBuilder.Entity("Verita.Domain.Entities.RunProcedureDoctor", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<decimal>("Claimed")
+                        .HasPrecision(19, 4)
+                        .HasColumnType("decimal(19,4)");
+
+                    b.Property<decimal?>("ClaimsReceived")
+                        .HasPrecision(19, 4)
+                        .HasColumnType("decimal(19,4)");
+
+                    b.Property<decimal>("Consumables")
+                        .HasPrecision(19, 4)
+                        .HasColumnType("decimal(19,4)");
+
+                    b.Property<Guid>("EncounterId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<decimal>("FeeBilled")
+                        .HasPrecision(19, 4)
+                        .HasColumnType("decimal(19,4)");
+
+                    b.Property<decimal>("Medicine")
+                        .HasPrecision(19, 4)
+                        .HasColumnType("decimal(19,4)");
+
+                    b.Property<decimal>("Performed")
+                        .HasPrecision(19, 6)
+                        .HasColumnType("decimal(19,6)");
+
+                    b.Property<Guid>("ProcedureId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<Guid?>("ProviderId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<decimal>("Rejected")
+                        .HasPrecision(19, 4)
+                        .HasColumnType("decimal(19,4)");
+
+                    b.Property<Guid>("RunId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<decimal>("Settled")
+                        .HasPrecision(19, 4)
+                        .HasColumnType("decimal(19,4)");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("RunId", "ProviderId");
+
+                    b.ToTable("RunProcedureDoctor", (string)null);
                 });
 
             modelBuilder.Entity("Verita.Domain.Entities.RunStep", b =>
@@ -6758,6 +7047,15 @@ namespace Verita.Infrastructure.Data.Migrations
                         .OnDelete(DeleteBehavior.NoAction);
                 });
 
+            modelBuilder.Entity("Verita.Domain.Entities.MedicinePrice", b =>
+                {
+                    b.HasOne("Verita.Domain.Entities.Hospital", null)
+                        .WithMany()
+                        .HasForeignKey("HospitalId")
+                        .OnDelete(DeleteBehavior.NoAction)
+                        .IsRequired();
+                });
+
             modelBuilder.Entity("Verita.Domain.Entities.NphiesClaimLine", b =>
                 {
                     b.HasOne("Verita.Domain.Entities.Encounter", null)
@@ -7116,6 +7414,33 @@ namespace Verita.Infrastructure.Data.Migrations
                 });
 
             modelBuilder.Entity("Verita.Domain.Entities.RunHisInvoicing", b =>
+                {
+                    b.HasOne("Verita.Domain.Entities.CalculationRun", null)
+                        .WithMany()
+                        .HasForeignKey("RunId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+                });
+
+            modelBuilder.Entity("Verita.Domain.Entities.RunPackageBilling", b =>
+                {
+                    b.HasOne("Verita.Domain.Entities.CalculationRun", null)
+                        .WithMany()
+                        .HasForeignKey("RunId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+                });
+
+            modelBuilder.Entity("Verita.Domain.Entities.RunPackageDoctor", b =>
+                {
+                    b.HasOne("Verita.Domain.Entities.CalculationRun", null)
+                        .WithMany()
+                        .HasForeignKey("RunId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+                });
+
+            modelBuilder.Entity("Verita.Domain.Entities.RunProcedureDoctor", b =>
                 {
                     b.HasOne("Verita.Domain.Entities.CalculationRun", null)
                         .WithMany()

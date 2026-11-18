@@ -147,6 +147,9 @@ public sealed class RunService(IDbContextFactory<VeritaDbContext> factory, Verit
         await db.PackageCosts.Where(x => x.RunId == runId).ExecuteDeleteAsync(ct);
         await db.RunDimensionCosts.Where(x => x.RunId == runId).ExecuteDeleteAsync(ct);
         await db.RunHisInvoicings.Where(x => x.RunId == runId).ExecuteDeleteAsync(ct);
+        await db.RunPackageBillings.Where(x => x.RunId == runId).ExecuteDeleteAsync(ct);
+        await db.RunPackageDoctors.Where(x => x.RunId == runId).ExecuteDeleteAsync(ct);
+        await db.RunProcedureDoctors.Where(x => x.RunId == runId).ExecuteDeleteAsync(ct);
         await db.EncounterCosts.Where(x => x.RunId == runId).ExecuteDeleteAsync(ct);
         await db.ProcedureCosts.Where(x => x.RunId == runId).ExecuteDeleteAsync(ct);
         await db.ActivityCosts.Where(x => x.RunId == runId).ExecuteDeleteAsync(ct);
@@ -199,6 +202,8 @@ public sealed class RunService(IDbContextFactory<VeritaDbContext> factory, Verit
             }
 
             await HisInvoicingSummary.StoreAsync(db, run, ct);
+            await PackageBillingSummary.StoreAsync(db, run, ct);
+            await ProcedureBillingSummary.StoreAsync(db, run, ct);
             await db.Entry(run).ReloadAsync(ct);
             run.Status = "RECONCILED";
             run.FinishedAt = DateTime.UtcNow;

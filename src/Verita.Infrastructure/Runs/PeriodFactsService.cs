@@ -239,7 +239,7 @@ public sealed class PeriodFactsService(IDbContextFactory<VeritaDbContext> factor
     {
         "CalculationRun", "RunStep", "ActivityCost", "AllocationResult", "CostCenterBalance", "CostComponent", "CostPoolBalance",
         "DataQualityIssue", "DrgCostSummary", "EncounterCost", "PackageCost", "ProcedureCost", "Reconciliation", "ReconciliationLine",
-        "ResidualBucket", "ResourceUnitCost", "RunDimensionCost", "RunHisInvoicing", "Variance", "VarianceComponent",
+        "ResidualBucket", "ResourceUnitCost", "RunDimensionCost", "RunHisInvoicing", "RunPackageBilling", "RunPackageDoctor", "RunProcedureDoctor", "Variance", "VarianceComponent",
         "Scenario", "ScenarioLever", "ScenarioResult",
     };
     private static readonly HashSet<string> ImportTables = new(StringComparer.OrdinalIgnoreCase) { "ImportFile", "ImportFileContent", "ImportBatch" };

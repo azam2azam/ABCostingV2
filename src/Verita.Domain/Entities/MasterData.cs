@@ -420,6 +420,33 @@ public class Package
     public bool IsActive { get; set; } = true;
 }
 
+/// <summary>
+/// A medicine's standard price from the pharmacy master (PHARMAKON PHR_Medicine), by HIS medicine code: the code medicine
+/// consumption carries as ItemKey (system HIS_MED). Used to value medicine that was given but not billed on an invoice line.
+/// Source is PHR_Medicine for extracted rows; BILLED_LINE for a price read off the medicine's own billed invoice lines
+/// (a stop-gap until the pharmacy master is extracted), which a PHR_Medicine import replaces.
+/// </summary>
+public class MedicinePrice
+{
+    public Guid Id { get; set; }
+    public Guid HospitalId { get; set; }
+    public string MedicineCode { get; set; } = "";
+    public string Name { get; set; } = "";
+    public string? GenericName { get; set; }
+    public string? Strength { get; set; }
+    /// <summary>PHR_Medicine.Quantity and QuantityUnit as stored: the pack the standard prices refer to.</summary>
+    [Precise] public decimal? PackQuantity { get; set; }
+    public int? QuantityUnit { get; set; }
+    /// <summary>Standard selling price per dispensing unit, before VAT.</summary>
+    [Precise] public decimal? StdSellingPrice { get; set; }
+    /// <summary>Standard purchase price (cost) per dispensing unit.</summary>
+    [Precise] public decimal? StdPurchasePrice { get; set; }
+    [Precise] public decimal? Vat { get; set; }
+    /// <summary>PHR_Medicine.Status as stored.</summary>
+    public int? HisStatus { get; set; }
+    public string Source { get; set; } = "PHR_Medicine";
+}
+
 public class PackageComponent
 {
     public Guid Id { get; set; }

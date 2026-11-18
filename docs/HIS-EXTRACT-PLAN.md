@@ -269,6 +269,7 @@ Identity and charge master. No period filter except “active”.
 | `25_PackageComponent.csv` | `HIS_ProcedurePackageDetail` | One row per package and procedure. `quantity` is the number of active HIS lines. |
 | `26_Drg.csv` | `HIS_DRGSpecification` | Shared catalogue (no ProjectID) |
 | `27_Payer.csv` | `HIS_Company` used by this project | Plus synthetic `PAY-SELF` |
+| `28_MedicinePrice.csv` | `PHARMAKON.dbo.PHR_Medicine` (fallback: HIS `dbo.PHR_Medicine`) | `StdSellingPrice`, `StdPurchasePrice`, `VAT`, pack `Quantity`/`QuantityUnit` by `MedicineCode` (= medicine consumption `itemKey`, system `HIS_MED`) |
 
 **Department codes (stable):**
 

@@ -217,6 +217,104 @@ public class PackageCost
     [Precise] public decimal MarginPct { get; set; }
 }
 
+/// <summary>
+/// What HIS billed, claimed and recorded on a package's lines in a run, prepared once so Packages reads it. Lines are the
+/// package procedure's and the child lines HIS bills under it. Consumption and staff time tied to those lines are the
+/// package's; the rest of the encounter's (general consumable and medication lines, unlinked items) is shared among its packages.
+/// Money is as charged and claimed, not cost.
+/// </summary>
+public class RunPackageBilling
+{
+    public Guid Id { get; set; }
+    public Guid RunId { get; set; }
+    public Guid PackageId { get; set; }
+    public int Encounters { get; set; }
+    /// <summary>
+    /// Billed quantity of the package procedure's own lines, plus one per encounter billed through its child lines only.
+    /// Null on rows stored before it was added; Packages then counts the own lines as it always has.
+    /// </summary>
+    public int? Cases { get; set; }
+    /// <summary>HIS doctor share on the package lines (a value, or a % of the line); null when no line carries one.</summary>
+    public decimal? DoctorShare { get; set; }
+    /// <summary>Billed on the package's lines including VAT (net of discount and refunds, plus tax), measured as the claim is.</summary>
+    public decimal FeeBilled { get; set; }
+    /// <summary>Billed on the invoice lines HIS consumption records point to (each line once), including VAT; medicine lines excluded.</summary>
+    public decimal MaterialsBilled { get; set; }
+    public int MaterialItems { get; set; }
+    /// <summary>Billed on medicine-procedure invoice lines (category MEDICINE), including VAT.</summary>
+    public decimal MedicineBilled { get; set; }
+    /// <summary>The number of those medicine lines.</summary>
+    [Precise] public decimal MedicineQuantity { get; set; }
+    /// <summary>HIS INP_Transfer Duration (days) of the encounters' ward stays, shared evenly among an encounter's packages.</summary>
+    [Precise] public decimal WardDays { get; set; }
+    /// <summary>Measured staff minutes (all roles) on the package's lines and its encounters.</summary>
+    [Precise] public decimal StaffMinutes { get; set; }
+    /// <summary>The nursing part of StaffMinutes (roles ending NURSE).</summary>
+    [Precise] public decimal NurseMinutes { get; set; }
+    public decimal Claimed { get; set; }
+    public decimal Settled { get; set; }
+    public decimal Rejected { get; set; }
+}
+
+/// <summary>
+/// One doctor's part of one encounter of a package in a run, as the package's doctor table adds it up: prepared by the run so
+/// the package page reads it instead of a month of lines. A line with no doctor belongs to the encounter's doctor; ProviderId is
+/// null only for an encounter with no doctor on any package line. Shared figures (consumables, medicine, stay) are this
+/// doctor's share of the encounter's. Money is as billed and claimed, including VAT.
+/// </summary>
+public class RunPackageDoctor
+{
+    public Guid Id { get; set; }
+    public Guid RunId { get; set; }
+    public Guid PackageId { get; set; }
+    public Guid EncounterId { get; set; }
+    public Guid? ProviderId { get; set; }
+    /// <summary>Times the doctor performed the package on the encounter (own-line quantity, or billings through child lines).</summary>
+    public int Performed { get; set; }
+    public decimal FeeBilled { get; set; }
+    public decimal? DoctorShare { get; set; }
+    public decimal ConsumablesBilled { get; set; }
+    public decimal ConsumablesCovered { get; set; }
+    public decimal ConsumablesClaimed { get; set; }
+    [Precise] public decimal ConsumableItems { get; set; }
+    public decimal MedicineBilled { get; set; }
+    public decimal MedicineCovered { get; set; }
+    [Precise] public decimal MedicineCoveredQty { get; set; }
+    [Precise] public decimal MedicineLines { get; set; }
+    public decimal MedicineClaimed { get; set; }
+    public decimal Claimed { get; set; }
+    /// <summary>Claims on invoices HIS put on a claim (IsClaimed); null when the facts do not carry the flag.</summary>
+    public decimal? ClaimsReceived { get; set; }
+    public decimal Settled { get; set; }
+    public decimal Rejected { get; set; }
+    [Precise] public decimal WardDays { get; set; }
+    [Precise] public decimal StaffMinutes { get; set; }
+}
+
+/// <summary>
+/// One doctor's billed lines of one procedure on one encounter in a run, for procedures not billed as or under a package
+/// (package procedures and the child lines HIS bills under a package are RunPackageDoctor's). Prepared by the run so the
+/// doctor page reads it. Money is as billed and claimed, including VAT. Consumables and medicine are what HIS consumption
+/// records tie to these lines, valued at selling price (consumables: HIS UnitPrice; medicine: MedicinePrice × quantity).
+/// </summary>
+public class RunProcedureDoctor
+{
+    public Guid Id { get; set; }
+    public Guid RunId { get; set; }
+    public Guid ProcedureId { get; set; }
+    public Guid EncounterId { get; set; }
+    public Guid? ProviderId { get; set; }
+    [Precise] public decimal Performed { get; set; }
+    public decimal FeeBilled { get; set; }
+    public decimal Consumables { get; set; }
+    public decimal Medicine { get; set; }
+    public decimal Claimed { get; set; }
+    /// <summary>Claims on invoices HIS put on a claim (IsClaimed); null when the facts do not carry the flag.</summary>
+    public decimal? ClaimsReceived { get; set; }
+    public decimal Settled { get; set; }
+    public decimal Rejected { get; set; }
+}
+
 public class DrgCostSummary
 {
     public Guid Id { get; set; }

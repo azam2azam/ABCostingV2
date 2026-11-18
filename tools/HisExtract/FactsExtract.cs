@@ -372,7 +372,7 @@ public static class FactsExtract
             "hisUnitPrice", "hisQuantity", "discountType", "hisDiscountAmount", "waivedAmount", "waiverId", "patientShare", "companyShare",
             "taxAmount", "patientTaxAmount", "companyTaxAmount", "outlierPayment", "claimedAmount", "settledAmount", "rejectedAmount",
             "isZeroPrice", "isPackageSelected", "packageProcedureId", "packageSequenceNo", "isPackageInvoice", "billType", "isAcceptedWithDrg",
-            "hisInvoiceType", "hisMainInvoiceNo", "isChildInvoice", "doctorShare", "doctorShareType");
+            "hisInvoiceType", "hisMainInvoiceNo", "isChildInvoice", "doctorShare", "doctorShareType", "hisIsClaimed");
         var noEncounter = 0;
         var seenRev = new HashSet<string>(StringComparer.Ordinal);
         var seenSvc = new HashSet<string>(StringComparer.Ordinal);
@@ -387,7 +387,7 @@ public static class FactsExtract
             d.DiscountType, d.WaiverID, d.TaxAmount, d.PatientTaxAmount, d.CompanyTaxAmount, d.OutlierPayment,
             d.ClaimedAmount, d.SettledAmount, d.RejectedAmount, d.IsZeroPrice, d.IsPackageSelected,
             d.PackageProcedureID, d.PackageSequenceNo, m.IsPackageInvoice, m.BillType, m.IsAcceptedWithDRG, m.InvoiceType, m.MainInvoiceNo,
-            hp.IsMedicine, er.AssessmentNo, d.PrimaryDoctorShare, d.PrimaryDoctorShareType
+            hp.IsMedicine, er.AssessmentNo, d.PrimaryDoctorShare, d.PrimaryDoctorShareType, m.IsClaimed
             """;
         const string detailJoins = """
             INNER JOIN dbo.HIS_InvoiceDetail d WITH (NOLOCK)
@@ -481,7 +481,9 @@ public static class FactsExtract
                 Flag(r, "IsPackageInvoice"), HisConnection.S(r, "BillType"), Flag(r, "IsAcceptedWithDRG"),
                 HisConnection.S(r, "InvoiceType"), HisConnection.S(r, "MainInvoiceNo"), child,
                 // Doctor share as HIS holds it: type V = a value, P = a percentage of the line amount.
-                Stored(r, "PrimaryDoctorShare"), HisConnection.S(r, "PrimaryDoctorShareType").Trim().ToUpperInvariant());
+                Stored(r, "PrimaryDoctorShare"), HisConnection.S(r, "PrimaryDoctorShareType").Trim().ToUpperInvariant(),
+                // The invoice was put on a claim (HIS claim reports count only these).
+                Flag(r, "IsClaimed"));
         });
         pack.Note($"Billing encounter-driven: {seenRev.Count} revenue lines ({outsideWindow} with InvoiceDate outside the pack window — kept for claims). No encounter: {noEncounter}.");
         await RefundsAsync(db, s, c, pack);

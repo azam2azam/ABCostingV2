@@ -171,6 +171,8 @@ public class RevenueTransaction
     public decimal? ClaimedAmount { get; set; }
     public decimal? SettledAmount { get; set; }
     public decimal? RejectedAmount { get; set; }
+    /// <summary>HIS_InvoiceMain.IsClaimed: the invoice was put on a claim to the payer. Null for facts extracted before it was added.</summary>
+    public bool? HisIsClaimed { get; set; }
     /// <summary>HIS_InvoiceDetail.PrimaryDoctorShare: a value (type V) or a percentage of the line amount (type P).</summary>
     [Precise] public decimal? DoctorShare { get; set; }
     /// <summary>V (value) or P (percentage), as HIS holds it.</summary>

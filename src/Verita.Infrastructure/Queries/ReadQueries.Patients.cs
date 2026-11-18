@@ -64,6 +64,9 @@ public sealed partial class ReadQueries
                                    join pk in db.Packages.AsNoTracking() on new { pr.HospitalId, pr.Code } equals new { pk.HospitalId, pk.Code }
                                    where pk.Id == billedPkg
                                    select es.EncounterId;
+            // An inpatient package is billed as child lines that name it in PackageProcedureId, with no line of its own.
+            billedEncounters = billedEncounters.Concat(CountedRevenue(s)
+                .Where(r => db.Packages.Any(pk => pk.Id == billedPkg && pk.Code == r.PackageProcedureId)).Select(r => r.EncounterId));
             query = query.Where(x => billedEncounters.Contains(x.e.Id));
         }
         if (q.PayerId is { } pay) query = query.Where(x => x.e.PayerId == pay);

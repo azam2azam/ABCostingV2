@@ -355,9 +355,11 @@ public static class ConsumptionExtract
         var otProcs = await OtProceduresAsync(db, s);
         await db.QueryAsync($"""
             WITH fl AS (
-                SELECT f.EncounterNo, f.Barcode, MIN(f.ItemId) AS ItemId FROM #ip i INNER JOIN dbo.HIS_FloorConsumption f WITH (NOLOCK)
+                -- HIS_FloorConsumption.Barcode is bigint and INP_ImplantDetail.Barcode varchar: compare as text, or a
+                -- non-numeric implant barcode fails the whole query converting varchar to bigint.
+                SELECT f.EncounterNo, CAST(f.Barcode AS varchar(50)) AS Barcode, MIN(f.ItemId) AS ItemId FROM #ip i INNER JOIN dbo.HIS_FloorConsumption f WITH (NOLOCK)
                   ON f.SetupID=@SetupId AND f.ProjectID=@ProjectId AND f.EncounterType=2 AND f.EncounterNo=i.No
-                WHERE ISNULL(f.Barcode, '') <> '' GROUP BY f.EncounterNo, f.Barcode
+                WHERE ISNULL(f.Barcode, 0) <> 0 GROUP BY f.EncounterNo, CAST(f.Barcode AS varchar(50))
             ), bb AS (
                 SELECT b.ItemID, MIN(b.OracleItemCode) AS OracleItemCode FROM dbo.BBraun_ItemIntegrationMapping b WITH (NOLOCK)
                 WHERE b.SetupID=@SetupId AND b.ProjectID=@ProjectId GROUP BY b.ItemID

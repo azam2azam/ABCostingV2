@@ -89,10 +89,9 @@ public static class Security
         ]),
         new("Catalogue", [
             new("departments", "Departments", "costing.view", "The hospital's departments from the catalogue. When a calculation has been run for the period, cases, revenue and cost are shown too."),
+            new("packages", "Packages", "costing.view", "Bundled episodes: cases, amount billed, materials, medicine, ward and staff time, and claims against the contracted price."),
             new("doctors", "Doctors", "costing.view", "The hospital's doctors from the catalogue, with their home department and HIS clinics. When a calculation has been run for the period, cases, revenue and cost are shown too."),
             new("cost-centres", "Cost Centres", "masterdata.view", "The financial units money lands in, their step-down sequence and their closing balances."),
-            new("packages", "Packages", "costing.view", "Bundled episodes: cost, revenue, variance and margin against the contracted price."),
-            new("packages-v2", "Packages V2", "costing.view", "A copy of Packages, to develop a new version of the screen alongside the current one."),
             new("procedures", "Procedure/Activity", "costing.view", "Standard and actual cost per procedure/activity, fully decomposed into its cost components."),
             new("resources", "Resources", "masterdata.view", "Everything that costs money and is consumed, with effective-dated rates and capacity models."),
             new("patient-encounters", "Patient Encounters", "patient.view", "Patient encounters and what was invoiced for each, with the source reference of every line."),

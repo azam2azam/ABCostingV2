@@ -35,6 +35,9 @@ public static class Probe
         await Row(db, s, "HIS_RuleCostCenterNew");
         await Row(db, s, "LAB_TestMain");
         await Row(db, s, "LAB_Division");
+        // Medicine prices for 28_MedicinePrice.csv: the HIS copy here; the pharmacy database's copy is what the extract reads first.
+        await Row(db, s, "PHR_Medicine", label: "PHR_Medicine (HIS database)");
+        await Row(db, s, "PHR_Medicine", extra: "AND ISNULL(StdSellingPrice,0) > 0", label: "PHR_Medicine  with StdSellingPrice");
 
         if (s.From is { } from && s.To is { } to)
         {
@@ -87,6 +90,15 @@ public static class Probe
             await PeriodRow(db, s, "HIS_FloorConsumption", string.Format(period, "CreatedOn"));
             await PeriodRow(db, s, "INP_PatientConsumedItem", string.Format(period, "CreatedOn"));
             await PeriodRow(db, s, "HIS_ProgNoteMedicine", string.Format(period, "StartDate"));
+            // Inpatient medication: the extract reads INP_ProgNoteMedicineOrder, which can be empty on a site that orders
+            // elsewhere. These show which table holds it, to point the IP medicine extract at.
+            await PeriodRow(db, s, "INP_ProgNoteMedicineOrder", string.Format(period, "OrderDate"));
+            await PeriodRow(db, s, "INP_MedicineOrder", string.Format(period, "OrderDatetime"));
+            await PeriodRow(db, s, "INP_MedDispensationLogs", string.Format(period, "DispenseTime"));
+            await PeriodRow(db, s, "HIS_MedicationOrderDetails", string.Format(period, "StartDatetime"));
+            await PeriodRow(db, s, "INP_DrugTreatment", string.Format(period, "CreatedOn"));
+            await PeriodRow(db, s, "HIS_ClaimMedicine", string.Format(period, "CreatedOn"));
+            await PeriodRow(db, s, "INP_ImplantDetail", string.Format(period, "CreatedOn"));
         }
         else
         {
