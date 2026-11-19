@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Text;
 using HisExtract;
 using Microsoft.EntityFrameworkCore;
@@ -9,12 +10,12 @@ namespace Verita.HisSync;
 /// <summary>
 /// Syncs the fact dates queued on the HIS Sync screen, oldest first, straight into VERITA (no parking).
 /// Each pass does one small unit per hospital: list a day's encounters, sync one batch of them, or write the
-/// day's own refunds. Progress lives in the database, so a recycle or crash only repeats the unit in hand.
+/// day's own refunds. Once a day is listed, the next pass only reads that day's next pending batch and
+/// continues. A recycle or crash repeats the batch in hand.
 /// </summary>
 public sealed class FactsWorker(SyncStore store, PackRunner packs, ILogger<FactsWorker> log) : BackgroundService
 {
     private const string Kind = "FACTS";
-    private static readonly string[] Finished = ["DONE", "DONE_WITH_ERRORS", "FAILED"];
     private static readonly TimeSpan CacheLife = TimeSpan.FromHours(6);
     private readonly Dictionary<Guid, (DateTime At, Dictionary<string, object> Values)> _caches = [];
 
@@ -78,13 +79,17 @@ public sealed class FactsWorker(SyncStore store, PackRunner packs, ILogger<Facts
             return false;
         }
 
-        // Facts point at the catalogue's procedures, departments and doctors.
-        if (!await db.Procedures.AnyAsync(p => p.HospitalId == h.Id, ct))
-            return await PausedAsync(h, range, "Waiting for the catalogue: import or apply the hospital's catalogue first.", ct);
-        if (await db.HisSyncCatalogueChanges.AnyAsync(c => c.HospitalId == h.Id && c.Status == "APPLYING", ct))
-            return await PausedAsync(h, range, "Waiting for the first catalogue to finish applying (see the catalogue worker).", ct);
-        if (await db.HisSyncCatalogueChanges.AnyAsync(c => c.HospitalId == h.Id && c.Status == "PENDING" && c.Created > 0, ct))
-            return await PausedAsync(h, range, "Waiting for parked catalogue changes: apply or discard them on HIS Sync. New catalogue rows would otherwise reject facts.", ct);
+        // The batch cursor is the day's own rows. A day already past its list does not re-check the
+        // catalogue, procedures, or the other days — the next pending batch is the only resume point.
+        var open = await db.HisSyncDays
+            .Where(d => d.RangeId == range.Id && d.Status != "DONE" && d.Status != "DONE_WITH_ERRORS" && d.Status != "FAILED")
+            .OrderBy(d => d.Date)
+            .FirstOrDefaultAsync(ct);
+        if (open is { Status: not "PENDING" })
+            return await RunDayAsync(db, h, range, open, ct);
+
+        if (await CatalogueBlockedAsync(db, h, ct) is { } why)
+            return await PausedAsync(h, range, why, ct);
 
         if (range.Status == "QUEUED")
         {
@@ -94,35 +99,56 @@ public sealed class FactsWorker(SyncStore store, PackRunner packs, ILogger<Facts
             await store.LogAsync(h.Id, Kind, "INFO", $"Facts sync started for {Dates(range)}.", ct: ct);
         }
 
-        var days = await db.HisSyncDays.Where(d => d.RangeId == range.Id).ToListAsync(ct);
-        var done = days.Where(d => Finished.Contains(d.Status)).Select(d => d.Date).ToHashSet();
-        DateOnly? next = null;
-        for (var d = range.FromDate; d <= range.ToDate; d = d.AddDays(1))
-            if (!done.Contains(d)) { next = d; break; }
-
-        if (next is null)
+        if (open is null)
         {
-            var errors = days.Count(d => d.Status != "DONE");
-            range.Status = errors > 0 ? "DONE_WITH_ERRORS" : "DONE";
-            range.FinishedAt = DateTime.UtcNow;
-            range.DaysDone = days.Count;
-            range.Error = errors > 0 ? $"{errors} day{(errors == 1 ? "" : "s")} synced with errors." : null;
-            await db.SaveChangesAsync(ct);
-            await store.LogAsync(h.Id, Kind, errors > 0 ? "WARN" : "INFO",
-                errors > 0 ? $"Facts {Dates(range)} finished: {days.Count - errors} day(s) synced, {errors} with errors." : $"Facts {Dates(range)} synced.", ct: ct);
-            return true;
-        }
-        if (next.Value >= store.Today)
-            return await PausedAsync(h, range, $"{next:yyyy-MM-dd} is today or later and is not synced yet.", ct);
+            var done = await db.HisSyncDays
+                .Where(d => d.RangeId == range.Id && (d.Status == "DONE" || d.Status == "DONE_WITH_ERRORS" || d.Status == "FAILED"))
+                .Select(d => d.Date).ToListAsync(ct);
+            var doneSet = done.ToHashSet();
+            DateOnly? next = null;
+            for (var d = range.FromDate; d <= range.ToDate; d = d.AddDays(1))
+                if (!doneSet.Contains(d)) { next = d; break; }
 
-        var day = days.FirstOrDefault(d => d.Date == next.Value);
-        if (day is null)
-        {
-            day = new HisSyncDay { Id = Guid.NewGuid(), HospitalId = h.Id, RangeId = range.Id, Date = next.Value };
-            db.HisSyncDays.Add(day);
+            if (next is null)
+            {
+                var total = await db.HisSyncDays.CountAsync(d => d.RangeId == range.Id, ct);
+                var errors = await db.HisSyncDays.CountAsync(d => d.RangeId == range.Id && d.Status != "DONE", ct);
+                range.Status = errors > 0 ? "DONE_WITH_ERRORS" : "DONE";
+                range.FinishedAt = DateTime.UtcNow;
+                range.DaysDone = total;
+                range.Error = errors > 0 ? $"{errors} day{(errors == 1 ? "" : "s")} synced with errors." : null;
+                await db.SaveChangesAsync(ct);
+                await store.LogAsync(h.Id, Kind, errors > 0 ? "WARN" : "INFO",
+                    errors > 0 ? $"Facts {Dates(range)} finished: {total - errors} day(s) synced, {errors} with errors." : $"Facts {Dates(range)} synced.", ct: ct);
+                return true;
+            }
+            if (next.Value >= store.Today)
+                return await PausedAsync(h, range, $"{next:yyyy-MM-dd} is today or later and is not synced yet.", ct);
+
+            open = new HisSyncDay { Id = Guid.NewGuid(), HospitalId = h.Id, RangeId = range.Id, Date = next.Value };
+            db.HisSyncDays.Add(open);
             await db.SaveChangesAsync(ct);
         }
+        else if (open.Date >= store.Today)
+            return await PausedAsync(h, range, $"{open.Date:yyyy-MM-dd} is today or later and is not synced yet.", ct);
 
+        return await RunDayAsync(db, h, range, open, ct);
+    }
+
+    /// <summary>Catalogue gates, once per day before it is listed. Not between batches.</summary>
+    private static async Task<string?> CatalogueBlockedAsync(Verita.Infrastructure.Data.VeritaDbContext db, SyncHospital h, CancellationToken ct)
+    {
+        if (!await db.Procedures.AnyAsync(p => p.HospitalId == h.Id, ct))
+            return "Waiting for the catalogue: import or apply the hospital's catalogue first.";
+        if (await db.HisSyncCatalogueChanges.AnyAsync(c => c.HospitalId == h.Id && c.Status == "APPLYING", ct))
+            return "Waiting for the first catalogue to finish applying (see the catalogue worker).";
+        if (await db.HisSyncCatalogueChanges.AnyAsync(c => c.HospitalId == h.Id && c.Status == "PENDING" && c.Created > 0, ct))
+            return "Waiting for parked catalogue changes: apply or discard them on HIS Sync. New catalogue rows would otherwise reject facts.";
+        return null;
+    }
+
+    private async Task<bool> RunDayAsync(Verita.Infrastructure.Data.VeritaDbContext db, SyncHospital h, HisSyncRange range, HisSyncDay day, CancellationToken ct)
+    {
         try
         {
             return await store.WithHeartbeatAsync(h.Id, Kind, () =>
@@ -142,11 +168,16 @@ public sealed class FactsWorker(SyncStore store, PackRunner packs, ILogger<Facts
         await Progress(h, range, day, $"Listing the encounters of {day.Date:yyyy-MM-dd}", ct);
         day.StartedAt ??= DateTime.UtcNow;
         FactsManifest manifest;
+        var listSw = Stopwatch.StartNew();
         try
         {
             var s = Day(h, day.Date);
             await using var his = await SyncStore.OpenHisAsync(s);
+            his.SlowQuery = (sec, rows, sql) => s.SlowSteps.Add($"HIS {sec:N1}s, {rows:N0} rows — {sql}");
             manifest = await SyncStore.StageAsync("Reading the day's encounters from HIS", () => FactsManifest.BuildAsync(his, s));
+            if (s.SlowSteps.Count > 0)
+                await store.LogAsync(h.Id, Kind, "INFO", $"{day.Date:yyyy-MM-dd}: listing encounters hit {s.SlowSteps.Count} slow HIS quer{(s.SlowSteps.Count == 1 ? "y" : "ies")}.",
+                    string.Join("\n", s.SlowSteps.Take(8)), day.Date, ct);
         }
         catch (Exception ex) when (ex is not OperationCanceledException and not HisUnavailableException)
         {
@@ -185,7 +216,7 @@ public sealed class FactsWorker(SyncStore store, PackRunner packs, ILogger<Facts
         day.Error = null;
         await db.SaveChangesAsync(ct);
         await store.LogAsync(h.Id, Kind, "INFO",
-            $"{day.Date:yyyy-MM-dd}: {rows.Count} encounters ({rows.Count(r => r.Type == "IP")} IP, {rows.Count(r => r.Type == "OP")} OP, {rows.Count(r => r.Type == "ER")} ER) in {day.Batches} batch{(day.Batches == 1 ? "" : "es")}.",
+            $"{day.Date:yyyy-MM-dd}: {rows.Count} encounters ({rows.Count(r => r.Type == "IP")} IP, {rows.Count(r => r.Type == "OP")} OP, {rows.Count(r => r.Type == "ER")} ER) in {day.Batches} batch{(day.Batches == 1 ? "" : "es")}, listed in {listSw.Elapsed.TotalSeconds:N1}s.",
             factDate: day.Date, ct: ct);
         return true;
     }
@@ -227,6 +258,7 @@ public sealed class FactsWorker(SyncStore store, PackRunner packs, ILogger<Facts
             var s = Day(h, day.Date);
             s.Batch = batch;
             s.Part = FactsPart.Batch;
+            s.OnProgress = step => Progress(h, range, day, $"{day.Date:yyyy-MM-dd}: batch {batchesDone + 1} of {day.Batches} — {step}", ct, batchesDone);
             var results = await ExtractAndImportAsync(h, s, $"batch {batchNo}", ct);
             foreach (var r in rows) { r.Status = "SYNCED"; r.SyncedAt = DateTime.UtcNow; r.Error = null; }
             day.Synced += rows.Count;
@@ -292,6 +324,7 @@ public sealed class FactsWorker(SyncStore store, PackRunner packs, ILogger<Facts
             var s = Day(h, day.Date);
             s.Batch = new FactBatch([], [], [], links);
             s.Part = FactsPart.DayRefunds;
+            s.OnProgress = step => Progress(h, range, day, $"{day.Date:yyyy-MM-dd}: refunds — {step}", ct, day.Batches);
             var results = await ExtractAndImportAsync(h, s, "refunds", ct);
             day.RefundsDone = true;
             day.Attempts = 0;
@@ -320,14 +353,32 @@ public sealed class FactsWorker(SyncStore store, PackRunner packs, ILogger<Facts
     private async Task<ImportResult[]> ExtractAndImportAsync(SyncHospital h, Settings s, string what, CancellationToken ct)
     {
         UseCache(h, s);
+        s.SlowSteps.Clear();
+        var sw = Stopwatch.StartNew();
         Pack pack;
         await using (var his = await SyncStore.OpenHisAsync(s))
             pack = await SyncStore.StageAsync("Reading HIS", () => packs.ExtractAsync(s, $"{s.PackPrefix}-{s.From:yyyy-MM-dd}-facts.zip",
                 PackRunner.Readme(s, "facts", $"Day {s.From:yyyy-MM-dd}, {what}"), p => FactsExtract.RunAsync(his, s, p), ct));
+        var readSec = sw.Elapsed.TotalSeconds;
         KeepCache(h, s);
         // A skipped step would leave rows missing for good (the sync only moves forward): fail and retry instead.
         if (pack.Warnings.Count > 0) throw new InvalidOperationException("HIS steps failed: " + string.Join("; ", pack.Warnings));
-        return await SyncStore.StageAsync("Importing into VERITA", () => packs.ImportAsync(pack, h.Code, dryRun: false, ct));
+        if (s.OnProgress is not null) await s.OnProgress("Importing into VERITA");
+        sw.Restart();
+        var results = await SyncStore.StageAsync("Importing into VERITA", () => packs.ImportAsync(pack, h.Code, dryRun: false, ct));
+        var importSec = sw.Elapsed.TotalSeconds;
+        var detail = new StringBuilder();
+        foreach (var r in results)
+            detail.Append($"{r.Entity}: {r.Rows} rows, {r.Created} new, {r.Updated} updated, {r.Unchanged} unchanged, {r.Rejected} rejected. ");
+        if (s.SlowSteps.Count > 0)
+        {
+            detail.AppendLine();
+            detail.Append(string.Join("\n", s.SlowSteps.Take(8)));
+        }
+        await store.LogAsync(h.Id, Kind, "INFO",
+            $"{s.From:yyyy-MM-dd} {what}: HIS read {readSec:N1}s, VERITA import {importSec:N1}s, {results.Sum(r => r.Created)} new / {results.Sum(r => r.Updated)} updated.",
+            detail.ToString().Trim(), s.From is { } from ? DateOnly.FromDateTime(from) : null, ct);
+        return results;
     }
 
     private Settings Day(SyncHospital h, DateOnly date)

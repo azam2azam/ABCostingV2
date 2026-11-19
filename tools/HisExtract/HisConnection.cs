@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using Microsoft.Data.SqlClient;
 
 namespace HisExtract;
@@ -30,6 +31,15 @@ public sealed class HisConnection : IAsyncDisposable
     /// <summary>The last query sent, for the progress log when a step fails or hangs.</summary>
     public static string? LastSql { get; private set; }
 
+    /// <summary>
+    /// Set for one extract. Called when a query takes at least 3 seconds: seconds, row count, a one-line excerpt of the SQL.
+    /// Isolation level is set once in <see cref="OpenAsync"/>; it is not repeated before every command.
+    /// </summary>
+    public Action<double, int, string>? SlowQuery { get; set; }
+
+    /// <summary>Encounter key tables already built on this connection (#ip / #op / #er). A second call in the same extract reuses them.</summary>
+    public (int Ip, int Op, int Er)? BuiltSets { get; set; }
+
     public SqlCommand Cmd(string sql)
     {
         LastSql = sql;
@@ -48,7 +58,6 @@ public sealed class HisConnection : IAsyncDisposable
         var sql = byProject
             ? $"SELECT COUNT_BIG(1) FROM dbo.{table} WITH (NOLOCK) WHERE SetupID = @SetupId AND ProjectID = @ProjectId {extraWhere}"
             : $"SELECT COUNT_BIG(1) FROM dbo.{table} WITH (NOLOCK) WHERE SetupID = @SetupId {extraWhere}";
-        await DirtyReadAsync();
         await using var cmd = Cmd(sql);
         s.BindTenant(cmd);
         var v = await cmd.ExecuteScalarAsync();
@@ -57,36 +66,51 @@ public sealed class HisConnection : IAsyncDisposable
 
     public async Task<int> ExecAsync(string sql, Action<SqlCommand> bind)
     {
-        await DirtyReadAsync();
         await using var cmd = Cmd(sql);
         bind(cmd);
-        return await cmd.ExecuteNonQueryAsync();
+        var sw = Stopwatch.StartNew();
+        var n = await cmd.ExecuteNonQueryAsync();
+        Report(sql, sw, n);
+        return n;
     }
 
     public async Task ScalarAsync(string sql, Action<SqlCommand> bind, Action<object?> use)
     {
-        await DirtyReadAsync();
         await using var cmd = Cmd(sql);
         bind(cmd);
+        var sw = Stopwatch.StartNew();
         use(await cmd.ExecuteScalarAsync());
+        Report(sql, sw, 1);
     }
 
     public async Task QueryAsync(string sql, Action<SqlCommand> bind, Action<SqlDataReader> each)
     {
-        await DirtyReadAsync();
         await using var cmd = Cmd(sql);
         bind(cmd);
+        var sw = Stopwatch.StartNew();
+        var rows = 0;
         await using var r = await cmd.ExecuteReaderAsync();
-        while (await r.ReadAsync()) each(r);
+        while (await r.ReadAsync()) { rows++; each(r); }
+        Report(sql, sw, rows);
     }
 
     public async Task QueryAsync(string sql, Action<SqlCommand> bind, Func<SqlDataReader, Task> each)
     {
-        await DirtyReadAsync();
         await using var cmd = Cmd(sql);
         bind(cmd);
+        var sw = Stopwatch.StartNew();
+        var rows = 0;
         await using var r = await cmd.ExecuteReaderAsync();
-        while (await r.ReadAsync()) await each(r);
+        while (await r.ReadAsync()) { rows++; await each(r); }
+        Report(sql, sw, rows);
+    }
+
+    private void Report(string sql, Stopwatch sw, int rows)
+    {
+        if (sw.Elapsed.TotalSeconds < 3 || SlowQuery is null) return;
+        var head = sql.Trim().Replace('\r', ' ').Replace('\n', ' ');
+        if (head.Length > 160) head = head[..160] + "…";
+        SlowQuery(sw.Elapsed.TotalSeconds, rows, head);
     }
 
     public static string S(SqlDataReader r, string col)

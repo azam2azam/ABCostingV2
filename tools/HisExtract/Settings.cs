@@ -39,6 +39,20 @@ public sealed class Settings
     /// <summary>Lookups that do not change between batches of one day (item names), kept by the sync worker.</summary>
     public Dictionary<string, object> Cache { get; } = new(StringComparer.Ordinal);
 
+    /// <summary>Sync worker hook: the current phase, so a long HIS read is not a single frozen step name.</summary>
+    public Func<string, Task>? OnProgress { get; set; }
+
+    /// <summary>HIS statements that took at least 3 seconds during the extract just run. Not copied between batches.</summary>
+    public List<string> SlowSteps { get; } = new();
+
+    public async Task ReportAsync(string step)
+    {
+        if (OnProgress is null) return;
+        try { await OnProgress(step); }
+        catch (OperationCanceledException) { throw; }
+        catch { /* a progress write must not fail the extract */ }
+    }
+
     /// <summary>HIS tenant token used in row codes. Not a VERITA Hospital.Code — import maps that.</summary>
     public string H => $"{SetupId}-{ProjectId}";
 

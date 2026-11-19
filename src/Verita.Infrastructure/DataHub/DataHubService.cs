@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Globalization;
 using System.Reflection;
 using System.Text;
@@ -120,25 +121,90 @@ public sealed class DataHubService(IDbContextFactory<VeritaDbContext> factory, I
 
     private sealed record RefTarget(Guid Id, string? HospitalCode);
 
-    private static async Task<Dictionary<string, RefTarget>> CodesAsync(VeritaDbContext db, Type target, string key, Dictionary<Guid, string> hospitals, CancellationToken ct)
+    private static async Task<Dictionary<string, RefTarget>> CodesAsync(VeritaDbContext db, Type target, string key, Dictionary<Guid, string> hospitals, CancellationToken ct,
+        IReadOnlyCollection<string>? wanted = null, Guid? onlyHospital = null)
     {
         var method = typeof(DataHubService).GetMethod(nameof(CodesOf), BindingFlags.NonPublic | BindingFlags.Static)!.MakeGenericMethod(target);
-        return await (Task<Dictionary<string, RefTarget>>)method.Invoke(null, [db, key, hospitals, ct])!;
+        return await (Task<Dictionary<string, RefTarget>>)method.Invoke(null, [db, key, hospitals, ct, wanted, onlyHospital])!;
     }
 
-    private static async Task<Dictionary<string, RefTarget>> CodesOf<T>(VeritaDbContext db, string key, Dictionary<Guid, string> hospitals, CancellationToken ct) where T : class
+    /// <summary>
+    /// Codes the file actually names, plus the local and hospital-prefixed forms a row might be stored under.
+    /// An empty list means the file names none: the caller skips the table instead of reading it all.
+    /// </summary>
+    private static List<string> WantedCodes(IReadOnlyList<Dictionary<string, string>> rows, string column, string? hospitalCode, string? fallback)
     {
+        var set = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var row in rows)
+        {
+            var v = row.GetValueOrDefault(column)?.Trim();
+            if (string.IsNullOrEmpty(v)) continue;
+            set.Add(v);
+            var local = HisImportPack.LocalOrgCode(v);
+            if (local.Length > 0) set.Add(local);
+            if (!string.IsNullOrEmpty(hospitalCode))
+            {
+                set.Add($"{hospitalCode}.{v}");
+                if (local.Length > 0) set.Add($"{hospitalCode}.{local}");
+            }
+        }
+        if (!string.IsNullOrEmpty(fallback)) set.Add(fallback);
+        return set.ToList();
+    }
+
+    /// <summary>Large hospital-scoped catalogues. A facts file only needs its own hospital's codes, sought by the unique key.</summary>
+    private static bool HospitalScopedLookup(Type target) =>
+        target == typeof(Procedure) || target == typeof(Package) || target == typeof(Patient) || target == typeof(Encounter)
+        || target == typeof(CostCenter) || target == typeof(MedicinePrice) || target == typeof(CostingVersion);
+
+    private static async Task<Dictionary<string, RefTarget>> CodesOf<T>(VeritaDbContext db, string key, Dictionary<Guid, string> hospitals, CancellationToken ct,
+        IReadOnlyCollection<string>? wanted = null, Guid? onlyHospital = null) where T : class
+    {
+        if (wanted is not null && wanted.Count == 0)
+            return new Dictionary<string, RefTarget>(StringComparer.OrdinalIgnoreCase);
+
         var hospitalProp = typeof(T).GetProperty("HospitalId");
-        // A shared row has no HospitalId.
-        var rows = hospitalProp?.PropertyType == typeof(Guid?)
-            ? (await db.Set<T>().IgnoreQueryFilters().AsNoTracking().Select(e => new { Id = EF.Property<Guid>(e, "Id"), K = EF.Property<string>(e, key), H = EF.Property<Guid?>(e, "HospitalId") }).ToListAsync(ct))
-                .Select(x => new { x.Id, x.K, H = x.H ?? Guid.Empty }).ToList()
-            : hospitalProp is not null
-            ? await db.Set<T>().IgnoreQueryFilters().AsNoTracking().Select(e => new { Id = EF.Property<Guid>(e, "Id"), K = EF.Property<string>(e, key), H = EF.Property<Guid>(e, "HospitalId") }).ToListAsync(ct)
-            : (await db.Set<T>().IgnoreQueryFilters().AsNoTracking().Select(e => new { Id = EF.Property<Guid>(e, "Id"), K = EF.Property<string>(e, key) }).ToListAsync(ct))
-                .Select(x => new { x.Id, x.K, H = Guid.Empty }).ToList();
+        IQueryable<T> Base()
+        {
+            IQueryable<T> q = db.Set<T>().IgnoreQueryFilters().AsNoTracking();
+            if (onlyHospital is Guid hid && hospitalProp is not null)
+            {
+                if (hospitalProp.PropertyType == typeof(Guid?))
+                    q = q.Where(e => EF.Property<Guid?>(e, "HospitalId") == hid || EF.Property<Guid?>(e, "HospitalId") == null);
+                else if (hospitalProp.PropertyType == typeof(Guid))
+                    q = q.Where(e => EF.Property<Guid>(e, "HospitalId") == hid);
+            }
+            return q;
+        }
+
+        var projected = new List<(Guid Id, string K, Guid H)>();
+        async Task Pull(IQueryable<T> q)
+        {
+            // A shared row has no HospitalId.
+            if (hospitalProp?.PropertyType == typeof(Guid?))
+                projected.AddRange((await q.Select(e => new { Id = EF.Property<Guid>(e, "Id"), K = EF.Property<string>(e, key), H = EF.Property<Guid?>(e, "HospitalId") }).ToListAsync(ct))
+                    .Select(x => (x.Id, x.K, x.H ?? Guid.Empty)));
+            else if (hospitalProp is not null)
+                projected.AddRange((await q.Select(e => new { Id = EF.Property<Guid>(e, "Id"), K = EF.Property<string>(e, key), H = EF.Property<Guid>(e, "HospitalId") }).ToListAsync(ct))
+                    .Select(x => (x.Id, x.K, x.H)));
+            else
+                projected.AddRange((await q.Select(e => new { Id = EF.Property<Guid>(e, "Id"), K = EF.Property<string>(e, key) }).ToListAsync(ct))
+                    .Select(x => (x.Id, x.K, Guid.Empty)));
+        }
+
+        if (wanted is null) await Pull(Base());
+        else
+        {
+            // A few thousand codes per facts file. Chunk so the IN list stays a seek, not a plan that spills.
+            foreach (var chunk in wanted.Distinct(StringComparer.OrdinalIgnoreCase).Chunk(2000))
+            {
+                var keys = chunk.ToList();
+                await Pull(Base().Where(e => keys.Contains(EF.Property<string>(e, key))));
+            }
+        }
+
         var dict = new Dictionary<string, RefTarget>(StringComparer.OrdinalIgnoreCase);
-        foreach (var r in rows)
+        foreach (var r in projected)
         {
             var hc = r.H == Guid.Empty ? null : hospitals.GetValueOrDefault(r.H);
             var target = new RefTarget(r.Id, hc);
@@ -153,7 +219,7 @@ public sealed class DataHubService(IDbContextFactory<VeritaDbContext> factory, I
         // Encounter numbers, MRNs, costing version, period, procedure and package codes repeat across hospitals, so a bare one only resolves within a hospital.
         if (typeof(T) == typeof(Encounter) || typeof(T) == typeof(Patient) || typeof(T) == typeof(CostingVersion) || typeof(T) == typeof(Period)
             || typeof(T) == typeof(Procedure) || typeof(T) == typeof(Package))
-            foreach (var repeated in rows.GroupBy(r => r.K, StringComparer.OrdinalIgnoreCase).Where(g => g.Count() > 1))
+            foreach (var repeated in projected.GroupBy(r => r.K, StringComparer.OrdinalIgnoreCase).Where(g => g.Count() > 1))
                 dict.Remove(repeated.Key);
         return dict;
     }
@@ -196,15 +262,27 @@ public sealed class DataHubService(IDbContextFactory<VeritaDbContext> factory, I
     }
 
     /// <summary>
-    /// Consumption, staff time and transfers can arrive before their encounter (a daily pack, an encounter not billed yet).
-    /// They keep the HIS encounter number and are linked here once the encounter exists.
+    /// Links consumption, staff and transfers that arrived before their encounter.
+    /// Scoped to this file's encounter numbers (indexed by hospital + HisEncounterNo). A full-table pass
+    /// on every batch only repeated work already done for other encounters.
     /// </summary>
-    private async Task LinkHisEncountersAsync(CancellationToken ct)
+    private async Task LinkHisEncountersAsync(Guid? hospitalId, IReadOnlyCollection<string> encounterNos, CancellationToken ct)
     {
+        var nos = encounterNos.Where(n => !string.IsNullOrWhiteSpace(n)).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+        if (nos.Length == 0 || hospitalId is not Guid hid) return;
         await using var db = await Db(ct);
-        foreach (var table in new[] { "ConsumptionItem", "StaffTime", "EncounterTransfer", "ClaimLine", "SettlementLine", "NphiesClaimLine" })
-            await db.Database.ExecuteSqlRawAsync(
-                $"UPDATE t SET EncounterId = e.Id FROM [{table}] t JOIN [Encounter] e ON e.HospitalId = t.HospitalId AND e.EncounterNo = t.HisEncounterNo WHERE t.EncounterId IS NULL", ct);
+        foreach (var chunk in nos.Chunk(1000))
+        {
+            var json = JsonSerializer.Serialize(chunk);
+            foreach (var table in new[] { "ConsumptionItem", "StaffTime", "EncounterTransfer", "ClaimLine", "SettlementLine", "NphiesClaimLine" })
+                await db.Database.ExecuteSqlRawAsync($$"""
+                    UPDATE t SET EncounterId = e.Id
+                    FROM [{{table}}] t
+                    JOIN [Encounter] e ON e.HospitalId = t.HospitalId AND e.EncounterNo = t.HisEncounterNo
+                    JOIN OPENJSON({0}) WITH (No nvarchar(120) '$') m ON m.No = t.HisEncounterNo
+                    WHERE t.EncounterId IS NULL AND t.HospitalId = {1}
+                    """, [json, hid], ct);
+        }
     }
 
     /// <summary>Links every payer to its insurer and administrator, creating the ones not seen before. Only rows that differ are written.</summary>
@@ -256,13 +334,29 @@ public sealed class DataHubService(IDbContextFactory<VeritaDbContext> factory, I
     }
 
     /// <summary>
-    /// A package item names the child invoice line that delivered it. Marks those lines whichever file arrives first,
-    /// so packs without the InvoiceType column are handled too.
+    /// Marks child-invoice service and revenue lines for the encounters in this file.
+    /// The previous statement scanned EncounterService and RevenueTransaction on every batch; those tables
+    /// are indexed by EncounterId, so the same rule now seeks just these encounters.
     /// </summary>
-    private async Task MarkChildInvoiceLinesAsync(CancellationToken ct)
+    private async Task MarkChildInvoiceLinesAsync(Guid? hospitalId, IReadOnlyCollection<Guid> encounterIds, CancellationToken ct)
     {
+        if (encounterIds.Count == 0 || hospitalId is not Guid hid) return;
         await using var db = await Db(ct);
-        await db.Database.ExecuteSqlRawAsync(OpenPeriods.MarkChildInvoiceLinesSql, ct);
+        foreach (var chunk in encounterIds.Distinct().Chunk(1000))
+        {
+            var json = JsonSerializer.Serialize(chunk);
+            foreach (var (table, prefix) in new[] { ("EncounterService", "INV"), ("RevenueTransaction", "REV") })
+                await db.Database.ExecuteSqlRawAsync($$"""
+                    UPDATE t SET IsChildInvoice = 1
+                    FROM [{{table}}] t
+                    JOIN [Encounter] e ON e.Id = t.EncounterId
+                    JOIN OPENJSON({0}) WITH (Id uniqueidentifier '$') m ON m.Id = t.EncounterId
+                    JOIN [InvoicePackageItem] i ON i.HospitalId = e.HospitalId
+                     AND t.SourceRef = CONCAT('{{prefix}}-', i.TransactionType, '-', i.ChildInvoiceNo, '-', i.ChildInvoiceLineItemNo)
+                    WHERE t.IsChildInvoice = 0 AND e.HospitalId = {1}
+                      AND i.ChildInvoiceNo IS NOT NULL AND i.ChildInvoiceNo NOT IN ('', '0')
+                    """, [json, hid], ct);
+        }
     }
 
     /// <summary>Older packs loaded refunds as negative revenue. Each one saved as a refund line stops counting as revenue.</summary>
@@ -280,11 +374,65 @@ public sealed class DataHubService(IDbContextFactory<VeritaDbContext> factory, I
             """, [json], ct);
     }
 
-    private static IQueryable<T> CandidatesOf<T>(VeritaDbContext db, string keyProperty, IReadOnlyList<Dictionary<string, string>> rows) where T : class
+    /// <summary>
+    /// Rows this file might update. Service and revenue lines are sought by their encounters (EncounterId is indexed;
+    /// SourceRef is not). Lines keyed by hospital + sourceRef use that unique index. Catalogue tables still load whole.
+    /// </summary>
+    private static async Task<Dictionary<string, object>> LoadExistingAsync<T>(VeritaDbContext db, EntitySpec spec, IReadOnlyList<Dictionary<string, string>> rows,
+        PropertyInfo[] keyProps, Guid? hospitalId, Func<object, string> keyOf, CancellationToken ct) where T : class
     {
-        var column = char.ToLowerInvariant(keyProperty[0]) + keyProperty[1..];
-        var wanted = rows.Select(r => r.GetValueOrDefault(column)?.Trim()).Where(v => !string.IsNullOrEmpty(v)).Distinct().ToList();
-        return db.Set<T>().IgnoreQueryFilters().Where(e => wanted.Contains(EF.Property<string>(e, keyProperty)));
+        var q = db.Set<T>().IgnoreQueryFilters();
+        var list = new List<T>();
+        var bySourceRef = keyProps.Any(p => p.Name == "SourceRef") && keyProps.Any(p => p.Name == "HospitalId");
+        var byEncounter = !bySourceRef && keyProps.Any(p => p.Name == "EncounterId") && typeof(T).GetProperty("EncounterId") is { } encProp
+            && (encProp.PropertyType == typeof(Guid) || encProp.PropertyType == typeof(Guid?));
+
+        if (byEncounter && hospitalId is Guid hid)
+        {
+            var nos = rows.Select(r => r.GetValueOrDefault("encounterNo")?.Trim()).Where(v => !string.IsNullOrEmpty(v)).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+            if (nos.Count == 0) return new Dictionary<string, object>(StringComparer.Ordinal);
+            var ids = new List<Guid>();
+            foreach (var chunk in nos.Chunk(1000))
+            {
+                var c = chunk.ToList();
+                ids.AddRange(await db.Encounters.IgnoreQueryFilters().Where(e => e.HospitalId == hid && c.Contains(e.EncounterNo)).Select(e => e.Id).ToListAsync(ct));
+            }
+            if (ids.Count == 0) return new Dictionary<string, object>(StringComparer.Ordinal);
+            var nullable = typeof(T).GetProperty("EncounterId")!.PropertyType == typeof(Guid?);
+            foreach (var chunk in ids.Chunk(1000))
+            {
+                var c = chunk.ToList();
+                list.AddRange(nullable
+                    ? await q.Where(e => EF.Property<Guid?>(e, "EncounterId") != null && c.Contains(EF.Property<Guid?>(e, "EncounterId")!.Value)).ToListAsync(ct)
+                    : await q.Where(e => c.Contains(EF.Property<Guid>(e, "EncounterId"))).ToListAsync(ct));
+            }
+            return list.GroupBy(e => keyOf(e)).ToDictionary(g => g.Key, g => (object)g.First());
+        }
+
+        var matchOn = spec.IsTransaction ? keyProps.LastOrDefault(k => k.PropertyType == typeof(string)) : null;
+        if (matchOn is null)
+            list = await q.ToListAsync(ct);
+        else
+        {
+            var column = char.ToLowerInvariant(matchOn.Name[0]) + matchOn.Name[1..];
+            var wanted = rows.Select(r => r.GetValueOrDefault(column)?.Trim()).Where(v => !string.IsNullOrEmpty(v)).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+            if (wanted.Count == 0) return new Dictionary<string, object>(StringComparer.Ordinal);
+            var hospitalProp = typeof(T).GetProperty("HospitalId");
+            foreach (var chunk in wanted.Chunk(1000))
+            {
+                var c = chunk.ToList();
+                IQueryable<T> part = q.Where(e => c.Contains(EF.Property<string>(e, matchOn.Name)));
+                if (hospitalId is Guid h && hospitalProp is not null)
+                {
+                    if (hospitalProp.PropertyType == typeof(Guid))
+                        part = part.Where(e => EF.Property<Guid>(e, "HospitalId") == h);
+                    else if (hospitalProp.PropertyType == typeof(Guid?))
+                        part = part.Where(e => EF.Property<Guid?>(e, "HospitalId") == h || EF.Property<Guid?>(e, "HospitalId") == null);
+                }
+                list.AddRange(await part.ToListAsync(ct));
+            }
+        }
+        return list.GroupBy(e => keyOf(e)).ToDictionary(g => g.Key, g => (object)g.First());
     }
 
     private static bool TryResolve(Dictionary<string, RefTarget> lookup, string code, string? hospitalCode, out RefTarget target)
@@ -442,6 +590,7 @@ public sealed class DataHubService(IDbContextFactory<VeritaDbContext> factory, I
                 var tableIndex = index;
                 if (onTable is not null) await onTable(spec.Name, tableIndex, files.Count);
                 index++;
+                var tableSw = Stopwatch.StartNew();
                 try
                 {
                     // Large tables (e.g. Payer at 100k+ rows) page at ImportPageRows; surface page progress so
@@ -452,8 +601,8 @@ public sealed class DataHubService(IDbContextFactory<VeritaDbContext> factory, I
                         await onTable(label, tableIndex, files.Count);
                     });
                     results.Add(r with { DryRun = dryRun, BatchId = dryRun ? null : r.BatchId });
-                    log.LogInformation("Import {Mode} {Entity} rows={Rows} created={Created} updated={Updated} unchanged={Unchanged} rejected={Rejected} source={Source}",
-                        dryRun ? "validate" : "commit", spec.Name, r.Rows, r.Created, r.Updated, r.Unchanged, r.Rejected, source);
+                    log.LogInformation("Import {Mode} {Entity} rows={Rows} created={Created} updated={Updated} unchanged={Unchanged} rejected={Rejected} source={Source} {Ms}ms",
+                        dryRun ? "validate" : "commit", spec.Name, r.Rows, r.Created, r.Updated, r.Unchanged, r.Rejected, source, tableSw.ElapsedMilliseconds);
                 }
                 catch (AppError ex) when (ex.Code is "FORBIDDEN")
                 {
@@ -523,23 +672,11 @@ public sealed class DataHubService(IDbContextFactory<VeritaDbContext> factory, I
         await using var db = await Db(ct);
         var desc = Describe(spec);
         var hospitals = await db.Hospitals.AsNoTracking().ToDictionaryAsync(h => h.Id, h => h.Code, ct);
-        var lookups = new Dictionary<string, Dictionary<string, RefTarget>>();
-        foreach (var r in spec.Refs) lookups[r.Column] = await CodesAsync(db, r.Target, r.TargetKey, hospitals, ct);
-
-        var usesDefinition = spec.ExtraColumns?.Contains("procedureCode") == true;
-        Dictionary<string, RefTarget>? procLookup = null, verLookup = null;
-        Dictionary<(Guid, Guid), Guid>? definitions = null;
-        var newDefinitions = new List<CostingDefinition>();
-        if (usesDefinition)
-        {
-            procLookup = await CodesAsync(db, typeof(Procedure), "Code", hospitals, ct);
-            verLookup = await CodesAsync(db, typeof(CostingVersion), "Code", hospitals, ct);
-            definitions = await db.CostingDefinitions.AsNoTracking().ToDictionaryAsync(x => (x.ProcedureId, x.CostingVersionId), x => x.Id, ct);
-        }
-        var publishedVersions = await db.CostingVersions.AsNoTracking().Where(v => v.Status == "PUBLISHED").Select(v => v.Id).ToListAsync(ct);
-
-        var keyProps = spec.Key.Select(k => spec.Type.GetProperty(k)!).ToArray();
-        string KeyOf(object e) => string.Join("|", keyProps.Select(k => Format(k.GetValue(e)).ToUpperInvariant()));
+        Guid? hospitalId = null;
+        if (!string.IsNullOrEmpty(_importHospital))
+            foreach (var kv in hospitals)
+                if (string.Equals(kv.Value, _importHospital, StringComparison.OrdinalIgnoreCase)) { hospitalId = kv.Key; break; }
+        // Local encounter numbers before lookups, so a facts file seeks Encounter / Patient by the stored key.
         foreach (var row in rows)
             if (row.TryGetValue("encounterNo", out var rawNo) && !string.IsNullOrWhiteSpace(rawNo))
             {
@@ -547,10 +684,30 @@ public sealed class DataHubService(IDbContextFactory<VeritaDbContext> factory, I
                 row["encounterNo"] = localNo;
                 if (named is not null) row["__encounterHospital"] = named;
             }
+        var lookups = new Dictionary<string, Dictionary<string, RefTarget>>();
+        foreach (var r in spec.Refs)
+        {
+            var wanted = WantedCodes(rows, r.Column, _importHospital, HisImportPack.UnmappedFallback(spec.Name, r.Column));
+            var scope = HospitalScopedLookup(r.Target) ? hospitalId : null;
+            lookups[r.Column] = await CodesAsync(db, r.Target, r.TargetKey, hospitals, ct, wanted, scope);
+        }
+
+        var usesDefinition = spec.ExtraColumns?.Contains("procedureCode") == true;
+        Dictionary<string, RefTarget>? procLookup = null, verLookup = null;
+        Dictionary<(Guid, Guid), Guid>? definitions = null;
+        var newDefinitions = new List<CostingDefinition>();
+        if (usesDefinition)
+        {
+            procLookup = await CodesAsync(db, typeof(Procedure), "Code", hospitals, ct, WantedCodes(rows, "procedureCode", _importHospital, null), hospitalId);
+            verLookup = await CodesAsync(db, typeof(CostingVersion), "Code", hospitals, ct, WantedCodes(rows, "costingVersionCode", _importHospital, null), hospitalId);
+            definitions = await db.CostingDefinitions.AsNoTracking().ToDictionaryAsync(x => (x.ProcedureId, x.CostingVersionId), x => x.Id, ct);
+        }
+        var publishedVersions = await db.CostingVersions.AsNoTracking().Where(v => v.Status == "PUBLISHED").Select(v => v.Id).ToListAsync(ct);
+
+        var keyProps = spec.Key.Select(k => spec.Type.GetProperty(k)!).ToArray();
+        string KeyOf(object e) => string.Join("|", keyProps.Select(k => Format(k.GetValue(e)).ToUpperInvariant()));
         // Monthly tables run to millions of rows: load only the rows this file can match.
-        var matchOn = spec.IsTransaction ? keyProps.LastOrDefault(k => k.PropertyType == typeof(string)) : null;
-        var candidates = matchOn is null ? db.Set<T>().IgnoreQueryFilters() : CandidatesOf<T>(db, matchOn.Name, rows);
-        var existing = (await candidates.ToListAsync(ct)).GroupBy(e => KeyOf(e)).ToDictionary(g => g.Key, g => (object)g.First());
+        var existing = await LoadExistingAsync<T>(db, spec, rows, keyProps, hospitalId, KeyOf, ct);
 
         var groupProps = spec.VersionGroup?.Select(g => spec.Type.GetProperty(g)!).ToArray();
         string GroupOf(object e) => string.Join("|", groupProps!.Select(k => Format(k.GetValue(e))));
@@ -761,11 +918,25 @@ public sealed class DataHubService(IDbContextFactory<VeritaDbContext> factory, I
         Guid? batchId = null;
         if (!dryRun && (pending.Count > 0 || rejects.Count > 0 || merges.Count > 0 || refunds.Count > 0 || marksChildLines))
         {
-            foreach (var def in newDefinitions) db.CostingDefinitions.Add(def);
-            foreach (var x in pending.Where(x => x.IsNew)) db.Add(x.Entity);
+            var news = pending.Where(x => x.IsNew).ToList();
+            // Facts batches are thousands of new lines. SqlBulkCopy on the import transaction replaces EF's
+            // batched INSERT round-trips. Updates stay on the change tracker. A bulk failure falls back per row.
+            var bulked = false;
             try
             {
-                await db.SaveChangesAsync(ct);
+                foreach (var def in newDefinitions) db.CostingDefinitions.Add(def);
+                if (news.Count >= 50 && _shared is { } shared)
+                {
+                    bulked = true;
+                    await db.SaveChangesAsync(ct);
+                    await new BulkWriter(db.Model).WriteAsync(shared.Conn, shared.Tx, news.Select(x => (T)x.Entity).ToList(), ct: ct);
+                    log.LogInformation("Import {Entity} bulk-inserted {Count} rows", spec.Name, news.Count);
+                }
+                else
+                {
+                    foreach (var x in news) db.Add(x.Entity);
+                    await db.SaveChangesAsync(ct);
+                }
             }
             catch (DbUpdateException ex)
             {
@@ -778,23 +949,42 @@ public sealed class DataHubService(IDbContextFactory<VeritaDbContext> factory, I
                 rejects.AddRange(bad);
                 if (ok.Count == 0 && bad.Count == 0) throw new AppError("SAVE_FAILED", Inner(ex), 400);
             }
+            catch (Exception ex) when (bulked && ex is SqlException or InvalidOperationException)
+            {
+                log.LogWarning(ex, "Import {Entity} bulk insert failed; saving new rows one by one", spec.Name);
+                var (ok, bad) = await SaveOneByOneAsync(spec, news, [], ct);
+                created = ok.Count(x => x.IsNew);
+                rejects.AddRange(bad);
+                if (ok.Count == 0 && bad.Count == 0 && news.Count > 0) throw new AppError("SAVE_FAILED", Inner(ex), 400);
+            }
 
             var refused = rejects.Select(r => r.Key).ToHashSet();
             await MergeReplacedErEncountersAsync(merges.Where(m => !refused.Contains(m.Key)).ToList(), replaced, existing, ct);
             await RemoveRefundsFromRevenueAsync(refunds.Where(r => !refused.Contains(r.Key)).ToList(), ct);
             // Payer insurer/TPA remapping runs once in SaveAsync after all pages (not per page, not on dry-run).
-            if (marksChildLines) await MarkChildInvoiceLinesAsync(ct);
+            if (marksChildLines)
+            {
+                var ids = new List<Guid>();
+                if (hospitalId is Guid hid)
+                {
+                    var nos = rows.Select(r => r.GetValueOrDefault("encounterNo")?.Trim()).Where(v => !string.IsNullOrEmpty(v)).Distinct().ToList();
+                    if (nos.Count > 0)
+                        ids = await db.Encounters.AsNoTracking().Where(e => e.HospitalId == hid && nos.Contains(e.EncounterNo)).Select(e => e.Id).ToListAsync(ct);
+                }
+                await MarkChildInvoiceLinesAsync(hospitalId, ids, ct);
+            }
             if (spec.Type == typeof(Encounter) || spec.Type == typeof(ConsumptionItem) || spec.Type == typeof(StaffTime) || spec.Type == typeof(EncounterTransfer)
-                || spec.Type == typeof(ClaimLine) || spec.Type == typeof(SettlementLine) || spec.Type == typeof(NphiesClaimLine)) await LinkHisEncountersAsync(ct);
+                || spec.Type == typeof(ClaimLine) || spec.Type == typeof(SettlementLine) || spec.Type == typeof(NphiesClaimLine))
+                await LinkHisEncountersAsync(hospitalId, rows.Select(r => r.GetValueOrDefault("encounterNo") ?? "").ToList(), ct);
 
-            await using var log = await Db(ct);
+            await using var batchDb = await Db(ct);
             var batch = new ImportBatch
             {
                 Id = IdGen.Sequential(), SourceSystem = source, Entity = spec.Name, RowsAccepted = created + updated + unchanged, RowsRejected = rejects.Count,
                 RejectReasons = rejects.Count == 0 ? null : JsonSerializer.Serialize(rejects.Take(1000).Select(Clean), Json), LoadedAt = DateTime.UtcNow, LoadedBy = p.Email,
             };
-            log.ImportBatches.Add(batch);
-            await log.SaveChangesAsync(ct);
+            batchDb.ImportBatches.Add(batch);
+            await batchDb.SaveChangesAsync(ct);
             batchId = batch.Id;
 
             if (_rehearsal) { }
