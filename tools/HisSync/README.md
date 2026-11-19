@@ -52,7 +52,7 @@ import).
 | `ConnectionStrings:Verita` | — | The VERITA database (same as the API). |
 | `His:ConnectionString` | — | HIS (HISGENX) database. A read-only login is enough; it needs to create `#temp` tables. |
 | `His:Tenants:{SetupID-ProjectID}:ConnectionString` | — | Optional per-tenant connection, e.g. `His:Tenants:010266-15:ConnectionString`. |
-| `His:PharmacyDb` | `PHARMAKON` | Item master database on the HIS server, for item names. |
+| `His:PharmacyDb` | `PHARMAKON` | Item master database on the HIS server, for item names (`PHR_Item`). Medicine prices are not extracted (`PHARMAKON.dbo.PHR_Medicine` is not queried). |
 | `His:QueryTimeoutSeconds` | `1800` | One HIS query's limit. |
 | `His:Claims` | `false` | Also extract claim, settlement and NPHIES lines (as `HisExtract --claims`). |
 | `HisSync:Enabled` | `true` | Both workers on or off (the site keeps answering). |

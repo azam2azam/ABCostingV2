@@ -8,6 +8,11 @@ var builder = WebApplication.CreateBuilder(args);
 
 var cs = builder.Configuration.GetConnectionString("Verita")
     ?? throw new InvalidOperationException("ConnectionStrings:Verita is not set.");
+// Name the worker's VERITA connections (unless the connection string names them), so its queries are easy to find
+// in sys.dm_exec_sessions / sys.dm_exec_requests.
+var csb = new Microsoft.Data.SqlClient.SqlConnectionStringBuilder(cs);
+if (string.IsNullOrEmpty(csb.ApplicationName) || csb.ApplicationName == "Core Microsoft SqlClient Data Provider") csb.ApplicationName = "VeritaHisSync";
+cs = csb.ConnectionString;
 // Background imports and dry-runs can take longer than an API request: allow more per query (default 30 minutes).
 builder.Services.AddVerita(cs, builder.Configuration.GetValue("HisSync:VeritaCommandTimeoutSeconds", 1800));
 builder.Services.Configure<SyncOptions>(builder.Configuration.GetSection("HisSync"));

@@ -461,8 +461,9 @@ static class App
               --cc-map     reviewed CSV (costCentreCode, departmentCode) that overrides
                            the derived cost centre → department link (catalogue)
               --ward-nurse-min  ward nursing minutes per patient-day   default 260
-              --pharmacy-db     pharmacy database with the item master (PHR_Item, PHR_Medicine),
-                                for item names and medicine prices; "" to skip   default PHARMAKON
+              --pharmacy-db     pharmacy database with the item master (PHR_Item) for item names;
+                                "" to skip   default PHARMAKON
+                                (medicine prices are not extracted; PHARMAKON.dbo.PHR_Medicine is not queried)
               --claims          also extract claim, settlement and NPHIES lines (42–45);
                                 without it, claimed is hisIsClaimed on revenue lines
               --query-timeout   seconds one HIS query may run, 0 = no limit   default 1800

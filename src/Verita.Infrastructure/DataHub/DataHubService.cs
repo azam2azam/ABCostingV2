@@ -439,11 +439,18 @@ public sealed class DataHubService(IDbContextFactory<VeritaDbContext> factory, I
             var index = 0;
             foreach (var (spec, rows) in files)
             {
-                if (onTable is not null) await onTable(spec.Name, index, files.Count);
+                var tableIndex = index;
+                if (onTable is not null) await onTable(spec.Name, tableIndex, files.Count);
                 index++;
                 try
                 {
-                    var r = await SaveAsync(spec, p, rows, false, source, ct);
+                    // Large tables (e.g. Payer at 100k+ rows) page at ImportPageRows; surface page progress so
+                    // Data Import / logs do not look hung after the previous table's "Import validate" line.
+                    var r = await SaveAsync(spec, p, rows, false, source, ct, onPage: onTable is null ? null : async (page, pages) =>
+                    {
+                        var label = pages <= 1 ? spec.Name : $"{spec.Name} · page {page}/{pages}";
+                        await onTable(label, tableIndex, files.Count);
+                    });
                     results.Add(r with { DryRun = dryRun, BatchId = dryRun ? null : r.BatchId });
                     log.LogInformation("Import {Mode} {Entity} rows={Rows} created={Created} updated={Updated} unchanged={Unchanged} rejected={Rejected} source={Source}",
                         dryRun ? "validate" : "commit", spec.Name, r.Rows, r.Created, r.Updated, r.Unchanged, r.Rejected, source);
@@ -472,22 +479,30 @@ public sealed class DataHubService(IDbContextFactory<VeritaDbContext> factory, I
     /// <summary>Per-command timeout inside an import transaction; matches BulkWriter's bulk copy timeout.</summary>
     public const int ImportCommandTimeoutSeconds = 600;
 
-    public async Task<ImportResult> SaveAsync(EntitySpec spec, Principal p, IReadOnlyList<Dictionary<string, string>> rows, bool dryRun, string source, CancellationToken ct)
+    public async Task<ImportResult> SaveAsync(EntitySpec spec, Principal p, IReadOnlyList<Dictionary<string, string>> rows, bool dryRun, string source, CancellationToken ct,
+        Func<int, int, Task>? onPage = null)
     {
         if (!p.Can(spec.WritePermission)) throw AppError.Forbidden(spec.WritePermission);
-        if (rows.Count <= ImportPageRows)
-            return await SavePageAsync(spec, p, rows, dryRun, source, ct);
-
+        var pages = Math.Max(1, (rows.Count + ImportPageRows - 1) / ImportPageRows);
         ImportResult? acc = null;
-        for (var i = 0; i < rows.Count; i += ImportPageRows)
+        for (var page = 1; page <= pages; page++)
         {
-            var n = Math.Min(ImportPageRows, rows.Count - i);
-            IReadOnlyList<Dictionary<string, string>> page = rows is List<Dictionary<string, string>> list
-                ? list.GetRange(i, n)
-                : rows.Skip(i).Take(n).ToList();
-            var r = await SavePageAsync(spec, p, page, dryRun, source, ct);
+            var offset = (page - 1) * ImportPageRows;
+            var n = Math.Min(ImportPageRows, Math.Max(0, rows.Count - offset));
+            if (onPage is not null) await onPage(page, pages);
+            if (pages > 1)
+                log.LogInformation("Import {Mode} {Entity} page {Page}/{Pages} rows={Rows} source={Source}",
+                    dryRun || _rehearsal ? "validate" : "commit", spec.Name, page, pages, n, source);
+            IReadOnlyList<Dictionary<string, string>> slice = rows.Count == 0 ? rows
+                : rows is List<Dictionary<string, string>> list ? list.GetRange(offset, n)
+                : rows.Skip(offset).Take(n).ToList();
+            var r = await SavePageAsync(spec, p, slice, dryRun, source, ct);
             acc = acc is null ? r : MergePages(acc, r);
         }
+        // Map insurer/TPA parties once after all pages, and only when the load will be kept.
+        // Dry-run rehearsal rolls back; remapping 100k+ payers there only looks hung.
+        if (!dryRun && !_rehearsal && spec.Type == typeof(Payer))
+            await MapPayerPartiesAsync(ct);
         return acc!;
     }
 
@@ -744,7 +759,7 @@ public sealed class DataHubService(IDbContextFactory<VeritaDbContext> factory, I
         var created = pending.Count(x => x.IsNew);
         var updated = pending.Count(x => !x.IsNew);
         Guid? batchId = null;
-        if (!dryRun && (pending.Count > 0 || rejects.Count > 0 || merges.Count > 0 || refunds.Count > 0 || spec.Type == typeof(Payer) || marksChildLines))
+        if (!dryRun && (pending.Count > 0 || rejects.Count > 0 || merges.Count > 0 || refunds.Count > 0 || marksChildLines))
         {
             foreach (var def in newDefinitions) db.CostingDefinitions.Add(def);
             foreach (var x in pending.Where(x => x.IsNew)) db.Add(x.Entity);
@@ -767,7 +782,7 @@ public sealed class DataHubService(IDbContextFactory<VeritaDbContext> factory, I
             var refused = rejects.Select(r => r.Key).ToHashSet();
             await MergeReplacedErEncountersAsync(merges.Where(m => !refused.Contains(m.Key)).ToList(), replaced, existing, ct);
             await RemoveRefundsFromRevenueAsync(refunds.Where(r => !refused.Contains(r.Key)).ToList(), ct);
-            if (spec.Type == typeof(Payer)) await MapPayerPartiesAsync(ct);
+            // Payer insurer/TPA remapping runs once in SaveAsync after all pages (not per page, not on dry-run).
             if (marksChildLines) await MarkChildInvoiceLinesAsync(ct);
             if (spec.Type == typeof(Encounter) || spec.Type == typeof(ConsumptionItem) || spec.Type == typeof(StaffTime) || spec.Type == typeof(EncounterTransfer)
                 || spec.Type == typeof(ClaimLine) || spec.Type == typeof(SettlementLine) || spec.Type == typeof(NphiesClaimLine)) await LinkHisEncountersAsync(ct);

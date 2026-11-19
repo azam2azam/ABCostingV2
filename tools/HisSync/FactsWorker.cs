@@ -81,6 +81,8 @@ public sealed class FactsWorker(SyncStore store, PackRunner packs, ILogger<Facts
         // Facts point at the catalogue's procedures, departments and doctors.
         if (!await db.Procedures.AnyAsync(p => p.HospitalId == h.Id, ct))
             return await PausedAsync(h, range, "Waiting for the catalogue: import or apply the hospital's catalogue first.", ct);
+        if (await db.HisSyncCatalogueChanges.AnyAsync(c => c.HospitalId == h.Id && c.Status == "APPLYING", ct))
+            return await PausedAsync(h, range, "Waiting for the first catalogue to finish applying (see the catalogue worker).", ct);
         if (await db.HisSyncCatalogueChanges.AnyAsync(c => c.HospitalId == h.Id && c.Status == "PENDING" && c.Created > 0, ct))
             return await PausedAsync(h, range, "Waiting for parked catalogue changes: apply or discard them on HIS Sync. New catalogue rows would otherwise reject facts.", ct);
 
@@ -123,8 +125,8 @@ public sealed class FactsWorker(SyncStore store, PackRunner packs, ILogger<Facts
 
         try
         {
-            if (day.Status == "PENDING") return await ListDayAsync(db, h, range, day, ct);
-            return await BatchAsync(db, h, range, day, ct);
+            return await store.WithHeartbeatAsync(h.Id, Kind, () =>
+                day.Status == "PENDING" ? ListDayAsync(db, h, range, day, ct) : BatchAsync(db, h, range, day, ct), ct);
         }
         catch (HisUnavailableException ex)
         {

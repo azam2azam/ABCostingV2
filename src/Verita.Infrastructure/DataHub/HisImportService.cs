@@ -14,6 +14,10 @@ public sealed record ImportPreview(
     ImportPreviewTable[] Tables, string[] Skipped, ImportPreviewHospital[] Hospitals, string? SuggestedHospital,
     string[] Notices, string[] Warnings);
 
+/// <summary>A pack read and mapped onto its hospital, ready to write: the tables in load order with their rows.</summary>
+public sealed record PreparedImport(string FileName, List<(EntitySpec Spec, List<Dictionary<string, string>> Rows)> Set, string Source,
+    string? Hospital, HisImportPack.Identity? Identity, bool FactsPack);
+
 public sealed class HisImportService(IDbContextFactory<VeritaDbContext> factory, DataHubService hub, IAuditWriter audit, ILogger<HisImportService> log)
 {
     public async Task<ImportPreview> PreviewAsync(Principal p, string fileName, Stream stream, string? entityHint, CancellationToken ct)
@@ -88,6 +92,24 @@ public sealed class HisImportService(IDbContextFactory<VeritaDbContext> factory,
         Func<string, int, int, Task>? onTable = null)
     {
         var sw = Stopwatch.StartNew();
+        var prepared = await PrepareAsync(p, fileName, stream, hospital, dryRun, entityHint, ct);
+        if (prepared.Set.Count == 0) return [];
+        var (set, source, identity) = (prepared.Set, prepared.Source, prepared.Identity);
+        hospital = prepared.Hospital;
+
+        var results = await hub.ImportSetAsync(set, p, dryRun, source, ct, hospital, onTable);
+        await FinishAsync(p, prepared, dryRun, results, sw.ElapsedMilliseconds, ct);
+        return results;
+    }
+
+    /// <summary>
+    /// Everything an import does before writing: read the pack, check its HIS tenant against the hospital (binding it on
+    /// a first real import), map codes onto the hospital and drop what is not loaded. The HIS sync worker uses this to
+    /// apply a large first catalogue table by table, in small committed batches, through
+    /// <see cref="DataHubService.ImportSetAsync"/>.
+    /// </summary>
+    public async Task<PreparedImport> PrepareAsync(Principal p, string fileName, Stream stream, string? hospital, bool dryRun, string? entityHint, CancellationToken ct)
+    {
         var (files, identity, skipped) = ReadWithoutCostingModels(fileName, stream, entityHint);
         var unknown = files.Where(f => f.Spec is null).Select(f => f.FileName).ToArray();
         if (unknown.Length > 0)
@@ -155,7 +177,7 @@ public sealed class HisImportService(IDbContextFactory<VeritaDbContext> factory,
             {
                 log.LogInformation("Import {Mode} {File} hospital={Hospital} skipped Hospital.csv (VERITA identity kept)",
                     dryRun ? "validate" : "commit", fileName, hospital);
-                return [];
+                return new PreparedImport(fileName, [], identity is null ? "UPLOAD" : $"HIS-{identity.SetupId}-{identity.ProjectId}", hospital, identity, false);
             }
         }
 
@@ -172,21 +194,25 @@ public sealed class HisImportService(IDbContextFactory<VeritaDbContext> factory,
         log.LogInformation("Import {Mode} {File} hospital={Hospital} setup={Setup} project={Project} tables={Tables} skipped={Skipped}",
             dryRun ? "validate" : "commit", fileName, hospital, identity?.SetupId, identity?.ProjectId, set.Count, skipped.Length);
 
-        var results = await hub.ImportSetAsync(set, p, dryRun, source, ct, hospital, onTable);
+        return new PreparedImport(fileName, set, source, hospital, identity, HisImportPack.IsFactsPack(identity, files));
+    }
+
+    /// <summary>After an import: log, audit, and for facts make sure their months exist as open periods.</summary>
+    public async Task FinishAsync(Principal p, PreparedImport prepared, bool dryRun, ImportResult[] results, long elapsedMs, CancellationToken ct)
+    {
+        var (fileName, hospital, identity) = (prepared.FileName, prepared.Hospital, prepared.Identity);
         var rejected = results.Sum(r => r.Rejected);
         log.LogInformation("Import finished {Mode} {File} hospital={Hospital} tables={Tables} rejected={Rejected} {Ms}ms",
-            dryRun ? "validate" : "commit", fileName, hospital, results.Length, rejected, sw.ElapsedMilliseconds);
+            dryRun ? "validate" : "commit", fileName, hospital, results.Length, rejected, elapsedMs);
 
         if (!dryRun)
         {
             await audit.WriteAsync(p, "CREATE", "ImportBatch", null, identity is null ? fileName : $"HIS {identity.SetupId}/{identity.ProjectId} → {hospital}",
                 metadata: new { file = fileName, hospital, setupId = identity?.SetupId, projectId = identity?.ProjectId, dryRun, tables = results.Select(r => r.Entity).ToArray(), rejected },
                 ct: ct);
-            if (HisImportPack.IsFactsPack(identity, files) && !string.IsNullOrWhiteSpace(hospital))
+            if (prepared.FactsPack && !string.IsNullOrWhiteSpace(hospital))
                 await EnsureFactPeriodAsync(hospital, identity, fileName, ct);
         }
-
-        return results;
     }
 
     private static (List<HisImportPack.ParsedFile> Files, HisImportPack.Identity? His, string[] Skipped) ReadWithoutCostingModels(string fileName, Stream stream, string? entity)

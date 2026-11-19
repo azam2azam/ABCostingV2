@@ -21,6 +21,8 @@ public sealed class SyncOptions
     public int MaxAttempts { get; set; } = 3;
     /// <summary>One VERITA query's limit for the worker (imports, dry-runs). Read at startup.</summary>
     public int VeritaCommandTimeoutSeconds { get; set; } = 1800;
+    /// <summary>Rows per committed batch when a first catalogue is applied straight into VERITA (big tables go in many batches).</summary>
+    public int CatalogueBatchRows { get; set; } = 5000;
     /// <summary>Minutes before an interrupted catalogue check is resumed again while the process keeps running. After a restart it resumes at once.</summary>
     public int CatalogueRetryMinutes { get; set; } = 5;
     /// <summary>Where packs are written while they are imported (each deleted after), and where an interrupted catalogue check keeps its finished tables to resume from.</summary>

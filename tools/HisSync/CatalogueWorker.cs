@@ -2,6 +2,7 @@ using System.Text.Json;
 using HisExtract;
 using Microsoft.EntityFrameworkCore;
 using Verita.Domain.Entities;
+using Verita.Infrastructure.DataHub;
 
 namespace Verita.HisSync;
 
@@ -10,7 +11,7 @@ namespace Verita.HisSync;
 /// extracts the catalogue and validates it against VERITA without writing (a dry-run import). New or changed rows
 /// are parked: the pack is kept as an import file and listed on HIS Sync, where a person applies or discards it.
 /// </summary>
-public sealed class CatalogueWorker(SyncStore store, PackRunner packs, ILogger<CatalogueWorker> log) : BackgroundService
+public sealed class CatalogueWorker(SyncStore store, PackRunner packs, IServiceScopeFactory scopes, ILogger<CatalogueWorker> log) : BackgroundService
 {
     private const string Kind = "CATALOGUE";
     private static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web);
@@ -53,6 +54,24 @@ public sealed class CatalogueWorker(SyncStore store, PackRunner packs, ILogger<C
         public int Attempts { get; set; }
         public DateTime? FailedAt { get; set; }
         public string? Error { get; set; }
+
+        // First catalogue, applied straight into VERITA in batches: where it is, and what each table gave so far.
+        public bool Applying { get; set; }
+        public int ApplyTable { get; set; }
+        public int ApplyRow { get; set; }
+        public Guid? ChangeId { get; set; }
+        public List<TableTotal> Tables { get; set; } = [];
+    }
+
+    private sealed class TableTotal
+    {
+        public string Entity { get; set; } = "";
+        public int Rows { get; set; }
+        public int Created { get; set; }
+        public int Updated { get; set; }
+        public int Unchanged { get; set; }
+        public int Rejected { get; set; }
+        public List<string> Rejects { get; set; } = [];
     }
 
     /// <summary>Checks this process has already tried: after a restart an interrupted check resumes at once, then waits between tries.</summary>
@@ -68,7 +87,8 @@ public sealed class CatalogueWorker(SyncStore store, PackRunner packs, ILogger<C
         {
             if (!File.Exists(CheckpointPath(h))) return null;
             var cp = JsonSerializer.Deserialize<Checkpoint>(File.ReadAllText(CheckpointPath(h)), Json);
-            if (cp is not null && DateTime.UtcNow - cp.StartedAt < CheckpointLife) return cp;
+            // A first catalogue part-applied must always be finished, however long it has waited.
+            if (cp is not null && (cp.Applying || DateTime.UtcNow - cp.StartedAt < CheckpointLife)) return cp;
         }
         catch (Exception ex) when (ex is IOException or JsonException or UnauthorizedAccessException)
         {
@@ -128,18 +148,20 @@ public sealed class CatalogueWorker(SyncStore store, PackRunner packs, ILogger<C
         await store.WorkerAsync(h.Id, Kind, w =>
         {
             w.Status = "RUNNING"; w.StartedAt = DateTime.UtcNow; w.LastError = null;
-            w.Step = resuming ? "Resuming the interrupted check" : "Reading the HIS catalogue";
+            w.Step = !resuming ? "Reading the HIS catalogue" : cp.Applying ? $"Resuming the first catalogue at {Where(cp)}" : "Resuming the interrupted check";
             w.BatchesDone = cp.Steps.Count; w.BatchesTotal = CatalogueExtract.Steps.Length; w.RecordsDone = 0; w.RecordsTotal = null;
         }, ct);
         if (resuming)
-            await store.LogAsync(h.Id, Kind, "INFO", cp.Extracted
-                ? "Catalogue check resumed: the HIS catalogue was already read; comparing with VERITA again."
+            await store.LogAsync(h.Id, Kind, "INFO", cp.Applying
+                ? $"First catalogue resumed at {Where(cp)}."
+                : cp.Extracted
+                ? "Catalogue check resumed: the HIS catalogue was already read; carrying on with the VERITA step."
                 : $"Catalogue check resumed: {cp.Steps.Count} of {CatalogueExtract.Steps.Length} HIS tables were already read; carrying on from there.", ct: ct);
 
         var finished = false;
         try
         {
-            await CheckAsync(h, cp, ct);
+            await store.WithHeartbeatAsync(h.Id, Kind, () => CheckAsync(h, cp, ct), ct);
             finished = true;
             Discard(h);
             await store.WorkerAsync(h.Id, Kind, w => { w.Status = "IDLE"; w.FinishedAt = DateTime.UtcNow; w.Step = "Check finished"; }, ct);
@@ -160,7 +182,8 @@ public sealed class CatalogueWorker(SyncStore store, PackRunner packs, ILogger<C
             cp.Attempts++;
             cp.FailedAt = DateTime.UtcNow;
             cp.Error = SyncStore.Clip(ex.Message, 2000);
-            var giveUp = cp.Attempts >= store.Options.MaxAttempts;
+            // A part-applied first catalogue is never abandoned (that would leave half a catalogue): it keeps retrying.
+            var giveUp = cp.Attempts >= store.Options.MaxAttempts && !cp.Applying;
             if (giveUp)
             {
                 finished = true;
@@ -171,7 +194,9 @@ public sealed class CatalogueWorker(SyncStore store, PackRunner packs, ILogger<C
             await store.LogAsync(h.Id, Kind, giveUp ? "ERROR" : "WARN",
                 giveUp
                     ? $"Catalogue check failed {cp.Attempts} times and was given up: {ex.Message.TrimEnd('.')}. The next daily check or Sync now starts over."
-                    : $"Catalogue check stopped (try {cp.Attempts} of {store.Options.MaxAttempts}): {ex.Message.TrimEnd('.')}. It resumes from there in {store.Options.CatalogueRetryMinutes} minutes, or at once after a restart.",
+                    : cp.Applying
+                        ? $"First catalogue stopped at {Where(cp)} (try {cp.Attempts}): {ex.Message.TrimEnd('.')}. It carries on from that batch in {store.Options.CatalogueRetryMinutes} minutes, or at once after a restart."
+                        : $"Catalogue check stopped (try {cp.Attempts} of {store.Options.MaxAttempts}): {ex.Message.TrimEnd('.')}. It resumes from there in {store.Options.CatalogueRetryMinutes} minutes, or at once after a restart.",
                 ex.ToString(), ct: ct);
         }
         finally
@@ -233,6 +258,20 @@ public sealed class CatalogueWorker(SyncStore store, PackRunner packs, ILogger<C
         if (pack.Warnings.Count > 0)
             await store.LogAsync(h.Id, Kind, "WARN", $"Catalogue check: {pack.Warnings.Count} HIS step(s) failed and were skipped.", string.Join("; ", pack.Warnings), ct: ct);
 
+        // First catalogue: VERITA holds nothing for this hospital, so every row is new and a dry-run (the slowest step)
+        // would only say so. Count the pack and park it; rows that fail VERITA's checks show when it is applied.
+        // First catalogue: VERITA holds nothing for this hospital, so nothing needs comparing or reviewing. Apply it
+        // straight away, table by table in small committed batches, recording each batch, so a failure or a restart
+        // carries on from the batch that did not finish.
+        bool first = cp.Applying;
+        if (!first)
+            await using (var vdb = await store.DbAsync(ct))
+                first = !await vdb.Departments.AnyAsync(x => x.HospitalId == h.Id, ct) && !await vdb.Procedures.AnyAsync(x => x.HospitalId == h.Id, ct);
+        if (first)
+        {
+            await ApplyFirstAsync(h, cp, pack, ct);
+            return;
+        }
         await store.WorkerAsync(h.Id, Kind, w => w.Step = "Comparing with VERITA", ct);
         var results = await SyncStore.StageAsync("Comparing with VERITA (dry-run import)", () => packs.ImportAsync(pack, h.Code, dryRun: true, ct));
         int created = results.Sum(r => r.Created), updated = results.Sum(r => r.Updated), unchanged = results.Sum(r => r.Unchanged), rejected = results.Sum(r => r.Rejected);
@@ -273,6 +312,106 @@ public sealed class CatalogueWorker(SyncStore store, PackRunner packs, ILogger<C
             $"Catalogue changes found: {created} new, {updated} changed row(s). Parked for review on HIS Sync.",
             string.Join(", ", results.Where(r => r.Created + r.Updated > 0).Select(r => $"{r.Entity} +{r.Created} ~{r.Updated}"))
                 + (rejected > 0 ? $". {rejected} row(s) fail VERITA's checks: {Rejects(results)}" : ""), ct: ct);
+    }
+
+    private static string Where(Checkpoint cp) =>
+        cp.Tables.Count == 0 ? "the start" : $"table {Math.Min(cp.ApplyTable + 1, cp.Tables.Count)} of {cp.Tables.Count} ({cp.Tables[Math.Min(cp.ApplyTable, cp.Tables.Count - 1)].Entity}), row {cp.ApplyRow + 1:N0}";
+
+    /// <summary>
+    /// The hospital's first catalogue, applied without review: the pack is mapped once, then each table is written in
+    /// batches of CatalogueBatchRows, each batch its own transaction. The checkpoint records the table and row after
+    /// every batch, so a failure or restart repeats only the batch in hand. Facts wait until the last batch is in.
+    /// </summary>
+    private async Task ApplyFirstAsync(SyncHospital h, Checkpoint cp, Pack pack, CancellationToken ct)
+    {
+        var batchRows = Math.Max(100, store.Options.CatalogueBatchRows);
+        await using var scope = scopes.CreateAsyncScope();
+        var his = scope.ServiceProvider.GetRequiredService<HisImportService>();
+        var hub = scope.ServiceProvider.GetRequiredService<DataHubService>();
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+
+        await store.WorkerAsync(h.Id, Kind, w => w.Step = "First catalogue: reading the pack", ct);
+        var prepared = await SyncStore.StageAsync("Reading the catalogue pack", () =>
+            his.PrepareAsync(SyncStore.System, pack.FileName, new MemoryStream(pack.Bytes, writable: false), h.Code, dryRun: false, null, ct));
+        var tables = prepared.Set;
+        var totalRows = tables.Sum(t => t.Rows.Count);
+
+        if (!cp.Applying)
+        {
+            cp.Applying = true;
+            cp.ApplyTable = 0;
+            cp.ApplyRow = 0;
+            cp.Tables = tables.Select(t => new TableTotal { Entity = t.Spec.Name, Rows = t.Rows.Count }).ToList();
+            await using (var db = await store.DbAsync(ct))
+            {
+                var change = new HisSyncCatalogueChange
+                {
+                    Id = Guid.NewGuid(), HospitalId = h.Id, DetectedAt = DateTime.UtcNow, Status = "APPLYING",
+                    TablesJson = JsonSerializer.Serialize(cp.Tables.Select(t => new { t.Entity, t.Rows, Created = 0, Updated = 0, Unchanged = 0, Rejected = 0 }), Json),
+                };
+                db.HisSyncCatalogueChanges.Add(change);
+                await db.SaveChangesAsync(ct);
+                cp.ChangeId = change.Id;
+            }
+            Save(h, cp);
+            await store.LogAsync(h.Id, Kind, "INFO",
+                $"First catalogue for {h.Code}: applying {totalRows:N0} row(s) in {tables.Count} table(s) straight into VERITA, in batches of {batchRows:N0}. Facts wait until it is in.", ct: ct);
+        }
+
+        var done = cp.Tables.Take(cp.ApplyTable).Sum(t => t.Rows) + cp.ApplyRow;
+        for (var ti = cp.ApplyTable; ti < tables.Count; ti++)
+        {
+            var (spec, rows) = tables[ti];
+            var total = cp.Tables[ti];
+            for (var offset = cp.ApplyRow; offset < rows.Count; offset += batchRows)
+            {
+                ct.ThrowIfCancellationRequested();
+                var chunk = rows.GetRange(offset, Math.Min(batchRows, rows.Count - offset));
+                var label = $"{spec.Name} rows {offset + 1:N0}–{offset + chunk.Count:N0} of {rows.Count:N0}";
+                var doneSoFar = done;
+                await store.WorkerAsync(h.Id, Kind, w =>
+                {
+                    w.Step = $"First catalogue: {label}";
+                    w.BatchesDone = ti; w.BatchesTotal = tables.Count; w.RecordsDone = doneSoFar; w.RecordsTotal = totalRows;
+                }, ct);
+                var r = (await SyncStore.StageAsync($"Applying {label}", () =>
+                    hub.ImportSetAsync([(spec, chunk)], SyncStore.System, dryRun: false, prepared.Source, ct, prepared.Hospital))).Single();
+                total.Created += r.Created; total.Updated += r.Updated; total.Unchanged += r.Unchanged; total.Rejected += r.Rejected;
+                foreach (var e in r.Rejects.Take(Math.Max(0, 5 - total.Rejects.Count)))
+                    total.Rejects.Add($"[{e.Key ?? $"row {offset + e.Row}"}] {string.Join("; ", e.Errors)}");
+                done += chunk.Count;
+                cp.ApplyRow = offset + chunk.Count;
+                cp.Attempts = 0;
+                Save(h, cp);
+            }
+            await store.LogAsync(h.Id, Kind, total.Rejected > 0 ? "WARN" : "INFO",
+                $"First catalogue: {spec.Name} applied, {total.Rows:N0} row(s): {total.Created:N0} new, {total.Updated:N0} changed{(total.Rejected > 0 ? $", {total.Rejected:N0} rejected by VERITA's checks" : "")}.",
+                total.Rejected > 0 ? string.Join(" ", total.Rejects) : null, ct: ct);
+            cp.ApplyTable = ti + 1;
+            cp.ApplyRow = 0;
+            Save(h, cp);
+        }
+
+        // All in: record it with the other checks, and audit it as one import.
+        var results = cp.Tables.Select(t => new Verita.Infrastructure.DataHub.ImportResult(t.Entity, null, false, t.Rows, t.Created, t.Updated, t.Unchanged, t.Rejected, [])).ToArray();
+        await using (var db = await store.DbAsync(ct))
+        {
+            var change = cp.ChangeId is { } id ? await db.HisSyncCatalogueChanges.FirstOrDefaultAsync(c => c.Id == id, ct) : null;
+            if (change is not null)
+            {
+                change.Status = "APPLIED";
+                change.Created = results.Sum(x => x.Created); change.Updated = results.Sum(x => x.Updated);
+                change.Unchanged = results.Sum(x => x.Unchanged); change.Rejected = results.Sum(x => x.Rejected);
+                change.TablesJson = JsonSerializer.Serialize(results.Select(x => new { x.Entity, x.Rows, x.Created, x.Updated, x.Unchanged, x.Rejected }), Json);
+                change.DecidedAt = DateTime.UtcNow;
+                change.DecidedBy = SyncStore.Actor;
+                await db.SaveChangesAsync(ct);
+            }
+        }
+        await his.FinishAsync(SyncStore.System, prepared, dryRun: false, results, sw.ElapsedMilliseconds, ct);
+        await store.WorkerAsync(h.Id, Kind, w => { w.BatchesDone = tables.Count; w.RecordsDone = totalRows; }, ct);
+        await store.LogAsync(h.Id, Kind, results.Sum(x => x.Rejected) > 0 ? "WARN" : "INFO",
+            $"First catalogue applied: {totalRows:N0} row(s) in {tables.Count} table(s), {results.Sum(x => x.Created):N0} new{(results.Sum(x => x.Rejected) > 0 ? $", {results.Sum(x => x.Rejected):N0} rejected" : "")}. Facts can sync now.", ct: ct);
     }
 
     private static string Rejects(IEnumerable<Verita.Infrastructure.DataHub.ImportResult> results) =>

@@ -111,6 +111,39 @@ public sealed class SyncStore(IDbContextFactory<VeritaDbContext> factory, Verita
     }
 
     /// <summary>
+    /// Runs a long step (a HIS read, a catalogue dry-run, a batch import) while touching the worker's heartbeat every
+    /// 30 seconds, so HIS Sync shows it working instead of "Not responding". Only the heartbeat is written.
+    /// </summary>
+    public async Task<T> WithHeartbeatAsync<T>(Guid hospitalId, string kind, Func<Task<T>> body, CancellationToken ct)
+    {
+        using var stop = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        var beat = Task.Run(async () =>
+        {
+            while (!stop.Token.IsCancellationRequested)
+            {
+                try
+                {
+                    await Task.Delay(TimeSpan.FromSeconds(30), stop.Token);
+                    await using var db = await factory.CreateDbContextAsync(stop.Token);
+                    await db.HisSyncWorkers.Where(w => w.HospitalId == hospitalId && w.Kind == kind)
+                        .ExecuteUpdateAsync(u => u.SetProperty(w => w.HeartbeatAt, DateTime.UtcNow), stop.Token);
+                }
+                catch (OperationCanceledException) { break; }
+                catch (Exception ex) { log.LogWarning(ex, "Heartbeat update failed"); }
+            }
+        }, CancellationToken.None);
+        try { return await body(); }
+        finally
+        {
+            stop.Cancel();
+            await beat;
+        }
+    }
+
+    public Task WithHeartbeatAsync(Guid hospitalId, string kind, Func<Task> body, CancellationToken ct) =>
+        WithHeartbeatAsync(hospitalId, kind, async () => { await body(); return true; }, ct);
+
+    /// <summary>
     /// A lock in the VERITA database held for as long as the returned handle lives. IIS starts the new process before
     /// it stops the old one on a recycle; the lock keeps two of them from syncing at once. Null when another holds it.
     /// </summary>

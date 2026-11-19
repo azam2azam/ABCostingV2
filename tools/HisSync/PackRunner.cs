@@ -49,6 +49,14 @@ public sealed class PackRunner(IServiceScopeFactory scopes, SyncStore store)
         return await his.ImportAsync(SyncStore.System, pack.FileName, new MemoryStream(pack.Bytes, writable: false), hospital, dryRun, null, ct);
     }
 
+    /// <summary>The tables and row counts in a pack, read without touching VERITA's data (no validation).</summary>
+    public async Task<ImportPreview> PreviewAsync(Pack pack, CancellationToken ct)
+    {
+        await using var scope = scopes.CreateAsyncScope();
+        var his = scope.ServiceProvider.GetRequiredService<HisImportService>();
+        return await his.PreviewAsync(SyncStore.System, pack.FileName, new MemoryStream(pack.Bytes, writable: false), null, ct);
+    }
+
     /// <summary>Keep a pack as an import file (Data Import's store), for a person to apply later.</summary>
     public async Task<Guid> KeepAsync(Pack pack, CancellationToken ct)
     {

@@ -41,13 +41,13 @@ interface HisSyncDto {
 
 const STATUS_LABEL: Record<string, string> = {
   QUEUED: 'Queued', RUNNING: 'Syncing', DONE: 'Synced', DONE_WITH_ERRORS: 'Synced with errors', FAILED: 'Failed', CANCELLED: 'Cancelled',
-  PENDING: 'Waiting', APPLIED: 'Applied', DISCARDED: 'Discarded', SUPERSEDED: 'Replaced by a newer check',
+  PENDING: 'Waiting', APPLYING: 'Applying (first catalogue)', APPLIED: 'Applied', DISCARDED: 'Discarded', SUPERSEDED: 'Replaced by a newer check',
   UPLOADED: 'Not imported', VALIDATED: 'Validated', COMPLETED: 'Imported', COMPLETED_WITH_REJECTS: 'Imported with rejects',
   IDLE: 'Idle', PAUSED: 'Paused', STALLED: 'Not responding', NOT_CONNECTED: 'Not connected',
 };
 const STATUS_KIND: Record<string, string> = {
   QUEUED: 'info', RUNNING: 'info live', DONE: 'good', DONE_WITH_ERRORS: 'warn', FAILED: 'bad', CANCELLED: '',
-  PENDING: 'warn', APPLIED: 'good', DISCARDED: '', SUPERSEDED: '',
+  PENDING: 'warn', APPLYING: 'info live', APPLIED: 'good', DISCARDED: '', SUPERSEDED: '',
   IDLE: 'good', PAUSED: 'warn', STALLED: 'bad', NOT_CONNECTED: '', INFO: 'info', WARN: 'warn', ERROR: 'bad',
 };
 
@@ -143,7 +143,7 @@ function pct(a: number, b: number | null | undefined): number | null {
 
           <section class="card">
             <h3>Catalogue changes</h3>
-            <p class="muted">What the last checks found in the HIS. Applying imports the changes as a catalogue pack (the same checks as Data Import). Facts sync waits while new catalogue rows are parked.</p>
+            <p class="muted">A hospital's first catalogue is applied straight away, in batches. After that, changes the checks find in the HIS are parked here; applying imports them as a catalogue pack (the same checks as Data Import). Facts sync waits while new catalogue rows are parked or the first catalogue is still going in.</p>
             @if (pendingChange(); as c) {
               <div class="pending">
                 <div class="row">
@@ -189,7 +189,7 @@ function pct(a: number, b: number | null | undefined): number | null {
                   <p class="step">{{ w.step ?? (w.status === 'IDLE' ? 'Waiting for work' : '—') }}</p>
                   @if (w.kind === 'FACTS' && w.currentDate) { <p class="muted">Date {{ w.currentDate }}</p> }
                   @if (w.batchesTotal) {
-                    <div class="progress"><span>{{ w.kind === 'CATALOGUE' ? 'HIS tables' : 'Batches' }}</span><v-bar [share]="pct(w.batchesDone, w.batchesTotal) ?? 0" /><span>{{ w.batchesDone }} / {{ w.batchesTotal }}</span></div>
+                    <div class="progress"><span>{{ w.kind === 'CATALOGUE' ? 'Tables' : 'Batches' }}</span><v-bar [share]="pct(w.batchesDone, w.batchesTotal) ?? 0" /><span>{{ w.batchesDone }} / {{ w.batchesTotal }}</span></div>
                   }
                   @if (w.recordsTotal) {
                     <div class="progress"><span>Records</span><v-bar [share]="pct(w.recordsDone, w.recordsTotal) ?? 0" /><span>{{ w.recordsDone }} / {{ w.recordsTotal }}</span></div>
@@ -342,7 +342,7 @@ export class HisSync {
   private active = computed(() => {
     const d = this.data();
     return !!d && (d.workers.some(w => w.status === 'RUNNING') || d.ranges.some(r => r.status === 'QUEUED' || r.status === 'RUNNING') || !!d.settings.catalogueRequestedAt
-      || d.catalogueChanges.some(c => c.importStatus === 'QUEUED' || c.importStatus === 'RUNNING'));
+      || d.catalogueChanges.some(c => c.status === 'APPLYING' || c.importStatus === 'QUEUED' || c.importStatus === 'RUNNING'));
   });
 
   rangeCols = computed<Col<HisSyncRange>[]>(() => {
