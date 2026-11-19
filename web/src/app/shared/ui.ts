@@ -441,7 +441,9 @@ export class Table {
     const rows = [...(this.rows() ?? [])];
     const key = this.activeSort();
     if (!key || this.serverSort()) return rows;
-    const col = this.columns().find(c => c.key === key)!;
+    // The sort column can be one the viewer's role does not see (e.g. Amount Billed without revenue.view): keep the order.
+    const col = this.columns().find(c => c.key === key);
+    if (!col) return rows;
     const numeric = this.isNum(col);
     rows.sort((a, b) => {
       const va = this.val(col, a), vb = this.val(col, b);

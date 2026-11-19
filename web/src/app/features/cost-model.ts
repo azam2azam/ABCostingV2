@@ -53,7 +53,7 @@ export interface DepartmentRow {
       <v-state [loading]="res.isLoading()" [error]="res.error()">
         @if (res.value()) {
           <v-type-tiles [counts]="serviceLineCounts()" [(selected)]="serviceLine" />
-          <v-table paged [rows]="filtered()" [columns]="cols()" sortBy="amountBilled" caption="Departments"
+          <v-table paged [rows]="filtered()" [columns]="cols()" [sortBy]="sortBy()" caption="Departments"
             [empty]="search().trim() ? 'No departments match this search.' : 'No departments in the catalogue for this hospital.'">
             <v-list-search toolbar [(query)]="search" placeholder="Search by name or code" />
           </v-table>
@@ -97,6 +97,8 @@ export class Departments {
     const tile = this.serviceLine();
     return this.searched().filter(r => !tile || this.tileOf(r) === tile);
   });
+  /** Amount Billed is shown only with revenue.view; without it, sort by encounters. */
+  sortBy = computed(() => this.auth.can('revenue.view') ? 'amountBilled' : 'cases');
   cols = computed<Col<DepartmentRow>[]>(() => {
     const cols: Col<DepartmentRow>[] = [
       { key: 'name', label: 'Name', link: r => `/departments/${r.id}` },
