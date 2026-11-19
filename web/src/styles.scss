@@ -138,7 +138,7 @@ p { margin: 0 0 8px; }
 
 /* Wide tables scroll inside their own container, never the page (FR-11.16). */
 .table-wrap {
-  overflow-x: auto; border: 1px solid var(--border); border-radius: var(--radius-sm);
+  width: 100%; overflow-x: auto; border: 1px solid var(--border); border-radius: var(--radius-sm);
   background: var(--surface-solid); box-shadow: var(--shadow-sm);
 }
 table.data { border-collapse: separate; border-spacing: 0; width: 100%; font-size: 14px; }
@@ -277,6 +277,9 @@ details summary { cursor: pointer; }
 .card.chart h2 { font-size: 15px; margin: 0 0 2px; }
 .card.chart .sub { margin: 0 0 12px; font-size: 12.5px; }
 
-/* Ask VERITA spans the whole content column: its pinned header and question bar must reach the right edge on wide screens. */
-/* By id, so it outranks the shell's own (encapsulated) main rule. */
-main#main:has(> v-assistant) { max-width: none; }
+/* The page fills the column beside the sidebar. An id beats the shell's encapsulated max-width,
+   which otherwise stops lists short of the window at 80% zoom. List hosts are block so a table
+   stretches to that width instead of shrinking to its columns. */
+main#main { width: 100%; max-width: none; }
+main#main > :not(router-outlet),
+v-page, v-state, v-table { display: block; width: 100%; min-width: 0; box-sizing: border-box; }
