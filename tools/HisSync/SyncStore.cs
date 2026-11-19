@@ -12,6 +12,9 @@ namespace Verita.HisSync;
 /// <summary>The HIS could not be reached (network, login, server down). Nothing was read, so nothing is marked failed.</summary>
 public sealed class HisUnavailableException(string message, Exception inner) : Exception(message, inner);
 
+/// <summary>A sync step failed in a named stage (reading HIS, importing into VERITA, ...).</summary>
+public sealed class SyncStageException(string message, Exception inner) : Exception(message, inner);
+
 /// <summary>A VERITA hospital linked to a HIS tenant (it was bound on its first HIS import).</summary>
 public sealed record SyncHospital(Guid Id, string Code, string SetupId, short ProjectId)
 {
@@ -113,7 +116,10 @@ public sealed class SyncStore(IDbContextFactory<VeritaDbContext> factory, Verita
     /// </summary>
     public async Task<IAsyncDisposable?> TryLockAsync(string name, CancellationToken ct)
     {
-        var conn = new SqlConnection(verita.Value);
+        // Not pooled: a pooled connection stays open after Dispose and keeps a session lock with it, so the lock would
+        // outlive the pass (or a stopped process's last connection). Named, so the holder shows in sys.dm_exec_sessions.
+        var cs = new SqlConnectionStringBuilder(verita.Value) { Pooling = false, ApplicationName = $"VeritaHisSync lock {name} ({Environment.MachineName}, pid {Environment.ProcessId})" };
+        var conn = new SqlConnection(cs.ConnectionString);
         await conn.OpenAsync(ct);
         await using var cmd = conn.CreateCommand();
         cmd.CommandText = "DECLARE @r int; EXEC @r = sp_getapplock @Resource=@n, @LockMode='Exclusive', @LockOwner='Session', @LockTimeout=0; SELECT @r;";
@@ -140,6 +146,16 @@ public sealed class SyncStore(IDbContextFactory<VeritaDbContext> factory, Verita
         {
             log.LogWarning("HIS sync tables are not in the VERITA database yet ({Message}). Run the schema script (deploy/iis/sql) against the VERITA database.", ex.Message);
             return false;
+        }
+    }
+
+    /// <summary>Runs one stage of a sync step; a failure names the stage, so a timeout says whether HIS or VERITA was slow.</summary>
+    public static async Task<T> StageAsync<T>(string stage, Func<Task<T>> body)
+    {
+        try { return await body(); }
+        catch (Exception ex) when (ex is not OperationCanceledException and not HisUnavailableException)
+        {
+            throw new SyncStageException($"{stage}: {ex.Message}", ex);
         }
     }
 

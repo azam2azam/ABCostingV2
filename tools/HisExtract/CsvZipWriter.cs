@@ -15,7 +15,11 @@ public sealed class CsvZipWriter : IDisposable
     /// <summary>Data rows per CSV page. Later pages are <c>NN_Entity_p2.csv</c> so they are not overwritten.</summary>
     public static int PageRows { get; set; } = 50_000;
 
-    public CsvZipWriter(string zipPath, string readme, Settings s)
+    /// <param name="resume">
+    /// Keep the CSVs an interrupted run of this pack left in its folder (the sync worker resumes a catalogue check
+    /// table by table). The caller clears each table it writes again with <see cref="ClearTables"/>.
+    /// </param>
+    public CsvZipWriter(string zipPath, string readme, Settings s, bool resume = false)
     {
         ZipPath = Path.GetFullPath(zipPath);
         Directory.CreateDirectory(Path.GetDirectoryName(ZipPath)!);
@@ -23,8 +27,11 @@ public sealed class CsvZipWriter : IDisposable
         Directory.CreateDirectory(Dir);
         // The folder is zipped whole: clear what an earlier run of this pack left (a file this run no longer writes, or a
         // later page such as 27_Payer_p3.csv), so the pack holds only this run's files.
-        foreach (var stale in Directory.EnumerateFiles(Dir, "*.csv").Concat(new[] { "extract-log.txt", "README.txt" }.Select(n => Path.Combine(Dir, n))))
-            try { if (File.Exists(stale)) File.Delete(stale); } catch (IOException) { }
+        var stale = resume
+            ? new[] { "extract-log.txt", "README.txt" }.Select(n => Path.Combine(Dir, n))
+            : Directory.EnumerateFiles(Dir, "*.csv").Concat(new[] { "extract-log.txt", "README.txt" }.Select(n => Path.Combine(Dir, n)));
+        foreach (var f in stale.ToList())
+            try { if (File.Exists(f)) File.Delete(f); } catch (IOException) { }
         _readme = readme;
         _setupId = s.SetupId;
         _projectId = s.ProjectId.ToString();
@@ -82,6 +89,13 @@ public sealed class CsvZipWriter : IDisposable
     public string ZipPath { get; }
     public string Dir { get; }
     public bool Completed { get; set; }
+
+    /// <summary>Delete the CSVs (all pages) whose names start with these prefixes, e.g. "18_" for 18_Procedure*.csv.</summary>
+    public void ClearTables(params string[] prefixes)
+    {
+        foreach (var f in Directory.EnumerateFiles(Dir, "*.csv").Where(f => prefixes.Any(p => Path.GetFileName(f).StartsWith(p, StringComparison.OrdinalIgnoreCase))).ToList())
+            try { File.Delete(f); } catch (IOException) { }
+    }
 
     public CsvFile Create(string numberedName, params string[] headers)
     {

@@ -189,7 +189,7 @@ function pct(a: number, b: number | null | undefined): number | null {
                   <p class="step">{{ w.step ?? (w.status === 'IDLE' ? 'Waiting for work' : '—') }}</p>
                   @if (w.kind === 'FACTS' && w.currentDate) { <p class="muted">Date {{ w.currentDate }}</p> }
                   @if (w.batchesTotal) {
-                    <div class="progress"><span>Batches</span><v-bar [share]="pct(w.batchesDone, w.batchesTotal) ?? 0" /><span>{{ w.batchesDone }} / {{ w.batchesTotal }}</span></div>
+                    <div class="progress"><span>{{ w.kind === 'CATALOGUE' ? 'HIS tables' : 'Batches' }}</span><v-bar [share]="pct(w.batchesDone, w.batchesTotal) ?? 0" /><span>{{ w.batchesDone }} / {{ w.batchesTotal }}</span></div>
                   }
                   @if (w.recordsTotal) {
                     <div class="progress"><span>Records</span><v-bar [share]="pct(w.recordsDone, w.recordsTotal) ?? 0" /><span>{{ w.recordsDone }} / {{ w.recordsTotal }}</span></div>

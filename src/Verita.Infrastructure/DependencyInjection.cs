@@ -11,10 +11,11 @@ namespace Verita.Infrastructure;
 
 public static class DependencyInjection
 {
-    public static IServiceCollection AddVerita(this IServiceCollection services, string connectionString)
+    /// <param name="commandTimeoutSeconds">One query's limit. The API keeps 300; the HIS sync worker allows more for background imports.</param>
+    public static IServiceCollection AddVerita(this IServiceCollection services, string connectionString, int commandTimeoutSeconds = 300)
     {
         void Options(DbContextOptionsBuilder o) =>
-            o.UseSqlServer(connectionString, sql => { sql.CommandTimeout(300); sql.UseQuerySplittingBehavior(QuerySplittingBehavior.SingleQuery); });
+            o.UseSqlServer(connectionString, sql => { sql.CommandTimeout(commandTimeoutSeconds); sql.UseQuerySplittingBehavior(QuerySplittingBehavior.SingleQuery); });
 
         services.AddDbContextFactory<VeritaDbContext>(Options);
         services.AddScoped(sp => sp.GetRequiredService<IDbContextFactory<VeritaDbContext>>().CreateDbContext());

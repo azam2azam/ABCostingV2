@@ -8,7 +8,8 @@ var builder = WebApplication.CreateBuilder(args);
 
 var cs = builder.Configuration.GetConnectionString("Verita")
     ?? throw new InvalidOperationException("ConnectionStrings:Verita is not set.");
-builder.Services.AddVerita(cs);
+// Background imports and dry-runs can take longer than an API request: allow more per query (default 30 minutes).
+builder.Services.AddVerita(cs, builder.Configuration.GetValue("HisSync:VeritaCommandTimeoutSeconds", 1800));
 builder.Services.Configure<SyncOptions>(builder.Configuration.GetSection("HisSync"));
 builder.Services.Configure<HisOptions>(builder.Configuration.GetSection("His"));
 builder.Services.AddSingleton<SyncStore>();

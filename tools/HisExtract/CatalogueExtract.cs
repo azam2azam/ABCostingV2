@@ -4,25 +4,56 @@ namespace HisExtract;
 
 public static class CatalogueExtract
 {
-    public static async Task RunAsync(HisConnection db, Settings s, CsvZipWriter pack)
+    /// <summary>The catalogue's steps, in order, with the files each writes (by number prefix).</summary>
+    public static readonly (string Step, string[] Files)[] Steps =
+    [
+        ("Hospital", ["01_"]), ("Facility", ["02_"]), ("Service line", ["03_"]), ("Department and cost centre", ["04_", "05_"]),
+        ("Resource", ["11_"]), ("Provider", ["14_", "15_"]), ("Procedure", ["18_"]), ("Procedure rate", ["19_"]),
+        ("Medicine price", ["28_"]), ("Package", ["24_", "25_"]), ("DRG", ["26_"]), ("Payer", ["27_"]),
+    ];
+
+    public static Task RunAsync(HisConnection db, Settings s, CsvZipWriter pack) => RunAsync(db, s, pack, null, null);
+
+    /// <summary>
+    /// Extract the catalogue. With <paramref name="done"/>, steps an interrupted run finished (their CSVs are still in
+    /// the pack's folder) are kept; every other step clears its files and runs. <paramref name="stepDone"/> is told
+    /// each finished step, so a run can record its checkpoint.
+    /// </summary>
+    public static async Task RunAsync(HisConnection db, Settings s, CsvZipWriter pack, IReadOnlySet<string>? done, Func<string, Task>? stepDone)
     {
         var c = new Codes(s);
         var asOf = DateTime.Today;
         pack.WriteManifest("catalogue", null, null);
 
-        await HospitalAsync(db, s, c, pack);
-        await FacilityAsync(db, s, c, pack);
-        await ServiceLineAsync(db, s, c, pack);
-        var departments = await DepartmentAsync(db, s, c, pack);
-        await CostCenterAsync(db, s, c, pack, departments);
-        await ResourceAsync(c, pack);
-        await ProviderAsync(db, s, c, pack);
-        await ProcedureAsync(db, s, c, pack);
-        await ProcedureRateAsync(db, s, c, pack);
-        await MedicinePriceAsync(db, s, c, pack);
-        await PackageAsync(db, s, c, pack);
-        await DrgExtract.CatalogueAsync(db, s, pack);
-        await PayerAsync(db, s, c, pack);
+        async Task Step(string name, Func<Task> body)
+        {
+            if (done?.Contains(name) == true)
+            {
+                pack.Note($"{name}: kept from the interrupted run.");
+                return;
+            }
+            pack.ClearTables(Steps.First(x => x.Step == name).Files);
+            pack.Step($"Catalogue: {name}");
+            await body();
+            if (stepDone is not null) await stepDone(name);
+        }
+
+        await Step("Hospital", () => HospitalAsync(db, s, c, pack));
+        await Step("Facility", () => FacilityAsync(db, s, c, pack));
+        await Step("Service line", () => ServiceLineAsync(db, s, c, pack));
+        await Step("Department and cost centre", async () =>
+        {
+            var departments = await DepartmentAsync(db, s, c, pack);
+            await CostCenterAsync(db, s, c, pack, departments);
+        });
+        await Step("Resource", () => ResourceAsync(c, pack));
+        await Step("Provider", () => ProviderAsync(db, s, c, pack));
+        await Step("Procedure", () => ProcedureAsync(db, s, c, pack));
+        await Step("Procedure rate", () => ProcedureRateAsync(db, s, c, pack));
+        await Step("Medicine price", () => MedicinePriceAsync(db, s, c, pack));
+        await Step("Package", () => PackageAsync(db, s, c, pack));
+        await Step("DRG", () => DrgExtract.CatalogueAsync(db, s, pack));
+        await Step("Payer", () => PayerAsync(db, s, c, pack));
         pack.Note($"Catalogue extract finished {asOf:u}");
     }
 

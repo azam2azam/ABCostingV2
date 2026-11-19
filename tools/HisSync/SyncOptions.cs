@@ -19,7 +19,11 @@ public sealed class SyncOptions
     public int PollSeconds { get; set; } = 30;
     /// <summary>Tries before a batch is split (or a single encounter, a day's list or its refunds is marked failed).</summary>
     public int MaxAttempts { get; set; } = 3;
-    /// <summary>Where packs are written while they are imported. Each is deleted after its import.</summary>
+    /// <summary>One VERITA query's limit for the worker (imports, dry-runs). Read at startup.</summary>
+    public int VeritaCommandTimeoutSeconds { get; set; } = 1800;
+    /// <summary>Minutes before an interrupted catalogue check is resumed again while the process keeps running. After a restart it resumes at once.</summary>
+    public int CatalogueRetryMinutes { get; set; } = 5;
+    /// <summary>Where packs are written while they are imported (each deleted after), and where an interrupted catalogue check keeps its finished tables to resume from.</summary>
     public string WorkDir { get; set; } = Path.Combine(Path.GetTempPath(), "verita-his-sync");
     /// <summary>Hours of the hospital's clock ahead of UTC, for "today" and the catalogue check time (Saudi Arabia: 3).</summary>
     public int UtcOffsetHours { get; set; } = 3;

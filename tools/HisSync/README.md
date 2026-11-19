@@ -15,6 +15,13 @@ away on **Sync now**. It extracts the HIS catalogue, validates it against VERITA
 listed under *Catalogue changes* with counts per table. A person chooses **Apply changes** (the pack is queued
 on VERITA's import worker) or **Discard**. A newer check replaces an older parked one.
 
+A catalogue check that stops part-way (a timeout, a restart, a crash) **resumes from where it stopped**. Each HIS
+table it finishes is recorded in a checkpoint in `WorkDir\catalogue\<hospital>`, next to the tables already read.
+After a restart it carries on at once from the first unfinished table; if the HIS part had finished, it goes
+straight to the VERITA comparison. While the process keeps running it retries every `CatalogueRetryMinutes`.
+After `MaxAttempts` failures it gives up and logs it; the next daily check or Sync now starts over. A HIS that
+cannot be reached is not counted as a failure: the check waits for it.
+
 **Facts worker.** Syncs the fact dates added on HIS Sync, oldest first, straight into VERITA (no parking).
 Today is never synced. For each day it:
 
@@ -56,11 +63,27 @@ import).
 | `HisSync:PollSeconds` | `30` | How often an idle worker looks for work. |
 | `HisSync:MaxAttempts` | `3` | Tries before splitting a batch / marking it failed. |
 | `HisSync:UtcOffsetHours` | `3` | The hospital's clock, for "today" and the catalogue check time. |
-| `HisSync:WorkDir` | system temp | Where a pack is written while it is imported (deleted after). |
+| `HisSync:WorkDir` | system temp | Where a pack is written while it is imported (deleted after), and where an interrupted catalogue check keeps its checkpoint. Set it to a folder the app pool can write and that is not cleaned (e.g. `D:\verita\his-sync-work`). |
+| `HisSync:CatalogueRetryMinutes` | `5` | Wait between tries of an interrupted catalogue check (after a restart it resumes at once). |
+| `HisSync:VeritaCommandTimeoutSeconds` | `1800` | One VERITA query's limit for the worker (the API keeps 300 s); catalogue dry-runs and imports can take longer. |
 | `HisSync:StatusKey` | empty | When set, `/status` needs header `X-Sync-Key`. |
 
 Keep connection strings out of the file in production: use environment variables on the app pool
 (`ConnectionStrings__Verita`, `His__ConnectionString`) or `appsettings.Production.json` outside source control.
+
+## "Another HIS sync process holds the … lock; waiting"
+
+Only one process may sync at a time per VERITA database. The message means another copy is running (an IIS site,
+a second `dotnet run`, a debugger session) or still finishing a long step. Find it in the VERITA database:
+
+```sql
+SELECT s.session_id, s.program_name, s.host_name, s.login_time, r.command, r.wait_type
+FROM sys.dm_exec_sessions s LEFT JOIN sys.dm_exec_requests r ON r.session_id = s.session_id
+WHERE s.program_name LIKE 'VeritaHisSync lock%';
+```
+
+`program_name` names the lock, the machine and the process id. Stop that process (or its app pool). The lock is
+released as soon as its connection closes; if the process is gone but the session remains, `KILL <session_id>`.
 
 ## Endpoints
 

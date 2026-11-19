@@ -144,7 +144,7 @@ public sealed class FactsWorker(SyncStore store, PackRunner packs, ILogger<Facts
         {
             var s = Day(h, day.Date);
             await using var his = await SyncStore.OpenHisAsync(s);
-            manifest = await FactsManifest.BuildAsync(his, s);
+            manifest = await SyncStore.StageAsync("Reading the day's encounters from HIS", () => FactsManifest.BuildAsync(his, s));
         }
         catch (Exception ex) when (ex is not OperationCanceledException and not HisUnavailableException)
         {
@@ -320,12 +320,12 @@ public sealed class FactsWorker(SyncStore store, PackRunner packs, ILogger<Facts
         UseCache(h, s);
         Pack pack;
         await using (var his = await SyncStore.OpenHisAsync(s))
-            pack = await packs.ExtractAsync(s, $"{s.PackPrefix}-{s.From:yyyy-MM-dd}-facts.zip",
-                PackRunner.Readme(s, "facts", $"Day {s.From:yyyy-MM-dd}, {what}"), p => FactsExtract.RunAsync(his, s, p), ct);
+            pack = await SyncStore.StageAsync("Reading HIS", () => packs.ExtractAsync(s, $"{s.PackPrefix}-{s.From:yyyy-MM-dd}-facts.zip",
+                PackRunner.Readme(s, "facts", $"Day {s.From:yyyy-MM-dd}, {what}"), p => FactsExtract.RunAsync(his, s, p), ct));
         KeepCache(h, s);
         // A skipped step would leave rows missing for good (the sync only moves forward): fail and retry instead.
         if (pack.Warnings.Count > 0) throw new InvalidOperationException("HIS steps failed: " + string.Join("; ", pack.Warnings));
-        return await packs.ImportAsync(pack, h.Code, dryRun: false, ct);
+        return await SyncStore.StageAsync("Importing into VERITA", () => packs.ImportAsync(pack, h.Code, dryRun: false, ct));
     }
 
     private Settings Day(SyncHospital h, DateOnly date)

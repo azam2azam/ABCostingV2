@@ -494,3 +494,7 @@ web/.angular/
 # HIS extractor output
 his-extract-out/
 publish/HisExtract/
+
+# HIS Sync server settings hold passwords: keep them on the server only (template: appsettings.Production.example.json)
+tools/HisSync/appsettings.Production.json
+tools/HisSync/appsettings.Development.json
