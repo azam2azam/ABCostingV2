@@ -6,6 +6,7 @@ public static class FactsExtract
     {
         var c = new Codes(s);
         var asOf = s.To ?? DateTime.Today;
+        db.SlowQuery = (sec, rows, sql) => s.SlowSteps.Add($"HIS {sec:N1}s, {rows:N0} rows — {sql}");
         pack.WriteManifest("facts", s.From, s.To);
         pack.Note($"Facts {s.From:yyyy-MM-dd} .. {s.To:yyyy-MM-dd} (SQL end exclusive)");
 
@@ -17,6 +18,7 @@ public static class FactsExtract
                 if (l.InvoiceAppointment is > 0) c.LinkErToAppointment(l.Assessment, l.InvoiceAppointment.Value);
                 if (l.AppointmentId is > 0) c.LinkErToAppointment(l.Assessment, l.AppointmentId.Value);
             }
+            await s.ReportAsync("Refunds");
             await RefundsAsync(db, s, c, pack);
             return;
         }
@@ -28,14 +30,18 @@ public static class FactsExtract
             await ConsumptionExtract.EncounterSetsAsync(db, s);
         }
 
+        await s.ReportAsync("Patients");
         await PatientsAsync(db, s, c, pack, asOf);
+        await s.ReportAsync("Encounters");
         await EncountersAsync(db, s, c, pack);
+        await s.ReportAsync("Billing");
         await BillingAsync(db, s, c, pack);
         // Claims, settlements and NPHIES responses on the same invoices (#ip / #op / #er from billing), only with --claims:
         // claimed is the invoice's IsClaimed flag on each revenue line; received / rejected come from their own database later.
         if (s.Claims) await ClaimsExtract.RunAsync(db, s, c, pack);
         else pack.Note("Claims: claim, settlement and NPHIES lines not extracted (pass --claims). Claimed is hisIsClaimed on 36_RevenueTransaction (HIS_InvoiceMain.IsClaimed).");
         // No 35_ActivityTransaction — utilization is StaffTime / EncounterTransfer / ConsumptionItem only.
+        await s.ReportAsync("Consumption");
         await ConsumptionExtract.RunAsync(db, s, c, pack);
         if (c.SkippedEncounters.Count > 0)
             pack.Note($"Skipped encounters (no patient): rows left out — {string.Join(", ", c.SkippedRows.Select(x => $"{x.File} {x.Rows}"))}{(c.SkippedRows.Any() ? "" : "none")}.");

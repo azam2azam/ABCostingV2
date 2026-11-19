@@ -49,6 +49,7 @@ public static class ConsumptionExtract
 
     public static async Task RunAsync(HisConnection db, Settings s, Codes c, CsvZipWriter pack)
     {
+        await s.ReportAsync("Consumption items");
         pack.Step("Consumption: the pack's encounters");
         var sw = System.Diagnostics.Stopwatch.StartNew();
         LineIndex lines;
@@ -100,6 +101,7 @@ public static class ConsumptionExtract
             pack.Note("Consumption: as-received HIS fields kept (TransType, prices, order keys). Returns not netted — Verita can net later. No ACT/RES invent.");
         }
 
+        await s.ReportAsync("Staff time");
         using (var csv = pack.Create("40_StaffTime.csv",
             "hospitalCode", "encounterNo", "hisEncounterNo", "serviceRef", "linkMethod", "otReservationId", "otId", "clinicId",
             "staffRole", "staffType", "staffId", "providerCode", "minutes", "basis", "volume", "volumeUom",
@@ -115,6 +117,7 @@ public static class ConsumptionExtract
             pack.Note("StaffTime: measured HIS clocks + named staff ids as received. Ward nursing standards are not invented — see 41_EncounterTransfer.csv.");
         }
 
+        await s.ReportAsync("Transfers");
         using (var csv = pack.Create("41_EncounterTransfer.csv",
             "hospitalCode", "encounterNo", "hisEncounterNo", "transferNo", "transferDate", "startTime", "endTime", "duration",
             "hisClinicId", "transferType", "doctorId", "categoryId", "roomId", "bedId", "nursingStationId", "charges", "remarks",
@@ -179,7 +182,14 @@ public static class ConsumptionExtract
     /// </summary>
     public static async Task<(int Ip, int Op, int Er)> EncounterSetsAsync(HisConnection db, Settings s)
     {
-        if (s.Batch is { } batch) return await BatchSetsAsync(db, batch);
+        // Patients, billing and consumption each used to drop and refill #ip/#op/#er on the same connection.
+        if (db.BuiltSets is { } already) return already;
+        if (s.Batch is { } batch)
+        {
+            var built = await BatchSetsAsync(db, batch);
+            db.BuiltSets = built;
+            return built;
+        }
         async Task<int> Fill(string table, string set)
         {
             await db.ExecAsync($"IF OBJECT_ID('tempdb..{table}') IS NOT NULL DROP TABLE {table}; CREATE TABLE {table} (No int NOT NULL PRIMARY KEY);", _ => { });
@@ -211,7 +221,9 @@ public static class ConsumptionExtract
             WHERE x.AppointmentNo > 0
               AND NOT EXISTS (SELECT 1 FROM #op o WHERE o.No = x.AppointmentNo)
             """, s.BindTenant);
-        return (ip, op, er);
+        var result = (ip, op, er);
+        db.BuiltSets = result;
+        return result;
     }
 
     /// <summary>
