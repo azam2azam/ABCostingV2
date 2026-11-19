@@ -25,7 +25,8 @@ public sealed class AuditWriter(IDbContextFactory<VeritaDbContext> factory, IReq
             await using var db = await factory.CreateDbContextAsync(ct);
             db.AuditLogs.Add(new AuditLog
             {
-                Id = IdGen.Sequential(), UserId = actor?.Id, ActorEmail = actor?.Email ?? "system", Action = action,
+                // A system actor (the HIS sync worker) has no User row: its entries carry no user id, only its name.
+                Id = IdGen.Sequential(), UserId = actor is null || actor.Id == Guid.Empty ? null : actor.Id, ActorEmail = actor?.Email ?? "system", Action = action,
                 EntityType = entityType, EntityId = entityId, EntityLabel = entityLabel,
                 BeforeJson = before is null ? null : JsonSerializer.Serialize(before, Json),
                 AfterJson = after is null ? null : JsonSerializer.Serialize(after, Json),

@@ -27,8 +27,11 @@ public sealed class SyncStore(IDbContextFactory<VeritaDbContext> factory, Verita
 {
     public const string Actor = "his-sync";
 
-    /// <summary>The worker writes as a platform administrator scoped to every hospital; audit entries read "his-sync".</summary>
-    public static readonly Principal System = new(new Guid("5c0c1f5e-0000-4000-8000-000000005c00"), Actor, "HIS Sync worker", "ADMIN", "System", ["*"], ["*"]);
+    /// <summary>
+    /// The worker writes as a platform administrator scoped to every hospital. It is not a User: its id is empty, so
+    /// audit entries carry no user id (AuditLog.UserId references User) and read "his-sync" as the actor.
+    /// </summary>
+    public static readonly Principal System = new(Guid.Empty, Actor, "HIS Sync worker", "ADMIN", "System", ["*"], ["*"]);
 
     public SyncOptions Options => sync.Value;
 
