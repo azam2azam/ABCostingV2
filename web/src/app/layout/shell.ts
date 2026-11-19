@@ -127,7 +127,7 @@ import { Chip } from '../shared/ui';
     .pick select { max-width: 260px; border-radius: 999px; padding: 6px 14px; font-size: 13px; }
     .pick.hospital select { max-width: min(280px, 42vw); }
     .pick.period select { max-width: min(320px, 60vw); }
-    main { padding: 26px 28px 40px; max-width: 1560px; }
+    main { padding: 26px 28px 40px; max-width: none; }
     main:focus { outline: none; }
     .menu, .scrim { display: none; }
     .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }

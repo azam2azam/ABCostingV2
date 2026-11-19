@@ -375,7 +375,7 @@ export const COMPARE_PAGE_STYLES = `
   .pick { display: flex; flex-direction: column; gap: 6px; flex: 1 1 340px; min-width: 0; }
   .pick select { width: 100%; }
   .lbl { color: var(--text-3); font-size: 12px; font-weight: 600; letter-spacing: .04em; text-transform: uppercase; }
-  .tiles { grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); margin-bottom: 16px; }
+  .tiles { grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); margin-bottom: 16px; }
   .center { text-align: center; margin-top: 12px; }
   .reloading { opacity: .6; transition: opacity .15s; }
 `;
