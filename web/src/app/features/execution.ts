@@ -12,6 +12,7 @@ import type { components } from '../core/api-types';
 import { apiResource, runResource, catalogueResource } from '../core/resource';
 import { Icon } from '../shared/icon';
 import { Col, UI, matchesNameOrCode, hisProcedureId } from '../shared/ui';
+import { packageTileInfo } from '../shared/tile-info';
 
 // ── Configuration ───────────────────────────────────────────────────────────────
 
@@ -2072,6 +2073,8 @@ interface PatientEncounterRow {
   physician?: string | null; admitAt: string; dischargeAt?: string | null; lengthOfStay: number; services: number;
   gross: string | number; discount: string | number; net: string | number; cost?: string | number | null;
   doctorFee?: string | number | null; doctorBilled?: string | number; staffMinutes?: string | number; materials?: string | number; medicine?: string | number; claimed?: string | number;
+  /** VAT on the counted lines; Net + VAT is Invoice Billed. */
+  vat?: string | number;
 }
 /** Resource and no-billable type have no dropdown, but the Dashboard's counts still open the list filtered by them. */
 const ENCOUNTER_FILTER_KEYS = ['department', 'resource', 'physician', 'insurer', 'encType', 'segment', 'noBillableType'] as const;
@@ -2302,14 +2305,11 @@ export class PatientEncounters {
     if (this.canRevenue()) cols.push(
       { key: 'gross', label: 'Gross', type: 'money', blankZero: true }, { key: 'discount', label: 'Discount', type: 'money', blankZero: true },
       { key: 'net', label: 'Net Invoice', type: 'money', blankZero: true },
-      // Totals for the rows on this page (HIS values as billed / claimed): not sortable across the whole list.
-      // As on the detail's Doctors table: billed on the doctors' lines, with the doctors' share (HIS) underneath.
-      { key: 'doctorBilled', label: 'Doctor fee (billed / share)', type: 'money', blankZero: true, sortable: false,
-        sub: r => r.doctorFee == null ? null : `share ${formatMoney(String(r.doctorFee))}` },
+      { key: 'invoiceBilled', label: 'Invoice Billed', type: 'money', blankZero: true, sortable: false,
+        value: r => Number(r.net ?? 0) + Number(r.vat ?? 0), sub: r => Number(r.vat ?? 0) ? `VAT ${formatMoney(String(r.vat))}` : null },
     );
-    cols.push({ key: 'staffMinutes', label: 'Staff min', type: 'num', dp: 0, blankZero: true, sortable: false });
+    // Totals for the rows on this page (HIS values as billed / claimed): not sortable across the whole list.
     if (this.canRevenue()) cols.push(
-      { key: 'materials', label: 'Materials', type: 'money', blankZero: true, sortable: false },
       { key: 'medicine', label: 'Medicine', type: 'money', blankZero: true, sortable: false },
       { key: 'claimed', label: 'Claimed', type: 'money', blankZero: true, sortable: false },
     );
@@ -2318,6 +2318,26 @@ export class PatientEncounters {
 }
 
 type ChargesDto = components['schemas']['ReadQueriesEncounterCharges'];
+/** A package or procedure on the encounter, with the run's stored figures (as the doctor page's work rows). */
+interface EncounterWork {
+  id: string | null; code: string; name: string; encounters: number; performed: number; feeBilled: number | string;
+  consumablesBilled: number | string; consumablesCovered: number | string; medicineBilled: number | string;
+  wardDays: number | string; claimsReceived: number | string | null; rejectedClaims: number | string;
+  /** Packages only: the package's figures split by invoice (encounterNo is the invoice number). */
+  lines?: EncounterLine[] | null;
+}
+/** One invoice line of a package or procedure on the encounter, with what the run gives the row from it. */
+interface EncounterLine {
+  invoice: string; line: number; code: string | null; item: string | null; packageLine: boolean; feeBilled: number | string;
+  consumablesBilled: number | string; consumablesCovered: number | string; medicineBilled: number | string; medicineCovered: number | string;
+  claimsReceived: number | string | null; rejectedClaims: number | string;
+}
+/** A package or procedure row, or one of its invoice lines shown under it. */
+type EncounterWorkRow = EncounterWork & { kind?: 'group' | 'line' };
+interface EncounterTotals {
+  primaryDoctorId: string | null; primaryDoctor: string | null; primaryDoctorCode: string | null;
+  resourcesConsumed: number | string | null; amountBilled: number | string | null; claimed: number | string | null;
+}
 
 @Component({
   selector: 'v-encounter',
@@ -2325,62 +2345,59 @@ type ChargesDto = components['schemas']['ReadQueriesEncounterCharges'];
   template: `
     <v-state [loading]="res.isLoading()" [error]="res.error()">
       @if (res.value(); as r) {
-        <v-page [title]="'Encounter ' + r.data.encounter.encounterNo" [purpose]="(canPhi() ? r.data.encounter.patient + ' · ' : '') + 'MRN ' + r.data.encounter.mrn + ' · ' + r.data.encounter.department + invoiceText(r.data.lines)">
+        <v-page [title]="'Encounter ' + r.data.encounter.encounterNo" [purpose]="(canPhi() ? r.data.encounter.patient + ' · ' : '') + 'MRN ' + r.data.encounter.mrn + ' · ' + r.data.encounter.department">
+          @let m = mainTiles(r.data);
           <div class="grid tiles">
-            <v-tile label="Services" [value]="r.data.encounter.services" unit="" blankZero />
-            @if (canRevenue()) {
-              @let t = totals(r.data.lines);
-              <v-tile label="Total Amount" [value]="t.gross" blankZero />
-              <v-tile label="Discount" [value]="t.discount" blankZero />
-              <v-tile label="Net invoiced" [value]="t.net" blankZero />
-            }
-            <v-tile label="Cost" [value]="r.data.encounter.cost ?? 0" blankZero />
+            <v-tile label="Primary Doctor" [value]="m?.primaryDoctor ?? null" unit="id" compact
+              [link]="m?.primaryDoctorId && m?.primaryDoctorCode ? '/doctors/' + m!.primaryDoctorId : null" />
+            <v-tile label="Resources Consumed" [value]="m?.resourcesConsumed ?? null" [info]="info.resources" />
+            <v-tile label="Amount billed" [value]="m?.amountBilled ?? null" [info]="info.billed" />
+            <v-tile label="Claimed" [value]="m?.claimed ?? null" [info]="info.claims" />
           </div>
-          <section class="card" style="margin-top:14px"><h2>Invoiced procedures ({{ groups(r.data.lines).length }})</h2>
-            <v-table [rows]="groups(r.data.lines)" [columns]="groupCols()" caption="Invoiced procedures" empty="Nothing was invoiced on this encounter." />
+          @let w = work(r.data);
+          @if (w.packages.length) {
+          <section class="card" style="margin-top:14px">
+            <h2>Packages performed</h2>
+            <v-table [rows]="workRows(w.packages, 'pkg')" [columns]="packageWorkCols" [total]="workSum(w.packages)" caption="Packages performed"
+              empty="No packages billed on this encounter in this period." />
           </section>
+          }
+          @if (w.procedures.length) {
+          <section class="card" style="margin-top:14px">
+            <h2>Procedures performed (not packaged)</h2>
+            <v-table paged [rows]="workRows(w.procedures, 'proc')" [columns]="procedureWorkCols" [total]="workSum(w.procedures)" caption="Procedures performed (not packaged)"
+              empty="No procedures billed outside a package on this encounter in this period." />
+          </section>
+          }
           @if (r.data.charges; as c) {
+            @let sp = materialSplit(c);
+            @if (sp.billedConsumables.length || sp.billedMedicine.length) {
             <section class="card" style="margin-top:14px">
-              <h2>Resources charged</h2>
-              <p class="muted">Doctors from the lines they billed and from measured time. "Billed on their lines" is what the hospital invoiced for the doctor's services; "Doctor fee (share)" is the doctor's share of it as HIS holds it, blank for facts extracted before the share was added; nursing and other staff time from HIS clocks or standards. Staff fees need payroll rates, which are not loaded yet.</p>
-              <h3>Doctors</h3>
-              <v-table [rows]="c.doctors" [columns]="doctorCols()" caption="Doctors" empty="No doctor on this encounter." />
-              <h3 style="margin-top:14px">Nursing and other staff</h3>
-              <v-table [rows]="c.staff" [columns]="staffCols" caption="Nursing and other staff" empty="No nursing or staff time recorded for this encounter." />
+              <h2>Materials (Billed)</h2>
+              <p class="muted">Billed separately.</p>
+              @if (sp.billedConsumables.length) {
+                <h3>Consumables and implants</h3>
+                <v-table [rows]="sp.billedConsumables" [columns]="itemCols(false)" [total]="itemTotal(sp.billedConsumables)" caption="Billed consumables and implants" />
+              }
+              @if (sp.billedMedicine.length) {
+                <h3 [style.margin-top]="sp.billedConsumables.length ? '14px' : null">Medicine</h3>
+                <v-table [rows]="sp.billedMedicine" [columns]="itemCols(true)" [total]="itemTotal(sp.billedMedicine)" caption="Billed medicine" />
+              }
             </section>
-            <section class="card" style="margin-top:14px">
-              <h2>Materials</h2>
-              <p class="muted">What the patient consumed, per item, as HIS issued or billed it. Amounts are the charge, not cost: cost joins later from pharmacy and ERP on the item or Oracle code.</p>
-              <h3>Consumables and implants</h3>
-              <v-table [rows]="c.consumables" [columns]="itemCols(false)" [total]="itemTotal(c.consumables)" caption="Consumables and implants" empty="No consumables recorded for this encounter." />
-              <h3 style="margin-top:14px">Medicine</h3>
-              <v-table [rows]="c.medicine" [columns]="itemCols(true)" [total]="itemTotal(c.medicine)" caption="Medicine" empty="No medicine recorded for this encounter." />
-            </section>
-            @if (c.showsMoney && c.billed; as b) {
-              <section class="card" style="margin-top:14px">
-                <h2>Amount billed</h2>
-                <div class="grid tiles">
-                  <v-tile label="Gross" [value]="b.gross" />
-                  <v-tile label="Discount" [value]="b.discount" blankZero />
-                  <v-tile label="Refunded" [value]="b.refunded" blankZero />
-                  <v-tile label="Net billed" [value]="b.net" [note]="b.lines + ' invoice lines'" />
-                  <v-tile label="Patient share" [value]="b.patientShare" blankZero />
-                  <v-tile label="Company share" [value]="b.companyShare" blankZero />
-                  <v-tile label="Tax" [value]="b.tax" blankZero />
-                </div>
-              </section>
             }
-            @if (c.showsMoney && c.claims; as cl) {
-              <section class="card" style="margin-top:14px">
-                <h2>Claims received</h2>
-                <p class="muted">What was claimed from the payer on this encounter's lines, and what came back, as HIS holds it.</p>
-                <div class="grid tiles">
-                  <v-tile label="Claimed" [value]="cl.claimed" [note]="cl.linesClaimed + ' lines claimed'" />
-                  <v-tile label="Settled" [value]="cl.settled" />
-                  <v-tile label="Rejected" [value]="cl.rejected" [note]="cl.linesRejected ? cl.linesRejected + ' lines with a rejection' : null" />
-                  <v-tile label="Outstanding" [value]="cl.outstanding" note="Claimed − settled − rejected" />
-                </div>
-              </section>
+            @if (sp.coveredConsumables.length || sp.coveredMedicine.length) {
+            <section class="card" style="margin-top:14px">
+              <h2>Materials (Covered)</h2>
+              <p class="muted">Covered by procedure and not billed separately.</p>
+              @if (sp.coveredConsumables.length) {
+                <h3>Consumables and implants</h3>
+                <v-table [rows]="sp.coveredConsumables" [columns]="itemCols(false, true)" [total]="itemTotal(sp.coveredConsumables)" caption="Covered consumables and implants" />
+              }
+              @if (sp.coveredMedicine.length) {
+                <h3 [style.margin-top]="sp.coveredConsumables.length ? '14px' : null">Medicine</h3>
+                <v-table [rows]="sp.coveredMedicine" [columns]="itemCols(true, true)" [total]="itemTotal(sp.coveredMedicine)" caption="Covered medicine" />
+              }
+            </section>
             }
           }
           <section class="card his-source" style="margin-top:14px">
@@ -2404,6 +2421,64 @@ type ChargesDto = components['schemas']['ReadQueriesEncounterCharges'];
   `,
 })
 export class EncounterDetail {
+  /** All items (package and non-package) on the encounter, as the doctor and department pages add them up. */
+  info = packageTileInfo('encounter', true);
+  /** A doctor's id as HIS shows it: no hospital prefix and no "DOC-". */
+  doctorCode(code: string): string { return code.slice(code.indexOf('.') + 1).replace(/^DOC-/i, ''); }
+  /** The encounter's package and procedure work from the run's stored rows. */
+  work(d: unknown): { packages: EncounterWork[]; procedures: EncounterWork[] } {
+    const x = d as { packageWork?: EncounterWork[]; procedureWork?: EncounterWork[] };
+    return { packages: x.packageWork ?? [], procedures: x.procedureWork ?? [] };
+  }
+  workSum(rows: EncounterWork[]): Record<string, number> | null {
+    if (!rows.length) return null;
+    const sum = (f: (r: EncounterWork) => unknown) => rows.reduce((t, r) => t + Number(f(r) ?? 0), 0);
+    return { performed: sum(r => r.performed), consumablesAll: sum(r => Number(r.consumablesBilled) + Number(r.consumablesCovered)),
+      feeBilled: sum(r => r.feeBilled), medicineBilled: sum(r => r.medicineBilled), claimsReceived: sum(r => r.claimsReceived) };
+  }
+  /** Rows whose invoice lines are shown under them ("pkg:" or "proc:" and the row's id). */
+  openRows = signal<ReadonlySet<string>>(new Set());
+  private rowKey(r: EncounterWork, table: string): string { return `${table}:${r.id ?? 'none'}`; }
+  private toggleRow(key: string): void {
+    this.openRows.update(open => { const next = new Set(open); if (next.has(key)) next.delete(key); else next.add(key); return next; });
+  }
+  /** Package or procedure rows, each open one followed by its invoice lines (invoice-line id under Id, the line's item under Name). */
+  workRows(rows: EncounterWork[], table: 'pkg' | 'proc'): EncounterWorkRow[] {
+    const open = this.openRows();
+    return rows.flatMap(p => {
+      const row: EncounterWorkRow = { ...p, kind: 'group' };
+      if (!open.has(this.rowKey(p, table))) return [row];
+      return [row, ...(p.lines ?? []).map(l => ({
+        ...p, ...l, kind: 'line' as const, code: `${l.invoice}-${l.line}`, name: l.item ?? l.code ?? '', encounters: 1, performed: 0, wardDays: 0, lines: null,
+      }))];
+    });
+  }
+  /** The doctor page's work columns: Id, Name, then Performed, Consumables, Avg. LOS, Invoice Billed, Medicine, Claimed. */
+  private workCols(kind: 'packages' | 'procedures'): Col<EncounterWorkRow>[] {
+    const table = kind === 'packages' ? 'pkg' : 'proc';
+    const toggle: Col<EncounterWorkRow>[] = [{ key: 'toggle', label: '', type: 'button', sortable: false, icon: () => 'chevron',
+      button: r => r.kind === 'group' && r.lines?.length ? (this.openRows().has(this.rowKey(r, table)) ? 'Hide invoice lines' : 'Show invoice lines') : null,
+      expanded: r => r.kind === 'group' && this.openRows().has(this.rowKey(r, table)), onButton: r => this.toggleRow(this.rowKey(r, table)) }];
+    const cols: Col<EncounterWorkRow>[] = [
+      ...toggle,
+      { key: 'code', label: 'Id', value: r => r.kind === 'line' ? r.code : hisProcedureId(r.code), link: r => r.kind !== 'line' && r.id ? `/${kind}/${r.id}` : null },
+      { key: 'name', label: 'Name', minWidth: '16rem' },
+      { key: 'performed', label: 'Performed', type: 'num', dp: 0, blankZero: true },
+      { key: 'consumablesAll', label: 'Consumables', type: 'money', dp: 0, blankZero: true,
+        value: r => Number(r.consumablesBilled ?? 0) + Number(r.consumablesCovered ?? 0) },
+      { key: 'avgLos', label: 'Avg. LOS', type: 'num', dp: 1, blankZero: true,
+        value: r => Number(r.encounters) ? Number(r.wardDays ?? 0) / Number(r.encounters) : 0 },
+      { key: 'feeBilled', label: 'Invoice Billed', type: 'money', dp: 0, blankZero: true },
+      { key: 'medicineBilled', label: 'Medicine', type: 'money', dp: 0, blankZero: true },
+      // Claimed: what HIS claimed on invoices it put on a claim (HIS_InvoiceMain.IsClaimed = 1).
+      { key: 'claimsReceived', label: 'Claimed', type: 'money', dp: 0, blankZero: true, bad: r => Number(r.rejectedClaims) > 0 },
+    ];
+    return cols.map(c => ({ ...c, sortable: false }));
+  }
+  packageWorkCols = this.workCols('packages');
+  procedureWorkCols = this.workCols('procedures');
+  /** The main tiles from the run's stored rows; OpenAPI types catch up on the next api:types run. */
+  mainTiles(d: unknown): EncounterTotals | null { return (d as { totals?: EncounterTotals | null }).totals ?? null; }
   id = input.required<string>();
   private auth = inject(Auth);
   canRevenue = computed(() => this.auth.can('revenue.view'));
@@ -2429,19 +2504,27 @@ export class EncounterDetail {
       sub: r => r.basis === 'STANDARD' && r.volume != null ? `${formatDec(String(r.volume), 2)} ${(r.volumeUom ?? '').toLowerCase().replace('_', '-')}s × standard` : null },
     { key: 'fee', label: 'Fee', value: () => 'Rate not loaded', sortable: false },
   ];
-  itemCols(medicine: boolean): Col<ChargesDto['consumables'][number]>[] {
+  /** The materials split into covered and billed; OpenAPI types catch up on the next api:types run. */
+  materialSplit(c: ChargesDto): Record<'coveredConsumables' | 'coveredMedicine' | 'billedConsumables' | 'billedMedicine', ChargesDto['consumables']> {
+    const x = c as ChargesDto & Partial<Record<'coveredConsumables' | 'coveredMedicine' | 'billedConsumables' | 'billedMedicine', ChargesDto['consumables']>>;
+    return { coveredConsumables: x.coveredConsumables ?? [], coveredMedicine: x.coveredMedicine ?? [],
+      billedConsumables: x.billedConsumables ?? [], billedMedicine: x.billedMedicine ?? [] };
+  }
+  itemCols(medicine: boolean, covered = false): Col<ChargesDto['consumables'][number]>[] {
     const cols: Col<ChargesDto['consumables'][number]>[] = [
-      { key: 'description', label: 'Item', value: r => r.description || r.itemKey, sub: r => [r.itemKey, r.oracleItemCode ? 'Oracle ' + r.oracleItemCode : null].filter(Boolean).join(' · ') },
+      { key: 'description', label: 'Item', value: r => r.description || r.itemKey },
     ];
     if (!medicine) cols.push({ key: 'category', label: 'Type', type: 'chip', value: r => r.category === 'IMPLANT' ? 'Implant' : 'Consumable' });
-    cols.push({ key: 'quantity', label: 'Quantity', type: 'num', dp: 2, sub: r => r.uom.toLowerCase() });
+    cols.push({ key: 'quantity', label: 'Quantity', type: 'num', dp: 2 });
     if (medicine) cols.push({ key: 'prescribedQty', label: 'Prescribed', type: 'num', dp: 2, blankZero: true });
-    if (this.canRevenue()) cols.push({ key: 'billed', label: 'Billed', type: 'money', blankZero: true });
-    cols.push({ key: 'linkedTo', label: 'Charged to' });
+    if (this.canRevenue() && !covered) cols.push({ key: 'billed', label: 'Billed', type: 'money', blankZero: true });
+    if (this.canRevenue() && covered) cols.push({ key: 'covered', label: 'Covered value', type: 'money', blankZero: true,
+      value: r => (r as { covered?: number | string | null }).covered ?? null });
     return cols;
   }
   itemTotal(rows: ChargesDto['consumables']): Record<string, number> | null {
-    return rows.length ? { quantity: rows.reduce((t, r) => t + Number(r.quantity), 0), billed: rows.reduce((t, r) => t + Number(r.billed ?? 0), 0) } : null;
+    return rows.length ? { quantity: rows.reduce((t, r) => t + Number(r.quantity), 0), billed: rows.reduce((t, r) => t + Number(r.billed ?? 0), 0),
+      covered: rows.reduce((t, r) => t + Number((r as { covered?: number | string | null }).covered ?? 0), 0) } : null;
   }
   hisFieldCols: Col<HisEncounterSource['fields'][number]>[] = [
     { key: 'label', label: 'Field', sortable: false }, { key: 'hisColumn', label: 'HIS table and column', sortable: false }, { key: 'value', label: 'Value', sortable: false, value: r => isZero(r.value) ? '' : r.value ?? '' },

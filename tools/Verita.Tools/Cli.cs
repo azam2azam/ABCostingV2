@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Text.Json;
+using Microsoft.Data.SqlClient;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -15,7 +16,7 @@ namespace Verita.Tools;
 
 /// <summary>
 /// Operator tooling. `bootstrap` takes an empty SQL Server to a costed, reconciled platform:
-///   migrate --reset   drop and recreate the database from the EF migrations
+///   migrate --reset   empty the database and build it from deploy/iis/sql/01-schema.sql (there are no EF migrations)
 ///   import            load the reference fixture (fixture/source) through SqlBulkCopy
 ///   cost              create and execute a run for every reference hospital-period
 ///   scenarios         re-run the six acceptance scenarios (FR-8, BRD 13)
@@ -41,13 +42,13 @@ public static class Cli
         {
             switch (cmd)
             {
-                case "migrate": await Migrate(services, args.Contains("--reset")); break;
+                case "migrate": await Migrate(root, cs, args.Contains("--reset")); break;
                 case "import": await Import(services, fixture, demoPassword); break;
                 case "cost": await Cost(services, fixture); break;
                 case "scenarios": await Scenarios(services, fixture); break;
                 case "parity": await Parity.RunAsync(services, fixture, Path.Combine(root, "docs", "PARITY.md")); break;
                 case "bootstrap":
-                    await Migrate(services, reset: true);
+                    await Migrate(root, cs, reset: true);
                     await Import(services, fixture, demoPassword);
                     await Cost(services, fixture);
                     await Scenarios(services, fixture);
@@ -78,17 +79,60 @@ public static class Cli
         throw new InvalidOperationException("Run from inside the repository (Verita.sln not found).");
     }
 
-    private static async Task Migrate(IServiceProvider sp, bool reset)
+    /// <summary>
+    /// Builds the schema from the same scripts a server uses (deploy/iis/sql). Creates the database when it does not
+    /// exist (local development: that needs server rights). With --reset, empties it first with 00-drop-all.sql.
+    /// </summary>
+    private static async Task Migrate(string root, string cs, bool reset)
     {
-        await using var db = await sp.GetRequiredService<IDbContextFactory<VeritaDbContext>>().CreateDbContextAsync();
+        var dir = Path.Combine(root, "deploy", "iis", "sql");
+        var name = new SqlConnectionStringBuilder(cs).InitialCatalog;
+        if (string.IsNullOrWhiteSpace(name)) throw new InvalidOperationException("The connection string names no database.");
+
+        await using (var master = new SqlConnection(new SqlConnectionStringBuilder(cs) { InitialCatalog = "master" }.ConnectionString))
+        {
+            await master.OpenAsync();
+            await using var create = master.CreateCommand();
+            create.CommandText = $"IF DB_ID(@n) IS NULL CREATE DATABASE [{name.Replace("]", "]]")}];";
+            create.Parameters.AddWithValue("@n", name);
+            await create.ExecuteNonQueryAsync();
+        }
+
+        await using var conn = new SqlConnection(cs);
+        await conn.OpenAsync();
+        conn.InfoMessage += (_, e) => Console.WriteLine("  " + e.Message);
         if (reset)
         {
-            Console.WriteLine("Dropping database…");
-            await db.Database.EnsureDeletedAsync();
+            Console.WriteLine($"Emptying {name} (00-drop-all.sql)…");
+            var drop = (await File.ReadAllTextAsync(Path.Combine(dir, "00-drop-all.sql")))
+                .Replace("DECLARE @confirm sysname = N'';", $"DECLARE @confirm sysname = N'{name.Replace("'", "''")}';");
+            await RunScriptAsync(conn, drop);
         }
-        Console.WriteLine("Applying migrations…");
-        await db.Database.MigrateAsync();
-        Console.WriteLine($"Schema at {(await db.Database.GetAppliedMigrationsAsync()).LastOrDefault()}.");
+        await using (var any = conn.CreateCommand())
+        {
+            any.CommandText = "SELECT COUNT(*) FROM sys.tables WHERE is_ms_shipped = 0";
+            if (Convert.ToInt32(await any.ExecuteScalarAsync()) > 0)
+            {
+                Console.WriteLine($"{name} already has tables; left as it is. Use migrate --reset to rebuild it.");
+                return;
+            }
+        }
+        Console.WriteLine("Creating the schema (01-schema.sql)…");
+        await RunScriptAsync(conn, await File.ReadAllTextAsync(Path.Combine(dir, "01-schema.sql")));
+        Console.WriteLine("Schema created.");
+    }
+
+    /// <summary>Runs a SQL script the way sqlcmd does: batch by batch at each GO line, stopping at the first error.</summary>
+    private static async Task RunScriptAsync(SqlConnection conn, string script)
+    {
+        foreach (var batch in System.Text.RegularExpressions.Regex.Split(script, @"^\s*GO\s*$", System.Text.RegularExpressions.RegexOptions.Multiline))
+        {
+            if (string.IsNullOrWhiteSpace(batch)) continue;
+            await using var cmd = conn.CreateCommand();
+            cmd.CommandText = batch;
+            cmd.CommandTimeout = 600;
+            await cmd.ExecuteNonQueryAsync();
+        }
     }
 
     private static async Task Import(IServiceProvider sp, string fixture, string demoPassword)

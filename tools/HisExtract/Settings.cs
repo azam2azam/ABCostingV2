@@ -29,6 +29,16 @@ public sealed class Settings
     /// </summary>
     public bool Claims { get; set; }
 
+    /// <summary>
+    /// Set by the sync worker: extract only these encounters (one batch of a day) instead of the whole day.
+    /// Null for the CLI, which extracts whole days. <see cref="From"/>/<see cref="To"/> stay the day either way.
+    /// </summary>
+    public FactBatch? Batch { get; set; }
+    /// <summary>What a facts run writes: the whole day, one batch of its encounters, or the day's own refunds.</summary>
+    public FactsPart Part { get; set; } = FactsPart.Day;
+    /// <summary>Lookups that do not change between batches of one day (item names), kept by the sync worker.</summary>
+    public Dictionary<string, object> Cache { get; } = new(StringComparer.Ordinal);
+
     /// <summary>HIS tenant token used in row codes. Not a VERITA Hospital.Code — import maps that.</summary>
     public string H => $"{SetupId}-{ProjectId}";
 

@@ -83,11 +83,7 @@ builder.Services.AddSwaggerGen(o =>
 
 var app = builder.Build();
 
-// Bring the database schema up to date before serving: apply any EF Core migration the database
-// has not recorded in __EFMigrationsHistory. A failure stops the API rather than run on an old schema.
-// Turn off with Database__MigrateOnStartup=false (then apply migrations by script).
-if (app.Configuration.GetValue("Database:MigrateOnStartup", true))
-    await DatabaseMigrator.MigrateAsync(app.Services, app.Logger);
+// The API never changes the database schema: it is created and updated only by the scripts in deploy/iis/sql.
 
 app.UseResponseCompression();
 if (corsOrigins.Length > 0) app.UseCors();

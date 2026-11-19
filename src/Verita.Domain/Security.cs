@@ -91,8 +91,8 @@ public static class Security
             new("departments", "Departments", "costing.view", "The hospital's departments from the catalogue. When a calculation has been run for the period, cases, revenue and cost are shown too."),
             new("packages", "Packages", "costing.view", "Bundled episodes: cases, amount billed, materials, medicine, ward and staff time, and claims against the contracted price."),
             new("doctors", "Doctors", "costing.view", "The hospital's doctors from the catalogue, with their home department and HIS clinics. When a calculation has been run for the period, cases, revenue and cost are shown too."),
-            new("cost-centres", "Cost Centres", "masterdata.view", "The financial units money lands in, their step-down sequence and their closing balances."),
             new("procedures", "Procedure/Activity", "costing.view", "Standard and actual cost per procedure/activity, fully decomposed into its cost components."),
+            new("cost-centres", "Cost Centres", "masterdata.view", "The financial units money lands in, their step-down sequence and their closing balances."),
             new("resources", "Resources", "masterdata.view", "Everything that costs money and is consumed, with effective-dated rates and capacity models."),
             new("patient-encounters", "Patient Encounters", "patient.view", "Patient encounters and what was invoiced for each, with the source reference of every line."),
             new("his-invoicing", "HIS Invoicing", "revenue.view", "Invoices as held in the HIS."),
@@ -116,6 +116,7 @@ public static class Security
         ]),
         new("System", [
             new("administration", "Administration", "admin.view", "Users, roles, hospital and department scopes, and the permission matrix."),
+            new("his-sync", "HIS Sync", "admin.view", "Keep the hospital in step with the HIS: the daily catalogue check, fact dates queued for the sync worker, what the worker is doing now, and the sync log."),
             new("audit", "Audit", "audit.view", "Every change, approval, publication and PHI access, with actor, timestamp and before-and-after state."),
             new("help", "Help & Method", "help.view", "How the costing model works, what each number means, and the rules behind it."),
         ]),

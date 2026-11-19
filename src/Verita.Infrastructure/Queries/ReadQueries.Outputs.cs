@@ -29,7 +29,23 @@ public sealed partial class ReadQueries
 
     public sealed record ProcedureRow(Guid Id, string Code, string CatalogCode, string Name, string Category, string ProcType, string Department,
         string? ServiceLine, decimal Volume, decimal StandardUnit, decimal ActualUnit, decimal ActualTotal, decimal Revenue, decimal Variance,
-        decimal VariancePct, decimal ListPrice, decimal UnitCost, decimal TotalCost, string State);
+        decimal VariancePct, decimal ListPrice, decimal UnitCost, decimal TotalCost, string State)
+    {
+        /// <summary>
+        /// The run's stored lines of the procedure billed outside a package (see ProcedureBillingSummary), as the procedure
+        /// page adds them up: quantity performed, lines billed, consumables and medicine tied to them, and claims.
+        /// </summary>
+        public int Performed { get; init; }
+        public decimal FeeBilled { get; init; }
+        public decimal MaterialsBilled { get; init; }
+        public decimal MedicineBilled { get; init; }
+        /// <summary>Claims on invoices HIS put on a claim (IsClaimed); null until the facts carry the flag.</summary>
+        public decimal? ClaimsReceived { get; init; }
+        public decimal ClaimRejected { get; init; }
+        /// <summary>The encounters with those lines, and their length of stay in days added up, for Avg. LOS.</summary>
+        public int Encounters { get; init; }
+        public decimal StayDays { get; init; }
+    }
     public sealed record ChainActivity(Guid ActivityId, string Activity, decimal Quantity, string CostCentre, decimal OverheadPerOccurrence,
         AllocationDto[] OverheadSources, RecipeLineDto[] Resources);
     public sealed record SourceTxn(Guid Id, string EncounterNo, string Activity, string Resource, decimal Quantity, string Uom, DateTime OccurredAt,
@@ -39,7 +55,14 @@ public sealed partial class ReadQueries
     public sealed record ContainingPackage(Guid Id, string Code, string Name, decimal Quantity, decimal Price, int Cases);
     public sealed record ProcedureDetail(ProcedureRow Procedure, ComponentDto[] StandardComponents, decimal StandardTotal, ProcedureCost? Actual,
         VarianceDetail? Variance, ChainActivity[] Chain, SourceTxn[] SampleTransactions, CrossHospital[] AcrossHospitals, Provenance Provenance,
-        ContainingPackage[] Packages, RecipeLineDto[] Recipe);
+        ContainingPackage[] Packages, RecipeLineDto[] Recipe)
+    {
+        /// <summary>
+        /// The procedure's lines billed outside a package in the run, by the line's doctor (see ProcedureBillingSummary), each with
+        /// its encounters; Id, Code and Name are the doctor's. Empty with no run.
+        /// </summary>
+        public PackageWorkRow[] Doctors { get; init; } = [];
+    }
 
     /// <summary>The Procedure/Activity list: a package is billed as a procedure of the same code, but it belongs on the Packages list.</summary>
     public async Task<ProcedureRow[]> ProcedureListAsync(ScopedRun s, Principal p, CancellationToken ct)
@@ -113,7 +136,29 @@ public sealed partial class ReadQueries
                 .ToDictionary(g => g.Key, g => (int)Math.Round(g.Sum(x => x.Quantity), MidpointRounding.AwayFromZero));
         }
         var packages = pkgs.Select(x => new ContainingPackage(x.Id, x.Code, x.Name, x.Quantity, x.Price, billed.GetValueOrDefault(x.Id))).ToArray();
-        return new ProcedureDetail(row, [], 0, null, null, [], [], [], Prov(s), packages, await ProcedureRecipeAsync(s, p, id, ct));
+        return new ProcedureDetail(row, [], 0, null, null, [], [], [], Prov(s), packages, await ProcedureRecipeAsync(s, p, id, ct))
+        {
+            Doctors = await ProcedureDoctorsAsync(s, p, id, ct),
+        };
+    }
+
+    /// <summary>The procedure's stored non-package lines in the run by doctor, limited to the departments the user may see.</summary>
+    private async Task<PackageWorkRow[]> ProcedureDoctorsAsync(ScopedRun s, Principal p, Guid procedureId, CancellationToken ct)
+    {
+        if (s.Run.Id == Guid.Empty) return [];
+        var rows = await db.RunProcedureDoctors.AsNoTracking().Where(x => x.RunId == s.Run.Id && x.ProcedureId == procedureId).ToListAsync(ct);
+        if (rows.Count > 0 && !p.AllDepartments)
+        {
+            var ids = rows.Select(r => r.EncounterId).Distinct().ToList();
+            var allowed = (await (from e in db.Encounters.AsNoTracking()
+                                  join d in db.Departments.AsNoTracking() on e.DepartmentId equals d.Id
+                                  where ids.Contains(e.Id)
+                                  select new { e.Id, d.Code }).ToListAsync(ct))
+                .Where(x => p.HasDepartment(x.Code)).Select(x => x.Id).ToHashSet();
+            rows = rows.Where(r => allowed.Contains(r.EncounterId)).ToList();
+        }
+        var work = await ProcedureWorkOfAsync(rows, p.Can("revenue.view"), ct, withDoctors: true);
+        return work.FirstOrDefault()?.Doctors?.OrderByDescending(x => x.Performed).ThenBy(x => x.Name).ToArray() ?? [];
     }
 
     private async Task<RecipeLineDto[]> ProcedureRecipeAsync(ScopedRun s, Principal p, Guid procedureId, CancellationToken ct)
@@ -231,11 +276,16 @@ public sealed partial class ReadQueries
         public int MaterialItems { get; init; }
         public decimal MedicineBilled { get; init; }
         public decimal MedicineQuantity { get; init; }
+        /// <summary>Consumables and medicine the package price covered (consumed, not billed separately); only where a screen fills them (a department's packages).</summary>
+        public decimal? ConsumablesCovered { get; init; }
+        public decimal? MedicineCovered { get; init; }
         public decimal Claimed { get; init; }
         public decimal ClaimSettled { get; init; }
         public decimal ClaimRejected { get; init; }
         /// <summary>Claims on invoices HIS put on a claim (IsClaimed); null until the facts carry the flag.</summary>
         public decimal? ClaimsReceived { get; init; }
+        /// <summary>Encounters that billed the package in the run (Avg. LOS is WardDays over these).</summary>
+        public int Encounters { get; init; }
     }
     public sealed record ProcedureCostingItem(Guid Id, string Code, string Name, decimal? MarginPct, decimal ListPrice, Guid? PackageId = null, decimal? CompositionCost = null);
     public sealed record ProcedureTypeRow(string Code, string Name, int Procedures, decimal? MarginPct, ProcedureCostingItem[] Items);
@@ -332,6 +382,7 @@ public sealed partial class ReadQueries
                 MaterialsBilled = b?.MaterialsBilled ?? 0, MaterialItems = b?.MaterialItems ?? 0, MedicineBilled = b?.MedicineBilled ?? 0, MedicineQuantity = b?.MedicineQuantity ?? 0,
                 Claimed = showRevenue ? b?.Claimed ?? 0 : 0, ClaimSettled = showRevenue ? b?.Settled ?? 0 : 0, ClaimRejected = showRevenue ? b?.Rejected ?? 0 : 0,
                 ClaimsReceived = showRevenue ? b?.ClaimsReceived : null,
+                Encounters = b?.Encounters ?? 0,
             };
         }).ToArray();
     }
@@ -1015,7 +1066,13 @@ public sealed partial class ReadQueries
     public sealed record PackageWorkRow(Guid? Id, string Code, string Name, int Encounters, int Performed, decimal FeeBilled,
         decimal ConsumablesBilled, decimal ConsumablesCovered, decimal MedicineBilled, decimal MedicineCovered,
         decimal Claimed, decimal ConsumablesClaimed, decimal MedicineClaimed, decimal? ClaimsReceived, decimal Settled, decimal RejectedClaims,
-        decimal WardDays, PackageDoctorEncounterRow[] EncounterRows, decimal? ClaimsReceivedLines = null);
+        decimal WardDays, PackageDoctorEncounterRow[] EncounterRows, decimal? ClaimsReceivedLines = null, decimal? Price = null)
+    {
+        /// <summary>The row split by doctor (Id, Code and Name are the doctor's); only where a screen asks for it.</summary>
+        public PackageWorkRow[]? Doctors { get; init; }
+        /// <summary>The row split by invoice line; only on the encounter page.</summary>
+        public EncounterPackageLine[]? Lines { get; init; }
+    }
 
     internal static PackageWorkRow WorkRowOf(Guid? id, string code, string name, IReadOnlyCollection<RunPackageDoctor> rows, IReadOnlyDictionary<Guid, string> encNo, bool money) =>
         new(id, code, name, rows.Select(r => r.EncounterId).Distinct().Count(), rows.Sum(r => r.Performed),

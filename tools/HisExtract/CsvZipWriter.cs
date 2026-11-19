@@ -21,6 +21,10 @@ public sealed class CsvZipWriter : IDisposable
         Directory.CreateDirectory(Path.GetDirectoryName(ZipPath)!);
         Dir = Path.Combine(Path.GetDirectoryName(ZipPath)!, Path.GetFileNameWithoutExtension(ZipPath));
         Directory.CreateDirectory(Dir);
+        // The folder is zipped whole: clear what an earlier run of this pack left (a file this run no longer writes, or a
+        // later page such as 27_Payer_p3.csv), so the pack holds only this run's files.
+        foreach (var stale in Directory.EnumerateFiles(Dir, "*.csv").Concat(new[] { "extract-log.txt", "README.txt" }.Select(n => Path.Combine(Dir, n))))
+            try { if (File.Exists(stale)) File.Delete(stale); } catch (IOException) { }
         _readme = readme;
         _setupId = s.SetupId;
         _projectId = s.ProjectId.ToString();
@@ -31,6 +35,10 @@ public sealed class CsvZipWriter : IDisposable
     }
 
     public const string ProgressLogName = "progress-log.txt";
+
+    /// <summary>Steps that failed and were skipped. The sync worker treats any as a failed batch, so nothing is lost.</summary>
+    public IReadOnlyList<string> Warnings => _warnings;
+    private readonly List<string> _warnings = [];
     private readonly StreamWriter _progress;
 
     private void Log(string level, string text)
@@ -49,6 +57,7 @@ public sealed class CsvZipWriter : IDisposable
     /// <summary>A step failed and was skipped: console note, and the error with its SQL in the progress log.</summary>
     public void Warn(string label, Exception ex)
     {
+        _warnings.Add($"{label} skipped: {ex.Message}");
         Note($"{label} skipped: {ex.Message}");
         Log("WARN", $"{label} skipped. {Describe(ex)}");
     }

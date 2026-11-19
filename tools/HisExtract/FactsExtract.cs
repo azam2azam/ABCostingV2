@@ -9,6 +9,25 @@ public static class FactsExtract
         pack.WriteManifest("facts", s.From, s.To);
         pack.Note($"Facts {s.From:yyyy-MM-dd} .. {s.To:yyyy-MM-dd} (SQL end exclusive)");
 
+        if (s.Part == FactsPart.DayRefunds)
+        {
+            // Refunds dated in the day, whatever their encounter. ER links decide the encounter number of an ER refund.
+            foreach (var l in s.Batch?.ErLinks ?? [])
+            {
+                if (l.InvoiceAppointment is > 0) c.LinkErToAppointment(l.Assessment, l.InvoiceAppointment.Value);
+                if (l.AppointmentId is > 0) c.LinkErToAppointment(l.Assessment, l.AppointmentId.Value);
+            }
+            await RefundsAsync(db, s, c, pack);
+            return;
+        }
+        if (s.Part == FactsPart.Batch)
+        {
+            var batch = s.Batch ?? throw new InvalidOperationException("A batch run needs the batch's encounters.");
+            pack.Note($"Sync batch: {batch.Ip.Length} admissions, {batch.Op.Length} appointments, {batch.Er.Length} ER assessments.");
+            // Patients, encounters and DRG read by the batch's keys, so the temp tables come first.
+            await ConsumptionExtract.EncounterSetsAsync(db, s);
+        }
+
         await PatientsAsync(db, s, c, pack, asOf);
         await EncountersAsync(db, s, c, pack);
         await BillingAsync(db, s, c, pack);
@@ -28,7 +47,7 @@ public static class FactsExtract
         using var csv = pack.Create("32_Patient.csv",
             "hospitalCode", "mrn", "fullName", "birthYear", "sex", "segment", "nationalIdMasked");
         var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        await db.QueryAsync("""
+        await db.QueryAsync(s.Batch is not null ? BatchPatients : """
             SELECT p.PatientType, p.PatientID, p.FirstName, p.MiddleName, p.LastName,
                    p.Gender, p.DateofBirth, p.PatientIdentificationNo, p.IsPregnant
             FROM dbo.HIS_Patient p WITH (NOLOCK)
@@ -67,7 +86,7 @@ public static class FactsExtract
         });
 
         var stubs = 0;
-        await db.QueryAsync("""
+        await db.QueryAsync(s.Batch is not null ? BatchPatientIds : """
             SELECT a.PatientID FROM dbo.HIS_Appointment a WITH (NOLOCK)
             WHERE a.SetupID=@SetupId AND a.ProjectID=@ProjectId AND a.PatientID > 0
               AND a.AppointmentDate >= @From AND a.AppointmentDate < @To
@@ -131,7 +150,7 @@ public static class FactsExtract
         var ipDrg = await DrgExtract.ByAdmissionAsync(db, s, pack);
         var opDrg = await DrgExtract.ByAppointmentAsync(db, s, pack);
 
-        await db.QueryAsync("""
+        await db.QueryAsync(s.Batch is not null ? BatchAdmissions : """
             SELECT i.AdmissionNo, i.PatientType, i.PatientID, i.ClinicID, i.AdmittingClinicID, i.DoctorID,
                    i.AdmittingDoctorID, i.CompanyId, i.AdmissionDate, i.DischargeDate, i.Status,
                    ds.DaysStayed,
@@ -204,6 +223,20 @@ public static class FactsExtract
               AND ap.PatientID=e.PatientID
             """;
         var invoiceLinks = new Dictionary<int, (int Appointment, int? Company)>();
+        if (s.Batch is { } batch)
+        {
+            // The day's links were read once when its encounter list was built; same order as below (invoice, then AppointmentID).
+            foreach (var l in batch.ErLinks.Where(l => l.InvoiceAppointment is > 0))
+            {
+                invoiceLinks[l.Assessment] = (l.InvoiceAppointment!.Value, l.InvoiceCompany);
+                c.LinkErToAppointment(l.Assessment, l.InvoiceAppointment.Value);
+            }
+            foreach (var l in batch.ErLinks.Where(l => l.AppointmentId is > 0))
+                c.LinkErToAppointment(l.Assessment, l.AppointmentId!.Value);
+            pack.Note($"ER links from the day's list: {batch.ErLinks.Length}.");
+        }
+        else
+        {
         await db.QueryAsync("""
             SELECT e.AssessmentNo, m.AppointmentNo, m.CompanyID
             FROM dbo.HIS_InvoiceMain m WITH (NOLOCK)
@@ -234,6 +267,7 @@ public static class FactsExtract
             c.LinkErToAppointment(HisConnection.I(r, "AssessmentNo"), HisConnection.I(r, "AppointmentNo"));
         });
         pack.Note($"ER links by AppointmentID: {appointmentLinks}.");
+        }
 
         int erByAppointment = 0, erByInvoice = 0, erStandalone = 0, erRefused = 0, erSharing = 0;
         void WriteEr(Microsoft.Data.SqlClient.SqlDataReader r)
@@ -270,7 +304,14 @@ public static class FactsExtract
                 no, "ER", Maps.DateTime(start), Maps.DateTime(end), "0", "false", "ROUTINE", $"{assessment}",
                 HisConnection.S(r, "Status"), HisConnection.S(r, "ERStatus"), Flag(r, "IsVisitClosed"), When(HisConnection.Dt(r, "ArrivedOn")));
         }
-        await db.QueryAsync($"""
+        await db.QueryAsync(s.Batch is not null ? $"""
+            SELECT {ErColumns}
+            FROM #er k
+            INNER JOIN dbo.INP_ERAssessment e WITH (NOLOCK)
+              ON e.SetupID=@SetupId AND e.ProjectID=@ProjectId AND e.AssessmentNo=k.No
+            {ErAppointment}
+            WHERE e.PatientID > 0
+            """ : $"""
             SELECT {ErColumns}
             FROM dbo.INP_ERAssessment e WITH (NOLOCK)
             {ErAppointment}
@@ -288,6 +329,9 @@ public static class FactsExtract
             """, s.BindPeriod, WriteEr);
 
         // An assessment dated outside this month still belongs here when its appointment is in this pack.
+        // A sync batch has them in #er already (the day's list adds them), so they were written above.
+        if (s.Batch is null)
+        {
         var inPack = new HashSet<int>();
         await db.QueryAsync("""
             SELECT a.AppointmentNo FROM dbo.HIS_Appointment a WITH (NOLOCK)
@@ -310,9 +354,10 @@ public static class FactsExtract
             var linked = HisConnection.Ni(r, "LinkedAppointment") ?? (invoiceLinks.TryGetValue(assessment, out var invoiced) ? invoiced.Appointment : null);
             if (linked is { } appointment && inPack.Contains(appointment)) WriteEr(r);
         });
+        }
         pack.Note($"ER encounters: {erByAppointment} linked by AppointmentID, {erByInvoice} linked by InvoiceNo, {erStandalone} with no appointment. {erRefused} AppointmentID values had no appointment for the same patient; {erSharing} assessments shared an appointment with another.");
 
-        await db.QueryAsync("""
+        await db.QueryAsync(s.Batch is not null ? BatchAppointments : """
             SELECT a.AppointmentNo, a.PatientType, a.PatientID, a.ClinicID, a.DoctorID, a.CompanyID,
                    a.AppointmentDate, a.StartTime, a.EndTime, a.ActualVisitStartTime, a.ActualVisitEndTime,
                    a.EndDate, a.Status, a.IsVisitClosed, a.ArrivedOn
@@ -619,7 +664,9 @@ public static class FactsExtract
                 HisConnection.S(r, "ReasonID"), "VIDA-HIS", $"REF-{refundNo}-{line}");
         }
 
-        await db.QueryAsync($"""
+        // Refunds on the pack's encounters (any date), and refunds dated in the day (any encounter). A sync batch
+        // writes only the first; the day's own refunds are written once, after its batches.
+        var keyed = $"""
             SELECT {cols}
             FROM #ip i
             INNER JOIN dbo.HIS_InvoiceMain m WITH (NOLOCK)
@@ -650,7 +697,8 @@ public static class FactsExtract
               ON r.SetupID=m.SetupID AND r.ProjectID=m.ProjectID
              AND r.OriginalTransactionType=m.TransactionType AND r.OriginalTransactionRef=m.InvoiceNo
             {detail}
-            UNION ALL
+            """;
+        var dated = $"""
             SELECT {cols}
             FROM dbo.HIS_RefundMain r WITH (NOLOCK)
             LEFT JOIN dbo.HIS_InvoiceMain m WITH (NOLOCK)
@@ -659,9 +707,82 @@ public static class FactsExtract
             {detail}
             WHERE r.SetupID=@SetupId AND r.ProjectID=@ProjectId
               AND r.RefundDate >= @From AND r.RefundDate < @To
-            """, s.BindPeriod, WriteRow);
+            """;
+        var sql = s.Part switch
+        {
+            FactsPart.Batch => keyed,
+            FactsPart.DayRefunds => dated,
+            _ => keyed + "\nUNION ALL\n" + dated,
+        };
+        await db.QueryAsync(sql, s.BindPeriod, WriteRow);
         pack.Note($"RefundTransaction {lines} lines (encounter-driven + in-window): {cancelled} on cancelled refunds, {noEncounter} with no encounter. Not written as revenue.");
     }
+
+    // ── Sync batch: the same rows, read by the batch's keys (#ip / #op / #er) instead of by date ─────────────
+
+    /// <summary>Patients of the batch's encounters and of their invoices.</summary>
+    private const string BatchPatientSet = """
+        SELECT a.PatientType, a.PatientID FROM #ip k
+        INNER JOIN dbo.INP_Admission a WITH (NOLOCK) ON a.SetupID=@SetupId AND a.ProjectID=@ProjectId AND a.AdmissionNo=k.No
+        WHERE a.PatientID > 0
+        UNION
+        SELECT a.PatientType, a.PatientID FROM #op k
+        INNER JOIN dbo.HIS_Appointment a WITH (NOLOCK) ON a.SetupID=@SetupId AND a.ProjectID=@ProjectId AND a.AppointmentNo=k.No
+        WHERE a.PatientID > 0
+        UNION
+        SELECT e.PatientType, e.PatientID FROM #er k
+        INNER JOIN dbo.INP_ERAssessment e WITH (NOLOCK) ON e.SetupID=@SetupId AND e.ProjectID=@ProjectId AND e.AssessmentNo=k.No
+        WHERE e.PatientID > 0
+        UNION
+        SELECT m.PatientType, m.PatientID FROM #ip k
+        INNER JOIN dbo.HIS_InvoiceMain m WITH (NOLOCK) ON m.SetupID=@SetupId AND m.ProjectID=@ProjectId AND m.AdmissionNo=k.No
+        WHERE m.PatientID > 0 AND m.CancelledOn IS NULL
+        UNION
+        SELECT m.PatientType, m.PatientID FROM #op k
+        INNER JOIN dbo.HIS_InvoiceMain m WITH (NOLOCK) ON m.SetupID=@SetupId AND m.ProjectID=@ProjectId AND m.AppointmentNo=k.No
+        WHERE m.PatientID > 0 AND m.CancelledOn IS NULL
+        """;
+
+    private const string BatchPatients = $"""
+        SELECT p.PatientType, p.PatientID, p.FirstName, p.MiddleName, p.LastName,
+               p.Gender, p.DateofBirth, p.PatientIdentificationNo, p.IsPregnant
+        FROM dbo.HIS_Patient p WITH (NOLOCK)
+        INNER JOIN ({BatchPatientSet}) x ON x.PatientType = p.PatientType AND x.PatientID = p.PatientID
+        WHERE p.SetupID=@SetupId AND p.ProjectID=@ProjectId
+        """;
+
+    private const string BatchPatientIds = $"""
+        SELECT DISTINCT x.PatientID FROM ({BatchPatientSet}) x
+        """;
+
+    private const string BatchAdmissions = """
+        SELECT i.AdmissionNo, i.PatientType, i.PatientID, i.ClinicID, i.AdmittingClinicID, i.DoctorID,
+               i.AdmittingDoctorID, i.CompanyId, i.AdmissionDate, i.DischargeDate, i.Status,
+               ds.DaysStayed,
+               CAST(CASE WHEN EXISTS (
+                    SELECT 1 FROM dbo.INP_OTReservation ot WITH (NOLOCK)
+                    WHERE ot.SetupID=i.SetupID AND ot.ProjectID=i.ProjectID AND ot.AdmissionNo=i.AdmissionNo)
+                 THEN 1 ELSE 0 END AS bit) AS IsSurgical
+        FROM #ip k
+        INNER JOIN dbo.INP_Admission i WITH (NOLOCK)
+          ON i.SetupID=@SetupId AND i.ProjectID=@ProjectId AND i.AdmissionNo=k.No
+        LEFT JOIN dbo.INP_DischargeSummary ds WITH (NOLOCK)
+          ON ds.SetupID=i.SetupID AND ds.ProjectID=i.ProjectID AND ds.AdmissionNo=i.AdmissionNo
+        WHERE i.PatientID > 0
+        """;
+
+    /// <summary>An appointment with no invoice is not an encounter, as on the day path.</summary>
+    private const string BatchAppointments = """
+        SELECT a.AppointmentNo, a.PatientType, a.PatientID, a.ClinicID, a.DoctorID, a.CompanyID,
+               a.AppointmentDate, a.StartTime, a.EndTime, a.ActualVisitStartTime, a.ActualVisitEndTime,
+               a.EndDate, a.Status, a.IsVisitClosed, a.ArrivedOn
+        FROM #op k
+        INNER JOIN dbo.HIS_Appointment a WITH (NOLOCK)
+          ON a.SetupID=@SetupId AND a.ProjectID=@ProjectId AND a.AppointmentNo=k.No
+        WHERE a.PatientID > 0
+          AND EXISTS (SELECT 1 FROM dbo.HIS_InvoiceMain m WITH (NOLOCK)
+                      WHERE m.SetupID=a.SetupID AND m.ProjectID=a.ProjectID AND m.AppointmentNo=a.AppointmentNo AND m.CancelledOn IS NULL)
+        """;
 
     private static string Stored(Microsoft.Data.SqlClient.SqlDataReader r, string col) => Maps.Money(Maps.Round4(HisConnection.F(r, col)));
 

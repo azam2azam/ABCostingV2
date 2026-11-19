@@ -32,7 +32,7 @@ static class App
         var command = Command(args);
         if (command is "selftest")
             return SelfTest();
-        if (command is null) command = Ask("Command  probe / catalogue / facts / all", "probe");
+        if (command is null) command = Ask("Command  probe / catalogue / facts / all / batchcheck", "probe");
 
         s.ConnectionString = Env("HIS_CONNECTION") ?? Flag(args, "--cs")
             ?? (Interactive(args) ? AskSecret("Connection string", s.ConnectionString) : s.ConnectionString);
@@ -86,9 +86,15 @@ static class App
             if (toInclusive is null) { FailDate("--to", toRaw); return 1; }
             s.To = Dates.ExclusiveEnd(toInclusive.Value);
         }
-        if (command is "facts" or "all" or "probe")
+        var batchSize = 100;
+        if (Flag(args, "--batch-size") is { } bs && (!int.TryParse(bs, out batchSize) || batchSize < 1))
         {
-            var needPeriod = command is "facts" or "all" || fromRaw is not null || toRaw is not null || s.From is not null;
+            Console.Error.WriteLine($"Could not parse --batch-size '{bs}'. Use a number of encounters, e.g. 100.");
+            return 1;
+        }
+        if (command is "facts" or "all" or "probe" or "batchcheck")
+        {
+            var needPeriod = command is "facts" or "all" or "batchcheck" || fromRaw is not null || toRaw is not null || s.From is not null;
             if (needPeriod)
             {
                 s.From ??= AskDate("From (yyyy-MM-dd)", PreviousMonthStart());
@@ -132,6 +138,8 @@ static class App
                     await Catalogue(db, s);
                     await Facts(db, s);
                     break;
+                case "batchcheck":
+                    return await BatchCheck.RunAsync(db, s, batchSize) ? 0 : 2;
                 default:
                     Console.WriteLine($"Unknown command '{command}'.");
                     Help();
@@ -356,10 +364,10 @@ static class App
     }
 
     private static string? Command(string[] args) =>
-        args.Select(a => a.Trim().ToLowerInvariant()).FirstOrDefault(a => a is "probe" or "catalogue" or "facts" or "all" or "selftest");
+        args.Select(a => a.Trim().ToLowerInvariant()).FirstOrDefault(a => a is "probe" or "catalogue" or "facts" or "all" or "batchcheck" or "selftest");
 
     private static bool Interactive(string[] args) =>
-        !args.Any(a => a is "probe" or "catalogue" or "facts" or "all");
+        !args.Any(a => a is "probe" or "catalogue" or "facts" or "all" or "batchcheck");
 
     /// <summary>Never echoes the current value: consoles get copied into logs.</summary>
     private static string AskSecret(string label, string def)
@@ -425,6 +433,9 @@ static class App
               HisExtract facts --from 2026-07 --to 2026-10
               HisExtract all --month 2026-09
               HisExtract selftest
+              HisExtract batchcheck --from 2026-09-01 --to 2026-09-01 [--batch-size 100]
+                  Extract each day whole and as the sync worker does (encounter batches, then the
+                  day's refunds) and compare every table row for row. Exit code 2 on a difference.
 
             One facts zip per day, even when --from/--to spans days or months:
               HIS-010266-15-catalogue.zip

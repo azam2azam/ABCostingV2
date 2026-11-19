@@ -4900,6 +4900,8 @@ export interface components {
             department: components["schemas"]["ReadQueriesDepartmentRow"];
             costCentres: components["schemas"]["ReadQueriesCostCentreRow"][];
             doctors: components["schemas"]["ReadQueriesDepartmentDoctorRow"][];
+            packages: components["schemas"]["ReadQueriesPackageRow"][] | null;
+            packageTotals: components["schemas"]["ReadQueriesDepartmentPackageTotals"];
         };
         ReadQueriesDepartmentDoctorRow: {
             /** Format: uuid */
@@ -4913,6 +4915,16 @@ export interface components {
             isDummy: boolean;
             /** Format: int32 */
             cases: number;
+        };
+        ReadQueriesDepartmentPackageTotals: {
+            /** Format: int32 */
+            performed: number;
+            /** Format: decimal */
+            resourcesConsumed: string;
+            /** Format: decimal */
+            amountBilled: string;
+            /** Format: decimal */
+            claimsReceived: string | null;
         };
         ReadQueriesDepartmentRow: {
             /** Format: uuid */
@@ -5589,6 +5601,8 @@ export interface components {
             claimRejected: string;
             /** Format: decimal */
             claimsReceived: string | null;
+            /** Format: int32 */
+            encounters: number;
         };
         ReadQueriesPackageWorkRow: {
             /** Format: uuid */
@@ -5626,6 +5640,8 @@ export interface components {
             encounterRows: components["schemas"]["ReadQueriesPackageDoctorEncounterRow"][];
             /** Format: decimal */
             claimsReceivedLines: string | null;
+            /** Format: decimal */
+            price: string | null;
         };
         ReadQueriesPatientEncounterDetail: {
             encounter: components["schemas"]["ReadQueriesPatientEncounterRow"];

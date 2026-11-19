@@ -73,48 +73,51 @@ public static class DrgExtract
     public static async Task<Dictionary<int, string>> ByAdmissionAsync(HisConnection db, Settings s, CsvZipWriter pack)
     {
         var map = new Dictionary<int, string>();
-        await Safe(pack, "admission list", () => db.QueryAsync("""
+        // A sync batch needs only its own admissions (#ip); the CLI reads the tenant's whole list once per pack.
+        var k = s.Batch is not null;
+        string Only(string col) => k ? $"AND {col} IN (SELECT No FROM #ip)" : "";
+        await Safe(pack, "admission list", () => db.QueryAsync($"""
             SELECT AdmissionNo, DRGCode
             FROM dbo.INP_AdmissionDRGList WITH (NOLOCK)
             WHERE SetupID=@SetupId AND ProjectID=@ProjectId
-              AND NULLIF(LTRIM(RTRIM(DRGCode)),'') IS NOT NULL
+              AND NULLIF(LTRIM(RTRIM(DRGCode)),'') IS NOT NULL {Only("AdmissionNo")}
             ORDER BY CASE WHEN Status=3 THEN 0 ELSE 1 END, LineItemNo DESC
             """, s.BindTenant, r => Add(map, HisConnection.I(r, "AdmissionNo"), HisConnection.S(r, "DRGCode"))));
         var fromList = map.Count;
 
-        await Safe(pack, "grouper log (discharge)", () => db.QueryAsync("""
+        await Safe(pack, "grouper log (discharge)", () => db.QueryAsync($"""
             SELECT ds.AdmissionNo, g.DRGCode
             FROM dbo.HIS_DRGLog g WITH (NOLOCK)
             INNER JOIN dbo.INP_DischargeSummary ds WITH (NOLOCK)
               ON ds.SetupID=g.SetupID AND ds.ProjectID=g.ProjectID AND ds.DischargeNo=g.TransactionRefNo
             WHERE g.SetupID=@SetupId AND g.ProjectID=@ProjectId AND g.TransactionType=3
-              AND NULLIF(LTRIM(RTRIM(g.DRGCode)),'') IS NOT NULL
+              AND NULLIF(LTRIM(RTRIM(g.DRGCode)),'') IS NOT NULL {Only("ds.AdmissionNo")}
             ORDER BY g.LineItemNo DESC
             """, s.BindTenant, r => Add(map, HisConnection.I(r, "AdmissionNo"), HisConnection.S(r, "DRGCode"))));
 
-        await Safe(pack, "grouper log (admission)", () => db.QueryAsync("""
+        await Safe(pack, "grouper log (admission)", () => db.QueryAsync($"""
             SELECT TransactionRefNo AS AdmissionNo, DRGCode
             FROM dbo.HIS_DRGLog WITH (NOLOCK)
             WHERE SetupID=@SetupId AND ProjectID=@ProjectId AND TransactionType=2
-              AND NULLIF(LTRIM(RTRIM(DRGCode)),'') IS NOT NULL
+              AND NULLIF(LTRIM(RTRIM(DRGCode)),'') IS NOT NULL {Only("TransactionRefNo")}
             ORDER BY LineItemNo DESC
             """, s.BindTenant, r => Add(map, HisConnection.I(r, "AdmissionNo"), HisConnection.S(r, "DRGCode"))));
 
-        await Safe(pack, "day-care", () => db.QueryAsync("""
+        await Safe(pack, "day-care", () => db.QueryAsync($"""
             SELECT AdmissionNo, DRGCode
             FROM dbo.HIS_DRGDayCare WITH (NOLOCK)
             WHERE SetupId=@SetupId AND ProjectId=@ProjectId AND ISNULL(IsActive,1)=1 AND AdmissionNo > 0
-              AND NULLIF(LTRIM(RTRIM(DRGCode)),'') IS NOT NULL
+              AND NULLIF(LTRIM(RTRIM(DRGCode)),'') IS NOT NULL {Only("AdmissionNo")}
             ORDER BY LineItemNo DESC
             """, s.BindTenant, r => Add(map, HisConnection.I(r, "AdmissionNo"), HisConnection.S(r, "DRGCode"))));
 
-        await Safe(pack, "approval (IP)", () => db.QueryAsync("""
+        await Safe(pack, "approval (IP)", () => db.QueryAsync($"""
             SELECT m.AdmissionNo, d.DRGCode
             FROM dbo.HIS_ApprovalDRG d WITH (NOLOCK)
             INNER JOIN dbo.HIS_ApprovalMain m WITH (NOLOCK)
               ON m.SetupID=d.SetupId AND m.ProjectID=d.ProjectId AND m.ApprovalNo=d.ApprovalNo
             WHERE d.SetupId=@SetupId AND d.ProjectId=@ProjectId AND ISNULL(d.IsActive,1)=1
-              AND m.AdmissionNo > 0 AND NULLIF(LTRIM(RTRIM(d.DRGCode)),'') IS NOT NULL
+              AND m.AdmissionNo > 0 AND NULLIF(LTRIM(RTRIM(d.DRGCode)),'') IS NOT NULL {Only("m.AdmissionNo")}
             ORDER BY d.LineItemNo DESC
             """, s.BindTenant, r => Add(map, HisConnection.I(r, "AdmissionNo"), HisConnection.S(r, "DRGCode"))));
 
@@ -125,13 +128,14 @@ public static class DrgExtract
     public static async Task<Dictionary<int, string>> ByAppointmentAsync(HisConnection db, Settings s, CsvZipWriter pack)
     {
         var map = new Dictionary<int, string>();
-        await Safe(pack, "approval (OP)", () => db.QueryAsync("""
+        var only = s.Batch is not null ? "AND m.AppointmentNo IN (SELECT No FROM #op)" : "";
+        await Safe(pack, "approval (OP)", () => db.QueryAsync($"""
             SELECT m.AppointmentNo, d.DRGCode
             FROM dbo.HIS_ApprovalDRG d WITH (NOLOCK)
             INNER JOIN dbo.HIS_ApprovalMain m WITH (NOLOCK)
               ON m.SetupID=d.SetupId AND m.ProjectID=d.ProjectId AND m.ApprovalNo=d.ApprovalNo
             WHERE d.SetupId=@SetupId AND d.ProjectId=@ProjectId AND ISNULL(d.IsActive,1)=1
-              AND m.AppointmentNo > 0 AND NULLIF(LTRIM(RTRIM(d.DRGCode)),'') IS NOT NULL
+              AND m.AppointmentNo > 0 AND NULLIF(LTRIM(RTRIM(d.DRGCode)),'') IS NOT NULL {only}
             ORDER BY d.LineItemNo DESC
             """, s.BindTenant, r => Add(map, HisConnection.I(r, "AppointmentNo"), HisConnection.S(r, "DRGCode"))));
         pack.Note($"Drg on OP: {map.Count} appointments from HIS_ApprovalDRG.");

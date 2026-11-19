@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-  Builds the VERITA UI and API into two zips ready to copy to an IIS server.
+  Builds the VERITA UI, the VERITA API and the HIS Sync worker into zips ready to copy to an IIS server.
 
 .DESCRIPTION
   Produces, in out\iis (or -OutDir):
@@ -8,14 +8,26 @@
                             (SPA fallback + caching) and index.html pointed at -ApiUrl.
     verita-api-<stamp>.zip  dotnet publish output for the IIS application hosting the API
                             (web.config from the SDK, no appsettings.Development.json).
+    verita-his-sync-<stamp>.zip
+                            dotnet publish output of tools/HisSync for its own IIS application
+                            (-SyncPath) with its own app pool: Start mode AlwaysRunning, Idle
+                            time-out 0, preload on. See tools/HisSync/README.md.
 
   The zips contain no secrets. On the server, set ConnectionStrings__Verita and Jwt__Key
-  (and Cors__Origins__0 only if the UI is on a different host) for the API app pool.
+  (and Cors__Origins__0 only if the UI is on a different host) for the API app pool. HIS Sync
+  reads ConnectionStrings:Verita and His:ConnectionString from appsettings.Production.json
+  kept in its folder (never in the zip) or from app pool environment variables.
 
   Prerequisites on the build machine: .NET 8 SDK, Node 24 (npm), git (optional, for the stamp).
 
 .PARAMETER WebPath
   IIS application path of the UI. Default /ui (http://<server>:9100/ui). Use / for a site root.
+
+.PARAMETER SyncPath
+  IIS application path of the HIS Sync worker, for the instructions printed at the end. Default /his-sync.
+
+.PARAMETER Only
+  all (default): UI, API and HIS Sync. both: UI and API (as before). web, api or sync: one of them.
 
 .PARAMETER ApiUrl
   Where the UI calls the API: a path on the same host (default /api, the IIS application
@@ -28,14 +40,17 @@
   .\scripts\iis-package.ps1 -WebPath /verita -ApiUrl /verita-api
 .EXAMPLE
   .\scripts\iis-package.ps1 -Only web -SkipNpmCi
+.EXAMPLE
+  .\scripts\iis-package.ps1 -Only sync
 #>
 [CmdletBinding()]
 param(
     [string]$WebPath = '/ui',
     [string]$ApiUrl = '/api',
+    [string]$SyncPath = '/his-sync',
     [string]$OutDir,
-    [ValidateSet('both', 'web', 'api')]
-    [string]$Only = 'both',
+    [ValidateSet('all', 'both', 'web', 'api', 'sync')]
+    [string]$Only = 'all',
     [switch]$SkipNpmCi
 )
 
@@ -79,7 +94,7 @@ if (Get-Command git -ErrorAction SilentlyContinue) {
     $sha = (& git -C $Root rev-parse --short HEAD 2>$null)
     if ($LASTEXITCODE -eq 0 -and $sha) {
         $stamp = "$stamp-$sha"
-        if (& git -C $Root status --porcelain -- src web 2>$null) { $stamp = "$stamp-dirty" }
+        if (& git -C $Root status --porcelain -- src web tools/HisSync tools/HisExtract 2>$null) { $stamp = "$stamp-dirty" }
     }
 }
 
@@ -89,7 +104,27 @@ New-Item -ItemType Directory -Force -Path $stage | Out-Null
 $zips = @()
 
 # ---------------------------------------------------------------- API
-if ($Only -in 'both', 'api') {
+$SyncPath = '/' + $SyncPath.Trim().Trim('/')
+
+function Assert-WebConfig([string]$Dir, [string]$Dll) {
+    $path = Join-Path $Dir 'web.config'
+    if (-not (Test-Path $path)) { throw "dotnet publish did not produce web.config in $Dir." }
+    # A malformed web.config stops IIS with 500.19 before the app starts.
+    try { $xml = [xml](Get-Content $path -Raw) } catch { throw "web.config in $Dir is not valid XML: $($_.Exception.Message)" }
+    $core = $xml.SelectSingleNode('//aspNetCore')
+    if (-not $core) { throw "web.config in $Dir has no <aspNetCore> element." }
+    if ($core.GetAttribute('arguments') -notmatch [regex]::Escape($Dll) -and $core.GetAttribute('processPath') -notmatch [regex]::Escape($Dll -replace '\.dll$', '')) {
+        throw "web.config in $Dir does not start $Dll."
+    }
+    if (-not (Test-Path (Join-Path $Dir $Dll))) { throw "dotnet publish did not produce $Dll." }
+    # Where WebDAV is installed it answers PUT and DELETE with 405 before ASP.NET Core sees them: both the module
+    # and the handler must be removed (see src/Verita.Api/web.config).
+    if (-not $xml.SelectSingleNode("//modules/remove[@name='WebDAVModule']")) { throw "web.config in $Dir does not remove the WebDAVModule module; PUT and DELETE would fail with 405 on IIS." }
+    if (-not $xml.SelectSingleNode("//handlers/remove[@name='WebDAV']")) { throw "web.config in $Dir does not remove the WebDAV handler; PUT and DELETE would fail with 405 on IIS." }
+    return $xml
+}
+
+if ($Only -in 'all', 'both', 'api') {
     Require-Tool 'dotnet' 'Install the .NET 8 SDK.'
     Step 'Publishing API (Release)'
     $apiOut = Join-Path $stage 'api'
@@ -97,10 +132,7 @@ if ($Only -in 'both', 'api') {
 
     # Development settings never go to a server.
     Get-ChildItem $apiOut -Filter 'appsettings.Development.json' | Remove-Item -Force
-    if (-not (Test-Path (Join-Path $apiOut 'web.config'))) { throw 'dotnet publish did not produce web.config.' }
-    # Without this, IIS WebDAV answers PUT/DELETE with 405 (see src/Verita.Api/web.config).
-    if ((Get-Content (Join-Path $apiOut 'web.config') -Raw) -notmatch 'WebDAVModule') { throw 'API web.config does not remove WebDAV; PUT and DELETE would fail with 405 on IIS.' }
-    if (-not (Test-Path (Join-Path $apiOut 'Verita.Api.dll'))) { throw 'dotnet publish did not produce Verita.Api.dll.' }
+    $null = Assert-WebConfig $apiOut 'Verita.Api.dll'
 
     Step 'Zipping API'
     $apiZip = Join-Path $OutDir "verita-api-$stamp.zip"
@@ -108,8 +140,36 @@ if ($Only -in 'both', 'api') {
     $zips += $apiZip
 }
 
+# ---------------------------------------------------------------- HIS Sync worker
+if ($Only -in 'all', 'sync') {
+    Require-Tool 'dotnet' 'Install the .NET 8 SDK.'
+    Step 'Publishing HIS Sync worker (Release)'
+    $syncOut = Join-Path $stage 'his-sync'
+    Invoke-Checked 'dotnet' @('publish', 'tools/HisSync/HisSync.csproj', '-c', 'Release', '-o', $syncOut, '--nologo') $Root
+
+    # Server settings (connection strings) live on the server, never in the package.
+    Get-ChildItem $syncOut -Filter 'appsettings.*.json' | Remove-Item -Force
+    $syncXml = Assert-WebConfig $syncOut 'Verita.HisSync.dll'
+    # The workers only start when IIS loads the site: Application Initialization requests /health on pool start.
+    if (-not $syncXml.SelectSingleNode('//applicationInitialization')) { throw 'HIS Sync web.config has no <applicationInitialization>; the workers would not start until a first request.' }
+    if (-not (Test-Path (Join-Path $syncOut 'HisExtract.dll'))) { throw 'HIS Sync publish is missing HisExtract.dll.' }
+
+    # The shipped appsettings.json must not carry a connection string.
+    $settings = Get-Content (Join-Path $syncOut 'appsettings.json') -Raw | ConvertFrom-Json
+    $secrets = @()
+    if ($settings.ConnectionStrings.Verita) { $secrets += 'ConnectionStrings:Verita' }
+    if ($settings.His.ConnectionString) { $secrets += 'His:ConnectionString' }
+    foreach ($t in @($settings.His.Tenants.PSObject.Properties)) { if ($t.Value.ConnectionString) { $secrets += "His:Tenants:$($t.Name):ConnectionString" } }
+    if ($secrets.Count -gt 0) { throw "tools/HisSync/appsettings.json has values for $($secrets -join ', '). Move them to appsettings.Production.json on the server." }
+
+    Step 'Zipping HIS Sync worker'
+    $syncZip = Join-Path $OutDir "verita-his-sync-$stamp.zip"
+    New-Zip $syncOut $syncZip
+    $zips += $syncZip
+}
+
 # ---------------------------------------------------------------- UI
-if ($Only -in 'both', 'web') {
+if ($Only -in 'all', 'both', 'web') {
     Require-Tool 'npm' 'Install Node 24.'
     $webDir = Join-Path $Root 'web'
     if (-not $SkipNpmCi -or -not (Test-Path (Join-Path $webDir 'node_modules'))) {
@@ -183,9 +243,16 @@ Step 'Done'
 $zips | ForEach-Object { Write-Host "    $_" }
 Write-Host @"
 
-On the IIS server:
-  UI  -> application $WebPath : clear its folder, extract verita-web-*.zip into it.
-  API -> application for $ApiUrl : drop app_offline.htm in its folder, extract verita-api-*.zip
-         (overwrite), delete app_offline.htm. Its app pool needs ConnectionStrings__Verita and
-         Jwt__Key set; check <api>/health returns {"status":"ok"}.
+On the IIS server (run the release's schema script in deploy/iis/sql first: neither app changes the database):
+  UI       -> application $WebPath : clear its folder, extract verita-web-*.zip into it.
+  API      -> application for $ApiUrl : drop app_offline.htm in its folder, extract verita-api-*.zip
+              (overwrite), delete app_offline.htm. Its app pool needs ConnectionStrings__Verita and
+              Jwt__Key set; check <api>/health returns {"status":"ok"}.
+  HIS Sync -> application $SyncPath with its own app pool (No Managed Code, Start mode AlwaysRunning,
+              Idle time-out 0, periodic recycle off) and Preload enabled; needs the IIS Application
+              Initialization feature. Drop app_offline.htm, extract verita-his-sync-*.zip (overwrite),
+              delete app_offline.htm. Keep appsettings.Production.json (ConnectionStrings:Verita,
+              His:ConnectionString) in that folder: the zip never contains it. Check
+              $SyncPath/health returns {"status":"ok"} and System > HIS Sync shows the workers Idle.
+              Run one HIS Sync per VERITA database. See tools/HisSync/README.md.
 "@

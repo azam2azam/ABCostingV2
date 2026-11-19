@@ -12,6 +12,9 @@ const exec = () => import('./features/execution');
 const analysis = () => import('./features/analysis');
 const data = () => import('./features/data');
 const assistant = () => import('./features/assistant');
+const compare = () => import('./features/compare-doctors');
+const comparePackages = () => import('./features/compare-packages');
+const hisSync = () => import('./features/his-sync');
 
 const r = (path: string, load: () => Promise<any>, name: string, _runScoped = true, extra: CanActivateFn[] = []) => ({
   path, canActivate: [moduleGuard, runGuard, ...extra],
@@ -34,10 +37,10 @@ export const routes: Routes = [
       r('resources', model, 'Resources'), r('resources/:id', model, 'ResourceDetail'),
       r('activities', model, 'Activities'), r('activities/:id', model, 'ActivityDetail'),
       r('procedures', outputs, 'Procedures'), r('procedures/:id', outputs, 'ProcedureDetail'),
-      r('packages', outputs, 'Packages'), r('packages/:id', outputs, 'PackageDetail'),
+      r('packages', outputs, 'Packages'), r('packages/compare', compare, 'CompareDoctors'), r('packages/:id', outputs, 'PackageDetail'),
       // Packages was developed as Packages V2; old links open Packages.
       { path: 'packages-v2', pathMatch: 'full', redirectTo: 'packages' },
-      r('departments', model, 'Departments'), r('departments/:id', model, 'DepartmentDetail'),
+      r('departments', model, 'Departments'), r('departments/compare-packages', comparePackages, 'ComparePackages'), r('departments/:id', model, 'DepartmentDetail'),
       r('doctors', model, 'Doctors'), r('doctors/:id', model, 'DoctorDetail'),
       r('costing-models', exec, 'CostingModels', false),
       r('procedure-costing', exec, 'ProcedureCosting'),
@@ -55,6 +58,7 @@ export const routes: Routes = [
       r('data-import', data, 'DataImport', false),
       r('storage', data, 'Storage', false),
       r('administration', analysis, 'Administration', false),
+      r('his-sync', hisSync, 'HisSync', false),
       r('help', analysis, 'Help', false),
       { path: 'forbidden', component: Forbidden },
     ],

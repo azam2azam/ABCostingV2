@@ -23,6 +23,7 @@ public static class DependencyInjection
         services.AddScoped<IAuditWriter, AuditWriter>();
         services.AddScoped<RunService>();
         services.AddScoped<PeriodFactsService>();
+        services.AddScoped<HisSync.HisSyncService>();
         services.AddScoped<ScenarioService>();
         services.AddScoped<GovernanceService>();
         services.AddScoped<ReadQueries>();

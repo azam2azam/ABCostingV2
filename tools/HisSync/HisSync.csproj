@@ -1,0 +1,14 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+
+  <PropertyGroup>
+    <RootNamespace>Verita.HisSync</RootNamespace>
+    <AssemblyName>Verita.HisSync</AssemblyName>
+    <Description>HIS sync worker: catalogue checks (parked for review) and fact days in small encounter batches, into VERITA. Hosted on IIS.</Description>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\Verita.Infrastructure\Verita.Infrastructure.csproj" />
+    <ProjectReference Include="..\HisExtract\HisExtract.csproj" />
+  </ItemGroup>
+
+</Project>

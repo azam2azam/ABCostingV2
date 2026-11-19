@@ -415,10 +415,16 @@ public static class CatalogueExtract
         }
         try
         {
+            // The HIS copy may be keyed on the hospital's project or on the pharmacy's (fn_Get_PharmaKonProjectID).
             await db.QueryAsync($"""
-                SELECT {columns}
-                FROM dbo.PHR_Medicine m WITH (NOLOCK)
-                WHERE m.SetupID = @SetupId AND m.ProjectID = @ProjectId
+                WITH p AS (SELECT dbo.fn_Get_PharmaKonProjectID(@SetupId, @ProjectId) AS ProjectID),
+                m AS (
+                    SELECT m.*, ROW_NUMBER() OVER (PARTITION BY m.MedicineCode ORDER BY CASE WHEN m.ProjectID = p.ProjectID THEN 0 ELSE 1 END) AS rn
+                    FROM dbo.PHR_Medicine m WITH (NOLOCK)
+                    CROSS JOIN p
+                    WHERE m.SetupID = @SetupId AND m.ProjectID IN (@ProjectId, p.ProjectID)
+                )
+                SELECT {columns} FROM m WHERE m.rn = 1
                 """, s.BindTenant, Row);
             pack.Note($"MedicinePrice: {n} medicines from the HIS database's PHR_Medicine");
         }

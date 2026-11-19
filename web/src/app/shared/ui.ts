@@ -91,13 +91,42 @@ export class Page {
 
 // ── Stat tile ────────────────────────────────────────────────────────────────────
 
+/** How a tile's figure is worked out, shown behind its (i) button. */
+export interface TileInfo {
+  /** The calculation, e.g. "Σ Fee billed + Σ Consumables billed". */
+  formula: string;
+  /** Each field in the formula and where it comes from. */
+  terms: [field: string, meaning: string][];
+  /** Anything else worth knowing (what is left out, when it is blank). */
+  note?: string | null;
+  /** The formula with this page's figures filled in, when the page has them. */
+  values?: string | null;
+}
+
 @Component({
   selector: 'v-tile',
-  imports: [RouterLink, ...PIPES],
+  imports: [RouterLink, Icon, ...PIPES],
+  host: { '(document:click)': 'onDocClick($event)', '(document:keydown.escape)': 'open.set(false)' },
   template: `
-    <div class="tile">
-      <div class="label">{{ label() }}</div>
-      <div class="value num" [class]="'value num ' + cls()">
+    <div class="tile" [class.open]="open()">
+      <div class="label">{{ label() }}
+        @if (info()) {
+          <button type="button" class="info-btn" [attr.aria-label]="'How ' + label() + ' is calculated'" [attr.aria-expanded]="open()"
+            (click)="toggleInfo()"><v-icon name="info" [size]="14" /></button>
+        }
+      </div>
+      @if (open() && info(); as i) {
+        <div class="info-pop" [class.right]="alignRight()" role="dialog" [attr.aria-label]="label() + ' calculation'">
+          <div class="info-h">How it's calculated</div>
+          <div class="info-f">{{ i.formula }}</div>
+          <dl>
+            @for (t of i.terms; track t[0]) { <dt>{{ t[0] }}</dt><dd>{{ t[1] }}</dd> }
+          </dl>
+          @if (i.values) { <div class="info-v"><span>This page:</span> {{ i.values }}</div> }
+          @if (i.note) { <div class="info-n">{{ i.note }}</div> }
+        </div>
+      }
+      <div class="value num" [class]="'value num ' + cls() + (compact() ? ' compact' : '')">
         @if (link()) {
           <a [routerLink]="link()" [queryParams]="linkParams()" [queryParamsHandling]="linkParams() ? 'merge' : 'preserve'">{{ text() }}</a>
         } @else { {{ text() }} }
@@ -105,17 +134,50 @@ export class Page {
       @if (note()) { <div class="note">{{ note() }}</div> }
     </div>
   `,
-  styles: `.tile { position: relative; overflow: hidden; height: 100%; background: var(--surface); backdrop-filter: blur(14px); border: 1px solid var(--border);
+  styles: `.tile { position: relative; height: 100%; background: var(--surface); backdrop-filter: blur(14px); border: 1px solid var(--border);
                    border-radius: var(--radius); padding: 14px 16px 14px 18px; box-shadow: var(--shadow-sm); transition: box-shadow .15s, transform .15s; }
            .tile::before { content: ""; position: absolute; left: 0; top: 14px; bottom: 14px; width: 3px; border-radius: 0 3px 3px 0; background: linear-gradient(var(--accent), var(--accent-strong)); opacity: .8; }
            .tile:hover { box-shadow: var(--shadow); transform: translateY(-1px); }
            .label { color: var(--text-3); font-size: 12px; font-weight: 600; letter-spacing: .04em; text-transform: uppercase; }
            .value { font-size: 24px; font-weight: 700; letter-spacing: -0.02em; text-align: left; margin-top: 6px; min-height: 1.2em; }
            .value a { color: inherit; }
-           .note { color: var(--text-3); font-size: 12.5px; margin-top: 4px; }`,
+           .value.compact { font-size: 16px; font-weight: 600; letter-spacing: 0; line-height: 1.3; white-space: normal; overflow-wrap: break-word; }
+           .note { color: var(--text-3); font-size: 12.5px; margin-top: 4px; }
+           .label { display: flex; align-items: center; gap: 6px; }
+           .tile.open { z-index: 20; }
+           .info-btn { display: inline-flex; align-items: center; justify-content: center; padding: 2px; margin: -2px 0; border: 0; border-radius: 50%;
+                       background: none; color: var(--text-3); cursor: pointer; }
+           .info-btn:hover, .tile.open .info-btn { color: var(--accent-strong); background: color-mix(in srgb, var(--accent) 12%, transparent); }
+           .info-pop.right { left: auto; right: 0; }
+           .info-pop { position: absolute; left: 0; top: calc(100% - 6px); width: min(640px, calc(100vw - 32px)); max-height: 70vh; overflow: auto; z-index: 20;
+                       background: color-mix(in srgb, var(--accent) 7%, var(--surface-solid)); border: 1.5px solid color-mix(in srgb, var(--accent) 55%, transparent);
+                       border-top: 4px solid var(--accent); border-radius: var(--radius); box-shadow: var(--shadow-lg); padding: 14px 16px; font-size: 14px; color: var(--text-2);
+                       text-transform: none; letter-spacing: 0; font-weight: 400; }
+           .info-h { font-weight: 700; letter-spacing: .05em; text-transform: uppercase; color: var(--accent-strong); font-size: 12.5px; }
+           .info-f { margin: 6px 0 8px; padding: 7px 9px; border-radius: 8px; background: var(--surface-solid);
+                     border: 1px solid color-mix(in srgb, var(--accent) 30%, transparent); color: var(--text); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 13.5px; line-height: 1.55; }
+           dl { display: grid; grid-template-columns: max-content 1fr; gap: 6px 12px; margin: 0; }
+           dt { font-weight: 600; color: var(--text); }
+           dd { margin: 0; line-height: 1.4; }
+           .info-v { margin-top: 8px; line-height: 1.45; } .info-v span { font-weight: 600; color: var(--text); }
+           .info-n { margin-top: 8px; color: var(--text-3); line-height: 1.45; }`,
 })
 export class Tile {
+  private host = inject(ElementRef<HTMLElement>);
   label = input.required<string>();
+  /** How the figure is calculated; shows an (i) button that opens it. */
+  info = input<TileInfo | null>(null);
+  open = signal(false);
+  /** Opens the popover leftwards from the tile's right edge when the tile is in the right half of the screen. */
+  alignRight = signal(false);
+  toggleInfo(): void {
+    const r = (this.host.nativeElement as HTMLElement).getBoundingClientRect();
+    this.alignRight.set(r.left + r.width / 2 > window.innerWidth / 2);
+    this.open.set(!this.open());
+  }
+  onDocClick(e: Event): void {
+    if (this.open() && !this.host.nativeElement.contains(e.target as Node)) this.open.set(false);
+  }
   value = input<string | number | null>(null);
   unit = input<string>('SAR');
   direction = input<string>('neutral');
@@ -124,6 +186,8 @@ export class Tile {
   linkParams = input<Record<string, string> | null>(null);
   /** Shows nothing when the value is zero. */
   blankZero = input(false, { transform: booleanAttribute });
+  /** A smaller value, for text such as a name. */
+  compact = input(false, { transform: booleanAttribute });
   text = computed(() => {
     const v = this.value();
     if (v === null || v === undefined) return '—';

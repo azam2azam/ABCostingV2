@@ -40,8 +40,15 @@ public static class PackageBillingSummary
     }
 
     /// <param name="ClaimFlagKnown">Whether the lines carry HIS_InvoiceMain.IsClaimed; facts extracted before it was added do not.</param>
+    /// <param name="ByLine">The episodes again, split by the invoice line each figure came from (its <see cref="Tail"/> ref);
+    /// "" for figures on no line (ward days, records with no line). Filled only when LoadAsync is asked for one encounter.</param>
     public sealed record Data(List<Line> Lines, Dictionary<(Guid Encounter, string Ref), LineMoney> Money,
-        Dictionary<(Guid Encounter, string Ref), decimal> OwnQuantity, Dictionary<(Guid Package, Guid Encounter), Episode> Episodes, bool ClaimFlagKnown = false);
+        Dictionary<(Guid Encounter, string Ref), decimal> OwnQuantity, Dictionary<(Guid Package, Guid Encounter), Episode> Episodes, bool ClaimFlagKnown = false,
+        Dictionary<(Guid Package, Guid Encounter, string Ref), Episode>? ByLine = null);
+
+    /// <summary>The invoice of a line ref (Tail of the SourceRef: "{type}-{invoice}-{line}"): the ref without its line number.</summary>
+    public static string Invoice(string? lineRef) =>
+        lineRef is { Length: > 0 } r && r.LastIndexOf('-') is var i and > 0 ? r[..i] : "";
 
     /// <summary>Works the run's package figures out once and stores them: per package (Packages) and per package, encounter and doctor (the package page).</summary>
     public static async Task<List<RunPackageBilling>> StoreAsync(VeritaDbContext db, CalculationRun run, CancellationToken ct)
@@ -176,7 +183,9 @@ public static class PackageBillingSummary
     /// With <paramref name="onlyPackage"/>, only the encounters that billed that package are read (every package on them,
     /// so an encounter's shared items are split the same way as in the run's figures).
     /// </summary>
-    public static async Task<Data> LoadAsync(VeritaDbContext db, Guid runId, Hospital hospital, Period period, Guid? onlyPackage, CancellationToken ct)
+    /// <param name="onlyEncounter">Only this encounter's lines, with the figures also split by invoice line (Data.ByLine).</param>
+    public static async Task<Data> LoadAsync(VeritaDbContext db, Guid runId, Hospital hospital, Period period, Guid? onlyPackage, CancellationToken ct,
+        Guid? onlyEncounter = null)
     {
         var hid = hospital.Id;
         var (start, end) = (period.StartDate.ToDateTime(TimeOnly.MinValue), period.EndDate.AddDays(1).ToDateTime(TimeOnly.MinValue));
@@ -201,6 +210,11 @@ public static class PackageBillingSummary
                        join ec in db.EncounterCosts.AsNoTracking() on es.EncounterId equals ec.EncounterId
                        where ec.RunId == runId
                        select es;
+        if (onlyEncounter is { } oe)
+        {
+            source = source.Where(r => r.EncounterId == oe);
+            services = services.Where(es => es.EncounterId == oe);
+        }
         List<Guid>? only = null;
         if (onlyPackage is { } op)
         {
@@ -253,11 +267,19 @@ public static class PackageBillingSummary
         var packagesOf = lines.GroupBy(l => l.Encounter).ToDictionary(g => g.Key, g => g.Select(l => l.Package).Distinct().ToList());
         var episodes = new Dictionary<(Guid, Guid), Episode>();
         Episode At(Guid pkg, Guid encounter) => episodes.TryGetValue((pkg, encounter), out var e) ? e : episodes[(pkg, encounter)] = new Episode();
+        var byLine = onlyEncounter is null ? null : new Dictionary<(Guid, Guid, string), Episode>();
+        void AddTo(Guid pkg, Guid encounter, string? serviceRef, Action<Episode, decimal> add, decimal f)
+        {
+            add(At(pkg, encounter), f);
+            if (byLine is null) return;
+            var key = (pkg, encounter, serviceRef is null ? "" : Tail(serviceRef));
+            add(byLine.TryGetValue(key, out var le) ? le : byLine[key] = new Episode(), f);
+        }
         void Add(Guid encounter, string? serviceRef, Action<Episode, decimal> add)
         {
-            if (serviceRef is not null && lineOwner.TryGetValue((encounter, Tail(serviceRef)), out var owner)) { add(At(owner, encounter), 1m); return; }
+            if (serviceRef is not null && lineOwner.TryGetValue((encounter, Tail(serviceRef)), out var owner)) { AddTo(owner, encounter, serviceRef, add, 1m); return; }
             if (!packagesOf.TryGetValue(encounter, out var pkgs)) return;
-            foreach (var pkg in pkgs) add(At(pkg, encounter), 1m / pkgs.Count);
+            foreach (var pkg in pkgs) AddTo(pkg, encounter, serviceRef, add, 1m / pkgs.Count);
         }
 
         // Materials: the invoice lines HIS consumption records point to (mostly INPATIENT CONSUMABLE CHARGES), each line once,
@@ -277,6 +299,8 @@ public static class PackageBillingSummary
         {
             var net = r.NetAmount - (r.RefundedAmount ?? 0m) + (r.TaxAmount ?? 0m);
             if (r.NetAmount == 0m) unbilledLines.Add((r.EncounterId, Tail(r.SourceRef)));
+            // A line billed under a package is one of its lines (Invoice Billed) already: not again as consumables.
+            if (lineOwner.ContainsKey((r.EncounterId, Tail(r.SourceRef)))) continue;
             var onClaim = r.HisIsClaimed == true ? r.ClaimedAmount ?? 0m : 0m;
             Add(r.EncounterId, r.SourceRef, (e, f) => { e.Materials += net * f; e.MaterialsClaimed += (r.ClaimedAmount ?? 0m) * f; e.MaterialsClaimedOnClaimed += onClaim * f; });
         }
@@ -303,7 +327,11 @@ public static class PackageBillingSummary
                      .Join(db.Procedures.AsNoTracking().Where(pr => pr.HospitalId == hid && pr.Category == "MEDICINE"), r => r.ProcedureId, pr => pr.Id, (r, pr) => r)
                      .Where(r => !fromHis || r.RefundedAmount == null || r.NetAmount <= 0m || r.RefundedAmount < r.NetAmount)
                      .Select(r => new { r.EncounterId, r.SourceRef, Net = r.NetAmount - (r.RefundedAmount ?? 0m) + (r.TaxAmount ?? 0m), Claimed = r.ClaimedAmount ?? 0m, OnClaim = r.HisIsClaimed == true ? r.ClaimedAmount ?? 0m : 0m }).ToListAsync(ct))
+        {
+            // A medicine line billed under a package is one of its lines (Invoice Billed) already: not again as medicine.
+            if (lineOwner.ContainsKey((r.EncounterId, Tail(r.SourceRef)))) continue;
             Add(r.EncounterId, r.SourceRef, (e, f) => { e.Medicine += r.Net * f; e.MedicineClaimed += r.Claimed * f; e.MedicineClaimedOnClaimed += r.OnClaim * f; e.MedicineLines += f; });
+        }
         foreach (var st in await db.StaffTimes.AsNoTracking().Where(t => t.EncounterId != null && encIds.Contains(t.EncounterId.Value))
                      .Select(t => new { Encounter = t.EncounterId!.Value, t.ServiceRef, t.StaffRole, t.Minutes }).ToListAsync(ct))
         {
@@ -315,6 +343,6 @@ public static class PackageBillingSummary
                      .GroupBy(t => t.EncounterId!.Value).Select(g => new { Encounter = g.Key, Days = g.Sum(t => t.Duration ?? 0) }).ToListAsync(ct))
             Add(w.Encounter, null, (e, f) => e.Ward += w.Days * f);
 
-        return new Data(lines, money, ownQuantity, episodes, claimFlagKnown);
+        return new Data(lines, money, ownQuantity, episodes, claimFlagKnown, byLine);
     }
 }

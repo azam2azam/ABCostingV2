@@ -67,7 +67,14 @@ public static class ConsumptionExtract
             return;
         }
         pack.Note($"Consumption: {lines.All.Count} counted invoice lines on the pack's encounters to link items to ({sw.Elapsed.TotalSeconds:N0} s)");
-        var names = await ItemNamesAsync(db, s, pack);
+        // The item master does not change between batches of one sync pass: read it once.
+        Dictionary<string, ItemName> names;
+        if (s.Batch is not null && s.Cache.TryGetValue("itemNames", out var cached)) names = (Dictionary<string, ItemName>)cached;
+        else
+        {
+            names = await ItemNamesAsync(db, s, pack);
+            if (s.Batch is not null) s.Cache["itemNames"] = names;
+        }
 
         using (var csv = pack.Create("39_ConsumptionItem.csv",
             "hospitalCode", "encounterNo", "hisEncounterNo", "serviceRef", "linkMethod", "otReservationId", "category", "itemKey", "itemKeySystem",
@@ -172,6 +179,7 @@ public static class ConsumptionExtract
     /// </summary>
     public static async Task<(int Ip, int Op, int Er)> EncounterSetsAsync(HisConnection db, Settings s)
     {
+        if (s.Batch is { } batch) return await BatchSetsAsync(db, batch);
         async Task<int> Fill(string table, string set)
         {
             await db.ExecAsync($"IF OBJECT_ID('tempdb..{table}') IS NOT NULL DROP TABLE {table}; CREATE TABLE {table} (No int NOT NULL PRIMARY KEY);", _ => { });
@@ -204,6 +212,24 @@ public static class ConsumptionExtract
               AND NOT EXISTS (SELECT 1 FROM #op o WHERE o.No = x.AppointmentNo)
             """, s.BindTenant);
         return (ip, op, er);
+    }
+
+    /// <summary>
+    /// The sync worker's batch: #ip / #op / #er hold exactly the batch's keys. The day's encounter list (with the
+    /// ER ↔ appointment links folded in) was built once by <see cref="FactsManifest"/>, so nothing is re-derived here.
+    /// </summary>
+    private static async Task<(int Ip, int Op, int Er)> BatchSetsAsync(HisConnection db, FactBatch batch)
+    {
+        async Task<int> Fill(string table, IEnumerable<int> keys)
+        {
+            await db.ExecAsync($"IF OBJECT_ID('tempdb..{table}') IS NOT NULL DROP TABLE {table}; CREATE TABLE {table} (No int NOT NULL PRIMARY KEY);", _ => { });
+            var all = keys.Where(k => k > 0).Distinct().ToArray();
+            // A VALUES list holds at most 1000 rows; the keys are ints, so they go in as literals.
+            foreach (var chunk in all.Chunk(900))
+                await db.ExecAsync($"INSERT INTO {table} (No) VALUES {string.Join(",", chunk.Select(k => $"({k})"))}", _ => { });
+            return all.Length;
+        }
+        return (await Fill("#ip", batch.Ip), await Fill("#op", batch.Op), await Fill("#er", batch.Er));
     }
 
     /// <summary>The link targets, indexed so each item finds its lines without scanning them all.</summary>

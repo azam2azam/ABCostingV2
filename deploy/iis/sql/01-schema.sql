@@ -1,8 +1,13 @@
--- VERITA: complete database schema for a NEW, EMPTY database (all EF Core migrations, in order).
--- Run first, in the target database (SSMS: select the database, open this file, Execute; or
---   sqlcmd -S <server> -d <database> -U <user> -P <password> -C -b -i 01-schema.sql).
--- Then run 02-seed-users.sql. Needs SQL Server 2016 or newer (temporal tables).
--- Generated with: scripts/ef.sh migrations script   (latest migration: 20261117095051_ConsumptionAndStaffTime)
+-- VERITA: complete database schema for a NEW, EMPTY database. This file is the schema's definition: the API
+-- never creates or changes tables, and there are no EF Core migrations. A schema change is made by editing this
+-- file and writing an update script for existing databases (see README.md in this folder).
+--
+-- Run first, in the target database (after 00-drop-all.sql when starting over). It never creates or drops the
+-- database itself, so it runs with database-level rights only (db_owner, or db_ddladmin):
+--   SSMS: select the database, open this file, Execute; or
+--   sqlcmd -S <server> -d <database> -U <user> -P <password> -C -b -i 01-schema.sql
+-- Then run 02-seed-users.sql and 03-seed-hospitals.sql. Needs SQL Server 2016 or newer (temporal tables).
+-- The schema matches the EF Core model at 2026-11-19 (HIS sync tables included).
 
 -- Session settings SQL Server needs for filtered indexes, computed columns and schema-bound objects
 -- (SSMS sets these already; sqlcmd does not).
@@ -16,20 +21,10 @@ SET NUMERIC_ROUNDABORT OFF;
 GO
 
 -- Guard: refuse to run on a database that already has a VERITA schema (or any tables).
-IF OBJECT_ID(N'[__EFMigrationsHistory]') IS NOT NULL OR EXISTS (SELECT 1 FROM sys.tables WHERE is_ms_shipped = 0)
+IF EXISTS (SELECT 1 FROM sys.tables WHERE is_ms_shipped = 0)
 BEGIN
-    RAISERROR (N'This database already has tables. 01-schema.sql only runs on a new, empty database; nothing was changed.', 16, 1);
+    RAISERROR (N'This database already has tables. 01-schema.sql only runs on a new, empty database (run 00-drop-all.sql first to start over); nothing was changed.', 16, 1);
     SET NOEXEC ON;  -- SSMS keeps going after an error; this skips every following batch
-END;
-GO
-
-IF OBJECT_ID(N'[__EFMigrationsHistory]') IS NULL
-BEGIN
-    CREATE TABLE [__EFMigrationsHistory] (
-        [MigrationId] nvarchar(150) NOT NULL,
-        [ProductVersion] nvarchar(32) NOT NULL,
-        CONSTRAINT [PK___EFMigrationsHistory] PRIMARY KEY ([MigrationId])
-    );
 END;
 GO
 
@@ -1664,10 +1659,6 @@ GO
 ALTER TABLE [CostDriver] ADD CONSTRAINT [FK_CostDriver_CostPool_CostPoolId] FOREIGN KEY ([CostPoolId]) REFERENCES [CostPool] ([Id]);
 GO
 
-INSERT INTO [__EFMigrationsHistory] ([MigrationId], [ProductVersion])
-VALUES (N'20261006122812_InitialSchema', N'8.0.11');
-GO
-
 COMMIT;
 GO
 
@@ -1714,10 +1705,6 @@ JOIN dbo.Period p ON p.Id = r.PeriodId
 JOIN dbo.[Procedure] pr ON pr.Id = pc.ProcedureId
 GO
 
-INSERT INTO [__EFMigrationsHistory] ([MigrationId], [ProductVersion])
-VALUES (N'20261006130000_DatabaseGuards', N'8.0.11');
-GO
-
 COMMIT;
 GO
 
@@ -1733,10 +1720,6 @@ GO
 CREATE INDEX [IX_Hospital_HisSetupId_HisProjectId] ON [Hospital] ([HisSetupId], [HisProjectId]);
 GO
 
-INSERT INTO [__EFMigrationsHistory] ([MigrationId], [ProductVersion])
-VALUES (N'20261028091041_HospitalHisIdentity', N'8.0.11');
-GO
-
 COMMIT;
 GO
 
@@ -1750,10 +1733,6 @@ CREATE INDEX [IX_Period_HospitalId] ON [Period] ([HospitalId]);
 GO
 
 ALTER TABLE [Period] ADD CONSTRAINT [FK_Period_Hospital_HospitalId] FOREIGN KEY ([HospitalId]) REFERENCES [Hospital] ([Id]);
-GO
-
-INSERT INTO [__EFMigrationsHistory] ([MigrationId], [ProductVersion])
-VALUES (N'20261028155135_PeriodHospital', N'8.0.11');
 GO
 
 COMMIT;
@@ -1773,10 +1752,6 @@ CREATE TABLE [ProcedureTypeCosting] (
 GO
 
 CREATE UNIQUE INDEX [IX_ProcedureTypeCosting_HospitalId_ProcType] ON [ProcedureTypeCosting] ([HospitalId], [ProcType]);
-GO
-
-INSERT INTO [__EFMigrationsHistory] ([MigrationId], [ProductVersion])
-VALUES (N'20261101122438_ProcedureTypeCosting', N'8.0.11');
 GO
 
 COMMIT;
@@ -1802,10 +1777,6 @@ GO
 CREATE UNIQUE INDEX [IX_ProcedureMargin_ProcedureId] ON [ProcedureMargin] ([ProcedureId]);
 GO
 
-INSERT INTO [__EFMigrationsHistory] ([MigrationId], [ProductVersion])
-VALUES (N'20261101123550_ProcedureMargin', N'8.0.11');
-GO
-
 COMMIT;
 GO
 
@@ -1826,10 +1797,6 @@ WHERE cc.Code LIKE h.Code + '.%';
 GO
 
 CREATE UNIQUE INDEX [IX_CostCenter_HospitalId_Code] ON [CostCenter] ([HospitalId], [Code]);
-GO
-
-INSERT INTO [__EFMigrationsHistory] ([MigrationId], [ProductVersion])
-VALUES (N'20261101140921_CostCenterLocalCode', N'8.0.11');
 GO
 
 COMMIT;
@@ -1862,10 +1829,6 @@ GO
 ALTER TABLE [ProcedureMargin] ADD CONSTRAINT [CK_ProcedureMargin_Stream] CHECK ([Stream] IN (N'DIRECT', N'INDIRECT'));
 GO
 
-INSERT INTO [__EFMigrationsHistory] ([MigrationId], [ProductVersion])
-VALUES (N'20261101150843_CostingStream', N'8.0.11');
-GO
-
 COMMIT;
 GO
 
@@ -1891,10 +1854,6 @@ GO
 CREATE INDEX [IX_EncounterOverhead_HospitalId_CostCenterId] ON [EncounterOverhead] ([HospitalId], [CostCenterId]);
 GO
 
-INSERT INTO [__EFMigrationsHistory] ([MigrationId], [ProductVersion])
-VALUES (N'20261101152920_EncounterOverhead', N'8.0.11');
-GO
-
 COMMIT;
 GO
 
@@ -1902,10 +1861,6 @@ BEGIN TRANSACTION;
 GO
 
 EXEC sp_rename N'[EncounterOverhead].[OverheadSar]', N'OverheadAmount', N'COLUMN';
-GO
-
-INSERT INTO [__EFMigrationsHistory] ([MigrationId], [ProductVersion])
-VALUES (N'20261101153357_EncounterOverheadAmount', N'8.0.11');
 GO
 
 COMMIT;
@@ -2058,10 +2013,6 @@ GO
 ALTER TABLE [ProcedureTypeCosting] ADD CONSTRAINT [FK_ProcedureTypeCosting_CostingVersion_CostingVersionId] FOREIGN KEY ([CostingVersionId]) REFERENCES [CostingVersion] ([Id]);
 GO
 
-INSERT INTO [__EFMigrationsHistory] ([MigrationId], [ProductVersion])
-VALUES (N'20261101163444_CostingConfigVersion', N'8.0.11');
-GO
-
 COMMIT;
 GO
 
@@ -2082,10 +2033,6 @@ WHERE LEFT(e.EncounterNo, LEN(h.Code) + 1) = h.Code + '-';
 GO
 
 CREATE UNIQUE INDEX [IX_Encounter_HospitalId_EncounterNo] ON [Encounter] ([HospitalId], [EncounterNo]);
-GO
-
-INSERT INTO [__EFMigrationsHistory] ([MigrationId], [ProductVersion])
-VALUES (N'20261102125937_EncounterNoLocalToHospital', N'8.0.11');
 GO
 
 COMMIT;
@@ -2123,10 +2070,6 @@ JOIN Patient q ON q.Id = e.PatientId AND q.HospitalId <> e.HospitalId
 JOIN Patient c ON c.Mrn = q.Mrn AND c.HospitalId = e.HospitalId;
 GO
 
-INSERT INTO [__EFMigrationsHistory] ([MigrationId], [ProductVersion])
-VALUES (N'20261102132249_PatientPerHospitalProviderOptionalResource', N'8.0.11');
-GO
-
 COMMIT;
 GO
 
@@ -2157,10 +2100,6 @@ CREATE TABLE [RunDimensionCost] (
 GO
 
 CREATE INDEX [IX_RunDimensionCost_RunId_Dimension] ON [RunDimensionCost] ([RunId], [Dimension]);
-GO
-
-INSERT INTO [__EFMigrationsHistory] ([MigrationId], [ProductVersion])
-VALUES (N'20261102145543_CostingModelRunResults', N'8.0.11');
 GO
 
 COMMIT;
@@ -2234,10 +2173,6 @@ GO
 ALTER TABLE [CostingVersion] ADD CONSTRAINT [FK_CostingVersion_Hospital_HospitalId] FOREIGN KEY ([HospitalId]) REFERENCES [Hospital] ([Id]);
 GO
 
-INSERT INTO [__EFMigrationsHistory] ([MigrationId], [ProductVersion])
-VALUES (N'20261103093739_CostingVersionPerHospital', N'8.0.11');
-GO
-
 COMMIT;
 GO
 
@@ -2245,10 +2180,6 @@ BEGIN TRANSACTION;
 GO
 
 ALTER TABLE [Encounter] ADD [SourceAssessmentNo] nvarchar(200) NULL;
-GO
-
-INSERT INTO [__EFMigrationsHistory] ([MigrationId], [ProductVersion])
-VALUES (N'20261103111301_EncounterSourceAssessmentNo', N'8.0.11');
 GO
 
 COMMIT;
@@ -2308,10 +2239,6 @@ GO
 CREATE INDEX [IX_RefundTransaction_ProcedureId] ON [RefundTransaction] ([ProcedureId]);
 GO
 
-INSERT INTO [__EFMigrationsHistory] ([MigrationId], [ProductVersion])
-VALUES (N'20261103113223_RefundTransaction', N'8.0.11');
-GO
-
 COMMIT;
 GO
 
@@ -2346,10 +2273,6 @@ ALTER TABLE [Encounter] ADD [HisStatus] int NULL;
 GO
 
 ALTER TABLE [Encounter] ADD [HisVisitClosed] bit NULL;
-GO
-
-INSERT INTO [__EFMigrationsHistory] ([MigrationId], [ProductVersion])
-VALUES (N'20261103113821_HisStatusAndLineState', N'8.0.11');
 GO
 
 COMMIT;
@@ -2466,10 +2389,6 @@ GO
 CREATE INDEX [IX_InvoicePackageItem_ProcedureId] ON [InvoicePackageItem] ([ProcedureId]);
 GO
 
-INSERT INTO [__EFMigrationsHistory] ([MigrationId], [ProductVersion])
-VALUES (N'20261103120226_InvoiceFieldsAndPackageItems', N'8.0.11');
-GO
-
 COMMIT;
 GO
 
@@ -2516,10 +2435,6 @@ GO
 ALTER TABLE [Payer] ADD CONSTRAINT [FK_Payer_PayerAdministrator_AdministratorId] FOREIGN KEY ([AdministratorId]) REFERENCES [PayerAdministrator] ([Id]);
 GO
 
-INSERT INTO [__EFMigrationsHistory] ([MigrationId], [ProductVersion])
-VALUES (N'20261103125117_InsurerAndAdministrator', N'8.0.11');
-GO
-
 COMMIT;
 GO
 
@@ -2555,10 +2470,6 @@ DELETE p FROM [Period] p WHERE p.HospitalId IS NULL
 DROP TABLE #Owned;
 GO
 
-INSERT INTO [__EFMigrationsHistory] ([MigrationId], [ProductVersion])
-VALUES (N'20261103130900_PeriodPerHospital', N'8.0.11');
-GO
-
 COMMIT;
 GO
 
@@ -2575,10 +2486,6 @@ ALTER TABLE [ProcedureTypeCosting] ADD CONSTRAINT [CK_ProcedureTypeCosting_Strea
 GO
 
 ALTER TABLE [ProcedureMargin] ADD CONSTRAINT [CK_ProcedureMargin_Stream] CHECK ([Stream] IN (N'DIRECT', N'INDIRECT', N'PACKAGE_DIRECT'));
-GO
-
-INSERT INTO [__EFMigrationsHistory] ([MigrationId], [ProductVersion])
-VALUES (N'20261104094401_PackageCostingStream', N'8.0.11');
 GO
 
 COMMIT;
@@ -2627,10 +2534,6 @@ GO
 CREATE UNIQUE INDEX [IX_ProviderClinic_ProviderId_HisClinicId] ON [ProviderClinic] ([ProviderId], [HisClinicId]);
 GO
 
-INSERT INTO [__EFMigrationsHistory] ([MigrationId], [ProductVersion])
-VALUES (N'20261104125844_CatalogueDoctorClinicsAndProcedureLevels', N'8.0.11');
-GO
-
 COMMIT;
 GO
 
@@ -2638,10 +2541,6 @@ BEGIN TRANSACTION;
 GO
 
 ALTER TABLE [ProcedureTypeCosting] ADD [FixedAmount] decimal(19,4) NULL;
-GO
-
-INSERT INTO [__EFMigrationsHistory] ([MigrationId], [ProductVersion])
-VALUES (N'20261104151842_ProcedureTypeFixedAmount', N'8.0.11');
 GO
 
 COMMIT;
@@ -2663,10 +2562,6 @@ ALTER TABLE [ProcedureTypeCosting] ADD CONSTRAINT [CK_ProcedureTypeCosting_Strea
 GO
 
 ALTER TABLE [ProcedureMargin] ADD CONSTRAINT [CK_ProcedureMargin_Stream] CHECK ([Stream] IN (N'DIRECT', N'INDIRECT', N'PACKAGE_DIRECT', N'ZERO_FIXED'));
-GO
-
-INSERT INTO [__EFMigrationsHistory] ([MigrationId], [ProductVersion])
-VALUES (N'20261104153225_ZeroPriceFixedCost', N'8.0.11');
 GO
 
 COMMIT;
@@ -2694,10 +2589,6 @@ ALTER TABLE [Insurer] ADD [IsManagedByTpa] bit NULL;
 GO
 
 ALTER TABLE [Insurer] ADD [IsTpa] bit NULL;
-GO
-
-INSERT INTO [__EFMigrationsHistory] ([MigrationId], [ProductVersion])
-VALUES (N'20261105083924_PayerCompanyGroup', N'8.0.11');
 GO
 
 COMMIT;
@@ -2730,10 +2621,6 @@ JOIN [InvoicePackageItem] i ON i.HospitalId = e.HospitalId
 WHERE t.IsChildInvoice = 0 AND i.ChildInvoiceNo IS NOT NULL AND i.ChildInvoiceNo NOT IN ('', '0');
 GO
 
-INSERT INTO [__EFMigrationsHistory] ([MigrationId], [ProductVersion])
-VALUES (N'20261105091550_ChildInvoiceLines', N'8.0.11');
-GO
-
 COMMIT;
 GO
 
@@ -2746,10 +2633,6 @@ GO
 ALTER TABLE [ProcedureCost] ADD CONSTRAINT [CK_ProcedureCost_CostType] CHECK ([CostType] IN (N'STANDARD', N'ACTUAL', N'BUDGET', N'FORECAST', N'TARGET', N'ZERO_PRICE'));
 GO
 
-INSERT INTO [__EFMigrationsHistory] ([MigrationId], [ProductVersion])
-VALUES (N'20261105150517_ZeroPriceProcedureCost', N'8.0.11');
-GO
-
 COMMIT;
 GO
 
@@ -2757,10 +2640,6 @@ BEGIN TRANSACTION;
 GO
 
 ALTER TABLE [RunDimensionCost] ADD [Services] int NULL;
-GO
-
-INSERT INTO [__EFMigrationsHistory] ([MigrationId], [ProductVersion])
-VALUES (N'20261105151001_RunDimensionServices', N'8.0.11');
 GO
 
 COMMIT;
@@ -2820,10 +2699,6 @@ GO
 CREATE INDEX [IX_AssistantThread_UserId_IsDeleted_UpdatedAt] ON [AssistantThread] ([UserId], [IsDeleted], [UpdatedAt]);
 GO
 
-INSERT INTO [__EFMigrationsHistory] ([MigrationId], [ProductVersion])
-VALUES (N'20261109113605_AssistantThreads', N'8.0.11');
-GO
-
 COMMIT;
 GO
 
@@ -2842,10 +2717,6 @@ CREATE TABLE [AssistantRoutedPhrase] (
 GO
 
 CREATE UNIQUE INDEX [IX_AssistantRoutedPhrase_TextKey] ON [AssistantRoutedPhrase] ([TextKey]);
-GO
-
-INSERT INTO [__EFMigrationsHistory] ([MigrationId], [ProductVersion])
-VALUES (N'20261111073624_AssistantRoutedPhrases', N'8.0.11');
 GO
 
 COMMIT;
@@ -2881,10 +2752,6 @@ GO
 CREATE UNIQUE INDEX [IX_Package_HospitalId_Code] ON [Package] ([HospitalId], [Code]);
 GO
 
-INSERT INTO [__EFMigrationsHistory] ([MigrationId], [ProductVersion])
-VALUES (N'20261111082847_HospitalLocalProcedureCodes', N'8.0.11');
-GO
-
 COMMIT;
 GO
 
@@ -2892,10 +2759,6 @@ BEGIN TRANSACTION;
 GO
 
 CREATE INDEX [IX_RevenueTransaction_PostedAt] ON [RevenueTransaction] ([PostedAt]) INCLUDE ([EncounterId], [ProcedureId], [SourceRef], [HisLineStatus], [HisInvoiceType], [NetAmount], [RefundedAmount], [HisUnitPrice], [IsChildInvoice]);
-GO
-
-INSERT INTO [__EFMigrationsHistory] ([MigrationId], [ProductVersion])
-VALUES (N'20261111092037_RevenuePostedAtIndex', N'8.0.11');
 GO
 
 COMMIT;
@@ -2921,10 +2784,6 @@ CREATE TABLE [RunHisInvoicing] (
 GO
 
 CREATE UNIQUE INDEX [IX_RunHisInvoicing_RunId_InvoiceType] ON [RunHisInvoicing] ([RunId], [InvoiceType]);
-GO
-
-INSERT INTO [__EFMigrationsHistory] ([MigrationId], [ProductVersion])
-VALUES (N'20261111092450_RunHisInvoicing', N'8.0.11');
 GO
 
 COMMIT;
@@ -2980,10 +2839,6 @@ CREATE TABLE [ImportFileContent] (
 GO
 
 CREATE INDEX [IX_ImportFile_UploadedAt] ON [ImportFile] ([UploadedAt]);
-GO
-
-INSERT INTO [__EFMigrationsHistory] ([MigrationId], [ProductVersion])
-VALUES (N'20261117094640_ImportFiles', N'8.0.11');
 GO
 
 COMMIT;
@@ -3073,8 +2928,844 @@ GO
 CREATE INDEX [IX_StaffTime_ProviderId] ON [StaffTime] ([ProviderId]);
 GO
 
-INSERT INTO [__EFMigrationsHistory] ([MigrationId], [ProductVersion])
-VALUES (N'20261117095051_ConsumptionAndStaffTime', N'8.0.11');
+COMMIT;
+GO
+
+BEGIN TRANSACTION;
+GO
+
+ALTER TABLE [RevenueTransaction] ADD [DoctorShare] decimal(19,6) NULL;
+GO
+
+ALTER TABLE [RevenueTransaction] ADD [DoctorShareType] nvarchar(1) NULL;
+GO
+
+COMMIT;
+GO
+
+BEGIN TRANSACTION;
+GO
+
+CREATE TABLE [EncounterTransfer] (
+    [Id] uniqueidentifier NOT NULL,
+    [HospitalId] uniqueidentifier NOT NULL,
+    [EncounterId] uniqueidentifier NULL,
+    [HisEncounterNo] nvarchar(200) NOT NULL,
+    [TransferNo] int NOT NULL,
+    [TransferDate] datetime2(3) NOT NULL,
+    [StartTime] nvarchar(50) NULL,
+    [EndTime] nvarchar(50) NULL,
+    [Duration] int NULL,
+    [HisClinicId] int NULL,
+    [CostCentreCode] nvarchar(200) NULL,
+    [SourceTable] nvarchar(200) NOT NULL,
+    [SourceSystem] nvarchar(200) NOT NULL,
+    [SourceRef] nvarchar(120) NOT NULL,
+    CONSTRAINT [PK_EncounterTransfer] PRIMARY KEY ([Id]),
+    CONSTRAINT [FK_EncounterTransfer_Encounter_EncounterId] FOREIGN KEY ([EncounterId]) REFERENCES [Encounter] ([Id]),
+    CONSTRAINT [FK_EncounterTransfer_Hospital_HospitalId] FOREIGN KEY ([HospitalId]) REFERENCES [Hospital] ([Id])
+);
+GO
+
+CREATE INDEX [IX_EncounterTransfer_EncounterId] ON [EncounterTransfer] ([EncounterId]);
+GO
+
+CREATE INDEX [IX_EncounterTransfer_HospitalId_HisEncounterNo] ON [EncounterTransfer] ([HospitalId], [HisEncounterNo]);
+GO
+
+CREATE UNIQUE INDEX [IX_EncounterTransfer_HospitalId_SourceRef] ON [EncounterTransfer] ([HospitalId], [SourceRef]);
+GO
+
+COMMIT;
+GO
+
+BEGIN TRANSACTION;
+GO
+
+ALTER TABLE [StaffTime] ADD [ClinicId] int NULL;
+GO
+
+ALTER TABLE [StaffTime] ADD [EndTime] nvarchar(50) NULL;
+GO
+
+ALTER TABLE [StaffTime] ADD [OtId] int NULL;
+GO
+
+ALTER TABLE [StaffTime] ADD [StartTime] nvarchar(50) NULL;
+GO
+
+ALTER TABLE [EncounterTransfer] ADD [BedId] nvarchar(20) NULL;
+GO
+
+ALTER TABLE [EncounterTransfer] ADD [CategoryId] int NULL;
+GO
+
+ALTER TABLE [EncounterTransfer] ADD [Charges] decimal(19,6) NULL;
+GO
+
+ALTER TABLE [EncounterTransfer] ADD [DoctorId] int NULL;
+GO
+
+ALTER TABLE [EncounterTransfer] ADD [NursingStationId] int NULL;
+GO
+
+ALTER TABLE [EncounterTransfer] ADD [PatientStatus] int NULL;
+GO
+
+ALTER TABLE [EncounterTransfer] ADD [PerformingClinicId] int NULL;
+GO
+
+ALTER TABLE [EncounterTransfer] ADD [PerformingDoctorId] int NULL;
+GO
+
+ALTER TABLE [EncounterTransfer] ADD [Remarks] nvarchar(500) NULL;
+GO
+
+ALTER TABLE [EncounterTransfer] ADD [RoomId] nvarchar(20) NULL;
+GO
+
+ALTER TABLE [EncounterTransfer] ADD [Status] int NULL;
+GO
+
+ALTER TABLE [EncounterTransfer] ADD [TransferType] int NULL;
+GO
+
+ALTER TABLE [ConsumptionItem] ADD [BillingPrice] decimal(19,6) NULL;
+GO
+
+ALTER TABLE [ConsumptionItem] ADD [HisGrossAmount] decimal(19,6) NULL;
+GO
+
+ALTER TABLE [ConsumptionItem] ADD [HisSource] int NULL;
+GO
+
+ALTER TABLE [ConsumptionItem] ADD [HisTransType] int NULL;
+GO
+
+ALTER TABLE [ConsumptionItem] ADD [ItemCategoryId] int NULL;
+GO
+
+ALTER TABLE [ConsumptionItem] ADD [MarkUp] decimal(19,6) NULL;
+GO
+
+ALTER TABLE [ConsumptionItem] ADD [NursingStationId] int NULL;
+GO
+
+ALTER TABLE [ConsumptionItem] ADD [OrderLineItemNo] int NULL;
+GO
+
+ALTER TABLE [ConsumptionItem] ADD [OrderNo] int NULL;
+GO
+
+ALTER TABLE [ConsumptionItem] ADD [RefundableQty] decimal(19,6) NULL;
+GO
+
+ALTER TABLE [ConsumptionItem] ADD [SellingPrice] decimal(19,6) NULL;
+GO
+
+ALTER TABLE [ConsumptionItem] ADD [StockQtySnapshot] decimal(19,6) NULL;
+GO
+
+ALTER TABLE [ConsumptionItem] ADD [SubCategoryId] int NULL;
+GO
+
+COMMIT;
+GO
+
+BEGIN TRANSACTION;
+GO
+
+CREATE TABLE [ClaimLine] (
+    [Id] uniqueidentifier NOT NULL,
+    [HospitalId] uniqueidentifier NOT NULL,
+    [EncounterId] uniqueidentifier NULL,
+    [HisEncounterNo] nvarchar(50) NULL,
+    [PatientMrn] nvarchar(200) NULL,
+    [PayerId] uniqueidentifier NULL,
+    [RevenueRef] nvarchar(100) NULL,
+    [ClaimNo] int NULL,
+    [ClaimDate] datetime2(3) NULL,
+    [InvoiceTransactionType] int NULL,
+    [InvoiceNo] int NULL,
+    [MainInvoiceNo] int NULL,
+    [LineItemNo] int NULL,
+    [HisPatientType] int NULL,
+    [HisProcedureId] nvarchar(200) NULL,
+    [ClaimAmount] decimal(19,4) NULL,
+    [InvoiceAmount] decimal(19,4) NULL,
+    [SettlementAmount] decimal(19,4) NULL,
+    [RejectedAmount] decimal(19,4) NULL,
+    [TaxAmount] decimal(19,4) NULL,
+    [PrimaryDoctorId] int NULL,
+    [PrimaryDoctorShare] decimal(19,4) NULL,
+    [PrimaryDoctorShareType] nvarchar(200) NULL,
+    [ReferralClinicId] int NULL,
+    [ReferralDoctorId] int NULL,
+    [ReferralDoctorShare] decimal(19,4) NULL,
+    [ReferralDoctorShareType] nvarchar(200) NULL,
+    [Remarks] nvarchar(200) NULL,
+    [EClaimStatus] int NULL,
+    [EClaimRejectionReason] int NULL,
+    [EClaimRemarks] nvarchar(200) NULL,
+    [LineCreatedOn] datetime2(3) NULL,
+    [LineEditedOn] datetime2(3) NULL,
+    [InvInvoiceAmount] decimal(19,4) NULL,
+    [InvClaimAmount] decimal(19,4) NULL,
+    [InvSettlementAmount] decimal(19,4) NULL,
+    [InvTaxAmount] decimal(19,4) NULL,
+    [InvRemarks] nvarchar(200) NULL,
+    [InvIsPackageInvoice] bit NULL,
+    [InvIsActive] bit NULL,
+    [InvEClaimStatus] int NULL,
+    [InvEClaimRefNum] nvarchar(200) NULL,
+    [InvEClaimRemarks] nvarchar(200) NULL,
+    [NphiesClaimStatus] int NULL,
+    [NphiesClaimRefNum] nvarchar(200) NULL,
+    [NphiesClaimRemarks] nvarchar(200) NULL,
+    [NphiesTaxAmount] decimal(19,4) NULL,
+    [NphiesBatchIdentifier] nvarchar(200) NULL,
+    [NphiesBatchNumber] int NULL,
+    [NphiesClaimRemarks2] nvarchar(200) NULL,
+    [NphiesSubmittedOn] datetime2(3) NULL,
+    [NphiesResponseReceivedOn] datetime2(3) NULL,
+    [NphiesAmountSubmitted] decimal(19,4) NULL,
+    [NphiesAmountApproved] decimal(19,4) NULL,
+    [ClaimBundleId] nvarchar(200) NULL,
+    [ClaimBatchBundleId] nvarchar(200) NULL,
+    [IsPendedReceived] bit NULL,
+    [ReconciliationBundleId] nvarchar(200) NULL,
+    [ResubmissionStatus] int NULL,
+    [AttachmentStatus] int NULL,
+    [InvCreatedOn] datetime2(3) NULL,
+    [ClaimCompanyId] int NULL,
+    [ClaimInvoiceFromDate] datetime2(3) NULL,
+    [ClaimInvoiceToDate] datetime2(3) NULL,
+    [ClaimInvoiceAmount] decimal(19,4) NULL,
+    [ClaimTotalAmount] decimal(19,4) NULL,
+    [ClaimSettledAmount] decimal(19,4) NULL,
+    [ClaimNoOfSettlement] int NULL,
+    [ClaimLastSettlementNo] int NULL,
+    [ClaimLastSettlementDate] datetime2(3) NULL,
+    [ClaimIsPosted2Gl] bit NULL,
+    [ClaimIsTransactionClosed] bit NULL,
+    [ClaimStatus] int NULL,
+    [ClaimIsEClaimed] bit NULL,
+    [ClaimEClaimStatus] int NULL,
+    [ClaimInvoiceTypeId] int NULL,
+    [ClaimTaxAmount] decimal(19,4) NULL,
+    [ClaimUpdateDate] datetime2(3) NULL,
+    [ClaimNphiesStatus] int NULL,
+    [ClaimNphiesUpdateDate] datetime2(3) NULL,
+    [ClaimNphiesReference] nvarchar(200) NULL,
+    [ClaimEClaimSubmittedOn] datetime2(3) NULL,
+    [ClaimNphiesSubmittedOn] datetime2(3) NULL,
+    [ClaimNphiesReSubmittedOn] datetime2(3) NULL,
+    [ClaimIsPostedToZatca] bit NULL,
+    [ClaimOracleBatchNo] nvarchar(200) NULL,
+    [ClaimCreatedOn] datetime2(3) NULL,
+    [SourceSystem] nvarchar(200) NOT NULL,
+    [SourceRef] nvarchar(150) NOT NULL,
+    CONSTRAINT [PK_ClaimLine] PRIMARY KEY ([Id]),
+    CONSTRAINT [FK_ClaimLine_Encounter_EncounterId] FOREIGN KEY ([EncounterId]) REFERENCES [Encounter] ([Id]),
+    CONSTRAINT [FK_ClaimLine_Hospital_HospitalId] FOREIGN KEY ([HospitalId]) REFERENCES [Hospital] ([Id]),
+    CONSTRAINT [FK_ClaimLine_Payer_PayerId] FOREIGN KEY ([PayerId]) REFERENCES [Payer] ([Id])
+);
+GO
+
+CREATE TABLE [NphiesClaimLine] (
+    [Id] uniqueidentifier NOT NULL,
+    [HospitalId] uniqueidentifier NOT NULL,
+    [EncounterId] uniqueidentifier NULL,
+    [HisEncounterNo] nvarchar(50) NULL,
+    [PatientMrn] nvarchar(200) NULL,
+    [PayerId] uniqueidentifier NULL,
+    [ClaimType] int NULL,
+    [InvoiceTransactionType] int NULL,
+    [InvoiceNo] int NULL,
+    [ClaimIdentifier] nvarchar(50) NULL,
+    [SequenceNo] int NULL,
+    [HisProcedureId] nvarchar(200) NULL,
+    [AmountSubmitted] decimal(19,4) NULL,
+    [AmountApproved] decimal(19,4) NULL,
+    [IsApproved] bit NULL,
+    [Remarks] nvarchar(200) NULL,
+    [PatientShare] decimal(19,4) NULL,
+    [CompanyTax] decimal(19,4) NULL,
+    [NphiesStatus] int NULL,
+    [SubmittedQuantity] nvarchar(200) NULL,
+    [ApprovedQuantity] nvarchar(200) NULL,
+    [ReasonCode] nvarchar(200) NULL,
+    [TaxApproved] nvarchar(200) NULL,
+    [ClaimStatus] int NULL,
+    [ClaimBundleId] nvarchar(200) NULL,
+    [LineCreatedOn] datetime2(3) NULL,
+    [LineEditedOn] datetime2(3) NULL,
+    [RejectionRemarks] nvarchar(200) NULL,
+    [SourceSystem] nvarchar(200) NOT NULL,
+    [SourceRef] nvarchar(150) NOT NULL,
+    CONSTRAINT [PK_NphiesClaimLine] PRIMARY KEY ([Id]),
+    CONSTRAINT [FK_NphiesClaimLine_Encounter_EncounterId] FOREIGN KEY ([EncounterId]) REFERENCES [Encounter] ([Id]),
+    CONSTRAINT [FK_NphiesClaimLine_Hospital_HospitalId] FOREIGN KEY ([HospitalId]) REFERENCES [Hospital] ([Id]),
+    CONSTRAINT [FK_NphiesClaimLine_Payer_PayerId] FOREIGN KEY ([PayerId]) REFERENCES [Payer] ([Id])
+);
+GO
+
+CREATE TABLE [NphiesPayment] (
+    [Id] uniqueidentifier NOT NULL,
+    [HospitalId] uniqueidentifier NOT NULL,
+    [PaymentReconIdentifier] nvarchar(200) NULL,
+    [LineItemNo] int NULL,
+    [ComponentPayment] nvarchar(200) NULL,
+    [ComponentEarlyFee] nvarchar(200) NULL,
+    [ComponentNphiesFee] nvarchar(200) NULL,
+    [Identifier] nvarchar(200) NULL,
+    [Predecessor] nvarchar(200) NULL,
+    [Type] nvarchar(200) NULL,
+    [ClaimRequestIdentifier] nvarchar(50) NULL,
+    [ClaimRequestSystem] nvarchar(200) NULL,
+    [ClaimResponseIdentifier] nvarchar(200) NULL,
+    [ClaimResponseSystem] nvarchar(200) NULL,
+    [PayeeOrg] nvarchar(200) NULL,
+    [SubmitterOrg] nvarchar(200) NULL,
+    [Amount] nvarchar(200) NULL,
+    [AmountValue] decimal(19,4) NULL,
+    [ComponentPaymentValue] decimal(19,4) NULL,
+    [Date] datetime2(3) NULL,
+    [LineCreatedOn] datetime2(3) NULL,
+    [IdentifierSystem] nvarchar(200) NULL,
+    [PaymentIssuer] nvarchar(200) NULL,
+    [Status] nvarchar(200) NULL,
+    [StartDate] datetime2(3) NULL,
+    [EndDate] datetime2(3) NULL,
+    [PaymentCreatedOn] datetime2(3) NULL,
+    [Outcome] nvarchar(200) NULL,
+    [Disposition] nvarchar(200) NULL,
+    [PaymentDate] datetime2(3) NULL,
+    [PaymentAmount] nvarchar(200) NULL,
+    [PaymentAmountValue] decimal(19,4) NULL,
+    [PaymentIdentifier] nvarchar(200) NULL,
+    [PaymentIdentifierSystem] nvarchar(200) NULL,
+    [IsPaymentNoticeSent] bit NULL,
+    [PaymentNoticeSentOn] datetime2(3) NULL,
+    [CreatedOn] datetime2(3) NULL,
+    [SourceSystem] nvarchar(200) NOT NULL,
+    [SourceRef] nvarchar(150) NOT NULL,
+    CONSTRAINT [PK_NphiesPayment] PRIMARY KEY ([Id]),
+    CONSTRAINT [FK_NphiesPayment_Hospital_HospitalId] FOREIGN KEY ([HospitalId]) REFERENCES [Hospital] ([Id])
+);
+GO
+
+CREATE TABLE [SettlementLine] (
+    [Id] uniqueidentifier NOT NULL,
+    [HospitalId] uniqueidentifier NOT NULL,
+    [EncounterId] uniqueidentifier NULL,
+    [HisEncounterNo] nvarchar(50) NULL,
+    [PatientMrn] nvarchar(200) NULL,
+    [PayerId] uniqueidentifier NULL,
+    [RevenueRef] nvarchar(100) NULL,
+    [SettlementTransactionType] int NULL,
+    [SettlementNo] int NULL,
+    [SettlementDate] datetime2(3) NULL,
+    [ClaimNo] int NULL,
+    [InvoiceTransactionType] int NULL,
+    [InvoiceNo] int NULL,
+    [MainInvoiceNo] int NULL,
+    [LineItemNo] int NULL,
+    [HisProcedureId] nvarchar(200) NULL,
+    [ClaimedAmount] decimal(19,4) NULL,
+    [PaidAmount] decimal(19,4) NULL,
+    [RejectedAmount] decimal(19,4) NULL,
+    [RejectionReasonId] int NULL,
+    [PrimaryDoctorId] int NULL,
+    [PrimaryDoctorShare] decimal(19,4) NULL,
+    [PrimaryDoctorShareType] nvarchar(200) NULL,
+    [ReferralClinicId] int NULL,
+    [ReferralDoctorId] int NULL,
+    [ReferralDoctorShare] decimal(19,4) NULL,
+    [ReferralDoctorShareType] nvarchar(200) NULL,
+    [PartnerId] int NULL,
+    [PartnerShare] decimal(19,4) NULL,
+    [PartnerShareType] nvarchar(200) NULL,
+    [Remarks] nvarchar(200) NULL,
+    [LineCreatedOn] datetime2(3) NULL,
+    [LineEditedOn] datetime2(3) NULL,
+    [InvInvoiceAmount] decimal(19,4) NULL,
+    [InvClaimedAmount] decimal(19,4) NULL,
+    [InvSettledAmount] decimal(19,4) NULL,
+    [InvRejectedAmount] decimal(19,4) NULL,
+    [InvTaxAmount] decimal(19,4) NULL,
+    [InvRemarks] nvarchar(200) NULL,
+    [InvIsActive] bit NULL,
+    [InvIsPackageInvoice] bit NULL,
+    [SettlementCompanyId] int NULL,
+    [OfficialReceiptNo] nvarchar(200) NULL,
+    [OfficialReceiptDate] datetime2(3) NULL,
+    [OfficialReceiptReference] nvarchar(200) NULL,
+    [ReceiptAmount] decimal(19,4) NULL,
+    [IsIncomeShared] bit NULL,
+    [IncShareProcessedOn] datetime2(3) NULL,
+    [IsPosted2Gl] bit NULL,
+    [IsTransactionClosed] bit NULL,
+    [SettlementStatus] int NULL,
+    [SettlementTaxAmount] decimal(19,4) NULL,
+    [ErpInterfaceId] nvarchar(200) NULL,
+    [SettlementCreatedOn] datetime2(3) NULL,
+    [SourceSystem] nvarchar(200) NOT NULL,
+    [SourceRef] nvarchar(150) NOT NULL,
+    CONSTRAINT [PK_SettlementLine] PRIMARY KEY ([Id]),
+    CONSTRAINT [FK_SettlementLine_Encounter_EncounterId] FOREIGN KEY ([EncounterId]) REFERENCES [Encounter] ([Id]),
+    CONSTRAINT [FK_SettlementLine_Hospital_HospitalId] FOREIGN KEY ([HospitalId]) REFERENCES [Hospital] ([Id]),
+    CONSTRAINT [FK_SettlementLine_Payer_PayerId] FOREIGN KEY ([PayerId]) REFERENCES [Payer] ([Id])
+);
+GO
+
+CREATE INDEX [IX_ClaimLine_EncounterId] ON [ClaimLine] ([EncounterId]);
+GO
+
+CREATE INDEX [IX_ClaimLine_HospitalId_HisEncounterNo] ON [ClaimLine] ([HospitalId], [HisEncounterNo]);
+GO
+
+CREATE INDEX [IX_ClaimLine_HospitalId_RevenueRef] ON [ClaimLine] ([HospitalId], [RevenueRef]);
+GO
+
+CREATE UNIQUE INDEX [IX_ClaimLine_HospitalId_SourceRef] ON [ClaimLine] ([HospitalId], [SourceRef]);
+GO
+
+CREATE INDEX [IX_ClaimLine_PayerId] ON [ClaimLine] ([PayerId]);
+GO
+
+CREATE INDEX [IX_NphiesClaimLine_EncounterId] ON [NphiesClaimLine] ([EncounterId]);
+GO
+
+CREATE INDEX [IX_NphiesClaimLine_HospitalId_ClaimIdentifier] ON [NphiesClaimLine] ([HospitalId], [ClaimIdentifier]);
+GO
+
+CREATE INDEX [IX_NphiesClaimLine_HospitalId_HisEncounterNo] ON [NphiesClaimLine] ([HospitalId], [HisEncounterNo]);
+GO
+
+CREATE UNIQUE INDEX [IX_NphiesClaimLine_HospitalId_SourceRef] ON [NphiesClaimLine] ([HospitalId], [SourceRef]);
+GO
+
+CREATE INDEX [IX_NphiesClaimLine_PayerId] ON [NphiesClaimLine] ([PayerId]);
+GO
+
+CREATE INDEX [IX_NphiesPayment_HospitalId_ClaimRequestIdentifier] ON [NphiesPayment] ([HospitalId], [ClaimRequestIdentifier]);
+GO
+
+CREATE UNIQUE INDEX [IX_NphiesPayment_HospitalId_SourceRef] ON [NphiesPayment] ([HospitalId], [SourceRef]);
+GO
+
+CREATE INDEX [IX_SettlementLine_EncounterId] ON [SettlementLine] ([EncounterId]);
+GO
+
+CREATE INDEX [IX_SettlementLine_HospitalId_HisEncounterNo] ON [SettlementLine] ([HospitalId], [HisEncounterNo]);
+GO
+
+CREATE INDEX [IX_SettlementLine_HospitalId_RevenueRef] ON [SettlementLine] ([HospitalId], [RevenueRef]);
+GO
+
+CREATE UNIQUE INDEX [IX_SettlementLine_HospitalId_SourceRef] ON [SettlementLine] ([HospitalId], [SourceRef]);
+GO
+
+CREATE INDEX [IX_SettlementLine_PayerId] ON [SettlementLine] ([PayerId]);
+GO
+
+COMMIT;
+GO
+
+BEGIN TRANSACTION;
+GO
+
+CREATE TABLE [RunPackageBilling] (
+    [Id] uniqueidentifier NOT NULL,
+    [RunId] uniqueidentifier NOT NULL,
+    [PackageId] uniqueidentifier NOT NULL,
+    [Encounters] int NOT NULL,
+    [DoctorShare] decimal(19,4) NULL,
+    [FeeBilled] decimal(19,4) NOT NULL,
+    [MaterialsBilled] decimal(19,4) NOT NULL,
+    [MaterialItems] int NOT NULL,
+    [MedicineBilled] decimal(19,4) NOT NULL,
+    [MedicineQuantity] decimal(19,6) NOT NULL,
+    [WardDays] int NOT NULL,
+    [NurseMinutes] decimal(19,6) NOT NULL,
+    [Claimed] decimal(19,4) NOT NULL,
+    [Settled] decimal(19,4) NOT NULL,
+    [Rejected] decimal(19,4) NOT NULL,
+    CONSTRAINT [PK_RunPackageBilling] PRIMARY KEY ([Id]),
+    CONSTRAINT [FK_RunPackageBilling_CalculationRun_RunId] FOREIGN KEY ([RunId]) REFERENCES [CalculationRun] ([Id]) ON DELETE CASCADE
+);
+GO
+
+CREATE UNIQUE INDEX [IX_RunPackageBilling_RunId_PackageId] ON [RunPackageBilling] ([RunId], [PackageId]);
+GO
+
+COMMIT;
+GO
+
+BEGIN TRANSACTION;
+GO
+
+DECLARE @var4 sysname;
+SELECT @var4 = [d].[name]
+FROM [sys].[default_constraints] [d]
+INNER JOIN [sys].[columns] [c] ON [d].[parent_column_id] = [c].[column_id] AND [d].[parent_object_id] = [c].[object_id]
+WHERE ([d].[parent_object_id] = OBJECT_ID(N'[RunPackageBilling]') AND [c].[name] = N'WardDays');
+IF @var4 IS NOT NULL EXEC(N'ALTER TABLE [RunPackageBilling] DROP CONSTRAINT [' + @var4 + '];');
+ALTER TABLE [RunPackageBilling] ALTER COLUMN [WardDays] decimal(19,6) NOT NULL;
+GO
+
+ALTER TABLE [RunPackageBilling] ADD [StaffMinutes] decimal(19,6) NOT NULL DEFAULT 0.0;
+GO
+
+COMMIT;
+GO
+
+BEGIN TRANSACTION;
+GO
+
+ALTER TABLE [RunPackageBilling] ADD [Cases] int NULL;
+GO
+
+COMMIT;
+GO
+
+BEGIN TRANSACTION;
+GO
+
+CREATE TABLE [MedicinePrice] (
+    [Id] uniqueidentifier NOT NULL,
+    [HospitalId] uniqueidentifier NOT NULL,
+    [MedicineCode] nvarchar(200) NOT NULL,
+    [Name] nvarchar(200) NOT NULL,
+    [GenericName] nvarchar(200) NULL,
+    [Strength] nvarchar(200) NULL,
+    [PackQuantity] decimal(19,6) NULL,
+    [QuantityUnit] int NULL,
+    [StdSellingPrice] decimal(19,6) NULL,
+    [StdPurchasePrice] decimal(19,6) NULL,
+    [Vat] decimal(19,6) NULL,
+    [HisStatus] int NULL,
+    [Source] nvarchar(200) NOT NULL,
+    CONSTRAINT [PK_MedicinePrice] PRIMARY KEY ([Id]),
+    CONSTRAINT [FK_MedicinePrice_Hospital_HospitalId] FOREIGN KEY ([HospitalId]) REFERENCES [Hospital] ([Id])
+);
+GO
+
+CREATE UNIQUE INDEX [IX_MedicinePrice_HospitalId_MedicineCode] ON [MedicinePrice] ([HospitalId], [MedicineCode]);
+GO
+
+COMMIT;
+GO
+
+BEGIN TRANSACTION;
+GO
+
+ALTER TABLE [RevenueTransaction] ADD [HisIsClaimed] bit NULL;
+GO
+
+COMMIT;
+GO
+
+BEGIN TRANSACTION;
+GO
+
+CREATE TABLE [RunPackageDoctor] (
+    [Id] uniqueidentifier NOT NULL,
+    [RunId] uniqueidentifier NOT NULL,
+    [PackageId] uniqueidentifier NOT NULL,
+    [EncounterId] uniqueidentifier NOT NULL,
+    [ProviderId] uniqueidentifier NULL,
+    [Performed] int NOT NULL,
+    [FeeBilled] decimal(19,4) NOT NULL,
+    [DoctorShare] decimal(19,4) NULL,
+    [ConsumablesBilled] decimal(19,4) NOT NULL,
+    [ConsumablesCovered] decimal(19,4) NOT NULL,
+    [ConsumablesClaimed] decimal(19,4) NOT NULL,
+    [ConsumableItems] decimal(19,6) NOT NULL,
+    [MedicineBilled] decimal(19,4) NOT NULL,
+    [MedicineCovered] decimal(19,4) NOT NULL,
+    [MedicineCoveredQty] decimal(19,6) NOT NULL,
+    [MedicineLines] decimal(19,6) NOT NULL,
+    [MedicineClaimed] decimal(19,4) NOT NULL,
+    [Claimed] decimal(19,4) NOT NULL,
+    [ClaimsReceived] decimal(19,4) NULL,
+    [Settled] decimal(19,4) NOT NULL,
+    [Rejected] decimal(19,4) NOT NULL,
+    [WardDays] decimal(19,6) NOT NULL,
+    [StaffMinutes] decimal(19,6) NOT NULL,
+    CONSTRAINT [PK_RunPackageDoctor] PRIMARY KEY ([Id]),
+    CONSTRAINT [FK_RunPackageDoctor_CalculationRun_RunId] FOREIGN KEY ([RunId]) REFERENCES [CalculationRun] ([Id]) ON DELETE CASCADE
+);
+GO
+
+CREATE INDEX [IX_RunPackageDoctor_RunId_PackageId] ON [RunPackageDoctor] ([RunId], [PackageId]);
+GO
+
+COMMIT;
+GO
+
+BEGIN TRANSACTION;
+GO
+
+CREATE TABLE [RunProcedureDoctor] (
+    [Id] uniqueidentifier NOT NULL,
+    [RunId] uniqueidentifier NOT NULL,
+    [ProcedureId] uniqueidentifier NOT NULL,
+    [EncounterId] uniqueidentifier NOT NULL,
+    [ProviderId] uniqueidentifier NULL,
+    [Performed] decimal(19,6) NOT NULL,
+    [FeeBilled] decimal(19,4) NOT NULL,
+    [Consumables] decimal(19,4) NOT NULL,
+    [Medicine] decimal(19,4) NOT NULL,
+    [Claimed] decimal(19,4) NOT NULL,
+    [ClaimsReceived] decimal(19,4) NULL,
+    [Settled] decimal(19,4) NOT NULL,
+    [Rejected] decimal(19,4) NOT NULL,
+    CONSTRAINT [PK_RunProcedureDoctor] PRIMARY KEY ([Id]),
+    CONSTRAINT [FK_RunProcedureDoctor_CalculationRun_RunId] FOREIGN KEY ([RunId]) REFERENCES [CalculationRun] ([Id]) ON DELETE CASCADE
+);
+GO
+
+CREATE INDEX [IX_RunPackageDoctor_RunId_ProviderId] ON [RunPackageDoctor] ([RunId], [ProviderId]);
+GO
+
+CREATE INDEX [IX_RunProcedureDoctor_RunId_ProviderId] ON [RunProcedureDoctor] ([RunId], [ProviderId]);
+GO
+
+COMMIT;
+GO
+
+BEGIN TRANSACTION;
+GO
+
+ALTER TABLE [RunPackageDoctor] ADD [ClaimsReceivedLines] decimal(19,4) NULL;
+GO
+
+ALTER TABLE [RunPackageBilling] ADD [ClaimsReceived] decimal(19,4) NULL;
+GO
+
+COMMIT;
+GO
+
+BEGIN TRANSACTION;
+GO
+
+CREATE TABLE [HisSyncLog] (
+    [Id] uniqueidentifier NOT NULL,
+    [HospitalId] uniqueidentifier NOT NULL,
+    [At] datetime2(3) NOT NULL,
+    [Kind] nvarchar(16) NOT NULL,
+    [Level] nvarchar(8) NOT NULL,
+    [Message] nvarchar(max) NOT NULL,
+    [Detail] nvarchar(200) NULL,
+    [FactDate] date NULL,
+    [Actor] nvarchar(256) NOT NULL,
+    CONSTRAINT [PK_HisSyncLog] PRIMARY KEY ([Id]),
+    CONSTRAINT [FK_HisSyncLog_Hospital_HospitalId] FOREIGN KEY ([HospitalId]) REFERENCES [Hospital] ([Id]) ON DELETE CASCADE
+);
+GO
+
+CREATE TABLE [HisSyncRange] (
+    [Id] uniqueidentifier NOT NULL,
+    [HospitalId] uniqueidentifier NOT NULL,
+    [FromDate] date NOT NULL,
+    [ToDate] date NOT NULL,
+    [Status] nvarchar(32) NOT NULL,
+    [DaysTotal] int NOT NULL,
+    [DaysDone] int NOT NULL,
+    [RequestedAt] datetime2(3) NOT NULL,
+    [RequestedBy] nvarchar(256) NOT NULL,
+    [StartedAt] datetime2(3) NULL,
+    [FinishedAt] datetime2(3) NULL,
+    [Error] nvarchar(200) NULL,
+    CONSTRAINT [PK_HisSyncRange] PRIMARY KEY ([Id]),
+    CONSTRAINT [FK_HisSyncRange_Hospital_HospitalId] FOREIGN KEY ([HospitalId]) REFERENCES [Hospital] ([Id]) ON DELETE CASCADE
+);
+GO
+
+CREATE TABLE [HisSyncSetting] (
+    [Id] uniqueidentifier NOT NULL,
+    [HospitalId] uniqueidentifier NOT NULL,
+    [CatalogueEnabled] bit NOT NULL,
+    [CatalogueTime] time NOT NULL,
+    [CatalogueRequestedAt] datetime2(3) NULL,
+    [CatalogueRequestedBy] nvarchar(256) NULL,
+    [CatalogueLastRunAt] datetime2(3) NULL,
+    [UpdatedAt] datetime2(3) NOT NULL,
+    [UpdatedBy] nvarchar(256) NOT NULL,
+    CONSTRAINT [PK_HisSyncSetting] PRIMARY KEY ([Id]),
+    CONSTRAINT [FK_HisSyncSetting_Hospital_HospitalId] FOREIGN KEY ([HospitalId]) REFERENCES [Hospital] ([Id]) ON DELETE CASCADE
+);
+GO
+
+CREATE TABLE [HisSyncWorker] (
+    [Id] uniqueidentifier NOT NULL,
+    [HospitalId] uniqueidentifier NOT NULL,
+    [Kind] nvarchar(16) NOT NULL,
+    [Status] nvarchar(16) NOT NULL,
+    [Step] nvarchar(200) NULL,
+    [RangeId] uniqueidentifier NULL,
+    [CurrentDate] date NULL,
+    [BatchesDone] int NOT NULL,
+    [BatchesTotal] int NULL,
+    [RecordsDone] int NOT NULL,
+    [RecordsTotal] int NULL,
+    [StartedAt] datetime2(3) NULL,
+    [HeartbeatAt] datetime2(3) NULL,
+    [FinishedAt] datetime2(3) NULL,
+    [LastError] nvarchar(200) NULL,
+    CONSTRAINT [PK_HisSyncWorker] PRIMARY KEY ([Id]),
+    CONSTRAINT [FK_HisSyncWorker_Hospital_HospitalId] FOREIGN KEY ([HospitalId]) REFERENCES [Hospital] ([Id]) ON DELETE CASCADE
+);
+GO
+
+CREATE INDEX [IX_HisSyncLog_HospitalId_At] ON [HisSyncLog] ([HospitalId], [At]);
+GO
+
+CREATE INDEX [IX_HisSyncRange_HospitalId_FromDate] ON [HisSyncRange] ([HospitalId], [FromDate]);
+GO
+
+CREATE UNIQUE INDEX [IX_HisSyncSetting_HospitalId] ON [HisSyncSetting] ([HospitalId]);
+GO
+
+CREATE UNIQUE INDEX [IX_HisSyncWorker_HospitalId_Kind] ON [HisSyncWorker] ([HospitalId], [Kind]);
+GO
+
+COMMIT;
+GO
+
+BEGIN TRANSACTION;
+GO
+
+CREATE TABLE [HisSyncCatalogueChange] (
+    [Id] uniqueidentifier NOT NULL,
+    [HospitalId] uniqueidentifier NOT NULL,
+    [ImportFileId] uniqueidentifier NULL,
+    [DetectedAt] datetime2(3) NOT NULL,
+    [Status] nvarchar(16) NOT NULL,
+    [Created] int NOT NULL,
+    [Updated] int NOT NULL,
+    [Unchanged] int NOT NULL,
+    [Rejected] int NOT NULL,
+    [TablesJson] nvarchar(200) NOT NULL,
+    [DecidedAt] datetime2(3) NULL,
+    [DecidedBy] nvarchar(256) NULL,
+    CONSTRAINT [PK_HisSyncCatalogueChange] PRIMARY KEY ([Id]),
+    CONSTRAINT [FK_HisSyncCatalogueChange_Hospital_HospitalId] FOREIGN KEY ([HospitalId]) REFERENCES [Hospital] ([Id]) ON DELETE CASCADE
+);
+GO
+
+CREATE TABLE [HisSyncDay] (
+    [Id] uniqueidentifier NOT NULL,
+    [HospitalId] uniqueidentifier NOT NULL,
+    [RangeId] uniqueidentifier NOT NULL,
+    [Date] date NOT NULL,
+    [Status] nvarchar(32) NOT NULL,
+    [Encounters] int NOT NULL,
+    [Batches] int NOT NULL,
+    [Synced] int NOT NULL,
+    [Failed] int NOT NULL,
+    [Attempts] int NOT NULL,
+    [RefundsDone] bit NOT NULL,
+    [StartedAt] datetime2(3) NULL,
+    [FinishedAt] datetime2(3) NULL,
+    [Error] nvarchar(200) NULL,
+    CONSTRAINT [PK_HisSyncDay] PRIMARY KEY ([Id]),
+    CONSTRAINT [FK_HisSyncDay_HisSyncRange_RangeId] FOREIGN KEY ([RangeId]) REFERENCES [HisSyncRange] ([Id]),
+    CONSTRAINT [FK_HisSyncDay_Hospital_HospitalId] FOREIGN KEY ([HospitalId]) REFERENCES [Hospital] ([Id]) ON DELETE CASCADE
+);
+GO
+
+CREATE TABLE [HisSyncEncounter] (
+    [Id] uniqueidentifier NOT NULL,
+    [DayId] uniqueidentifier NOT NULL,
+    [Type] nvarchar(2) NOT NULL,
+    [HisNo] int NOT NULL,
+    [GroupNo] int NOT NULL,
+    [BatchNo] int NOT NULL,
+    [Status] nvarchar(16) NOT NULL,
+    [Attempts] int NOT NULL,
+    [Error] nvarchar(2000) NULL,
+    [SyncedAt] datetime2(3) NULL,
+    [LinkAppointmentId] int NULL,
+    [LinkInvoiceAppointment] int NULL,
+    [LinkInvoiceCompany] int NULL,
+    CONSTRAINT [PK_HisSyncEncounter] PRIMARY KEY ([Id]),
+    CONSTRAINT [FK_HisSyncEncounter_HisSyncDay_DayId] FOREIGN KEY ([DayId]) REFERENCES [HisSyncDay] ([Id]) ON DELETE CASCADE
+);
+GO
+
+CREATE INDEX [IX_HisSyncCatalogueChange_HospitalId_DetectedAt] ON [HisSyncCatalogueChange] ([HospitalId], [DetectedAt]);
+GO
+
+CREATE UNIQUE INDEX [IX_HisSyncDay_HospitalId_Date] ON [HisSyncDay] ([HospitalId], [Date]);
+GO
+
+CREATE INDEX [IX_HisSyncDay_RangeId] ON [HisSyncDay] ([RangeId]);
+GO
+
+CREATE INDEX [IX_HisSyncEncounter_DayId_Status_BatchNo] ON [HisSyncEncounter] ([DayId], [Status], [BatchNo]);
+GO
+
+COMMIT;
+GO
+
+BEGIN TRANSACTION;
+GO
+
+DECLARE @var5 sysname;
+SELECT @var5 = [d].[name]
+FROM [sys].[default_constraints] [d]
+INNER JOIN [sys].[columns] [c] ON [d].[parent_column_id] = [c].[column_id] AND [d].[parent_object_id] = [c].[object_id]
+WHERE ([d].[parent_object_id] = OBJECT_ID(N'[HisSyncWorker]') AND [c].[name] = N'Step');
+IF @var5 IS NOT NULL EXEC(N'ALTER TABLE [HisSyncWorker] DROP CONSTRAINT [' + @var5 + '];');
+ALTER TABLE [HisSyncWorker] ALTER COLUMN [Step] nvarchar(400) NULL;
+GO
+
+DECLARE @var6 sysname;
+SELECT @var6 = [d].[name]
+FROM [sys].[default_constraints] [d]
+INNER JOIN [sys].[columns] [c] ON [d].[parent_column_id] = [c].[column_id] AND [d].[parent_object_id] = [c].[object_id]
+WHERE ([d].[parent_object_id] = OBJECT_ID(N'[HisSyncWorker]') AND [c].[name] = N'LastError');
+IF @var6 IS NOT NULL EXEC(N'ALTER TABLE [HisSyncWorker] DROP CONSTRAINT [' + @var6 + '];');
+ALTER TABLE [HisSyncWorker] ALTER COLUMN [LastError] nvarchar(2000) NULL;
+GO
+
+DECLARE @var7 sysname;
+SELECT @var7 = [d].[name]
+FROM [sys].[default_constraints] [d]
+INNER JOIN [sys].[columns] [c] ON [d].[parent_column_id] = [c].[column_id] AND [d].[parent_object_id] = [c].[object_id]
+WHERE ([d].[parent_object_id] = OBJECT_ID(N'[HisSyncRange]') AND [c].[name] = N'Error');
+IF @var7 IS NOT NULL EXEC(N'ALTER TABLE [HisSyncRange] DROP CONSTRAINT [' + @var7 + '];');
+ALTER TABLE [HisSyncRange] ALTER COLUMN [Error] nvarchar(2000) NULL;
+GO
+
+DECLARE @var8 sysname;
+SELECT @var8 = [d].[name]
+FROM [sys].[default_constraints] [d]
+INNER JOIN [sys].[columns] [c] ON [d].[parent_column_id] = [c].[column_id] AND [d].[parent_object_id] = [c].[object_id]
+WHERE ([d].[parent_object_id] = OBJECT_ID(N'[HisSyncLog]') AND [c].[name] = N'Detail');
+IF @var8 IS NOT NULL EXEC(N'ALTER TABLE [HisSyncLog] DROP CONSTRAINT [' + @var8 + '];');
+ALTER TABLE [HisSyncLog] ALTER COLUMN [Detail] nvarchar(4000) NULL;
+GO
+
+DECLARE @var9 sysname;
+SELECT @var9 = [d].[name]
+FROM [sys].[default_constraints] [d]
+INNER JOIN [sys].[columns] [c] ON [d].[parent_column_id] = [c].[column_id] AND [d].[parent_object_id] = [c].[object_id]
+WHERE ([d].[parent_object_id] = OBJECT_ID(N'[HisSyncDay]') AND [c].[name] = N'Error');
+IF @var9 IS NOT NULL EXEC(N'ALTER TABLE [HisSyncDay] DROP CONSTRAINT [' + @var9 + '];');
+ALTER TABLE [HisSyncDay] ALTER COLUMN [Error] nvarchar(2000) NULL;
+GO
+
+DECLARE @var10 sysname;
+SELECT @var10 = [d].[name]
+FROM [sys].[default_constraints] [d]
+INNER JOIN [sys].[columns] [c] ON [d].[parent_column_id] = [c].[column_id] AND [d].[parent_object_id] = [c].[object_id]
+WHERE ([d].[parent_object_id] = OBJECT_ID(N'[HisSyncCatalogueChange]') AND [c].[name] = N'TablesJson');
+IF @var10 IS NOT NULL EXEC(N'ALTER TABLE [HisSyncCatalogueChange] DROP CONSTRAINT [' + @var10 + '];');
+ALTER TABLE [HisSyncCatalogueChange] ALTER COLUMN [TablesJson] nvarchar(max) NOT NULL;
 GO
 
 COMMIT;

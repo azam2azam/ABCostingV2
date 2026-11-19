@@ -123,21 +123,39 @@ public sealed partial class ReadQueries
         /// <summary>Net billed on the encounter's service lines (the doctors' lines): the sum of "Billed on their lines" on the detail.</summary>
         decimal DoctorBilled = 0,
         /// <summary>Billed value of medicine consumed (charge, not cost).</summary>
-        decimal Medicine = 0);
+        decimal Medicine = 0,
+        /// <summary>VAT on the counted lines (lines refunded in full left out, as for Materials and Medicine); Net + Vat is Invoice Billed.</summary>
+        decimal Vat = 0);
     public sealed record PatientEncounterPage(PatientEncounterRow[] Rows, int Total, int Page, int PageSize, bool PhiMasked);
     public sealed record PatientEncounterLine(string? Procedure, Guid? ProcedureId, decimal? Quantity, string? CostCentre, string? Physician, string? Payer,
         DateTime? PerformedAt, decimal? Gross, decimal? Discount, decimal? Net, string SourceRef, decimal? Cost = null, string? ProcedureCode = null, bool IsPackage = false, decimal? Refunded = null,
         /// <summary>When the line billed a package header, the Packages row to open (same HIS code as the procedure).</summary>
         Guid? PackageId = null);
-    public sealed record PatientEncounterDetail(PatientEncounterRow Encounter, PatientEncounterLine[] Lines, EncounterCharges? Charges = null);
+    public sealed record PatientEncounterDetail(PatientEncounterRow Encounter, PatientEncounterLine[] Lines, EncounterCharges? Charges = null)
+    {
+        /// <summary>The main tiles, worked out as the doctor and department pages do with non-package items.</summary>
+        public EncounterTotals? Totals { get; init; }
+        /// <summary>The encounter's package rows in the run, one per package (the doctor page's Packages performed figures).</summary>
+        public PackageWorkRow[] PackageWork { get; init; } = [];
+        /// <summary>The encounter's procedure lines billed outside a package in the run, one per procedure.</summary>
+        public PackageWorkRow[] ProcedureWork { get; init; } = [];
+    }
+
+    /// <summary>
+    /// The encounter's main tiles from the run's stored package and procedure rows (RunPackageDoctor, RunProcedureDoctor),
+    /// added up as the doctor and department pages do with non-package items. Money is 0 / null without revenue.view.
+    /// </summary>
+    public sealed record EncounterTotals(Guid? PrimaryDoctorId, string? PrimaryDoctor, string? PrimaryDoctorCode, decimal? ResourcesConsumed,
+        decimal? AmountBilled, decimal? Claimed);
 
     /// <summary>A doctor on the encounter: HIS share on their billed lines (null when no line carries one) and measured minutes.</summary>
     public sealed record ChargeDoctor(Guid? ProviderId, string Doctor, int Lines, decimal Billed, decimal? Share, decimal Minutes, string Roles);
     /// <summary>Nursing and other staff time by role. Fee needs a payroll rate, which is not loaded yet.</summary>
     public sealed record ChargeStaff(string Role, decimal Minutes, string Basis, decimal? Volume, string? VolumeUom, int Rows);
     /// <summary>A consumed item (consumable, implant, medicine), summed per item. Billed is the charge, not cost.</summary>
+    /// <param name="Covered">On the covered lists: the value the package price covered (see EncounterCharges).</param>
     public sealed record ChargeItem(string Category, string ItemKey, string? Description, string? OracleItemCode, decimal Quantity, string Uom, decimal? Billed,
-        decimal? PrescribedQty, string LinkedTo, int Rows);
+        decimal? PrescribedQty, string LinkedTo, int Rows, decimal? Covered = null);
     public sealed record ChargeBilled(decimal Gross, decimal Discount, decimal Net, decimal Refunded, decimal PatientShare, decimal CompanyShare, decimal Tax, int Lines);
     public sealed record ChargeClaims(decimal Claimed, decimal Settled, decimal Rejected, decimal Outstanding, int LinesClaimed, int LinesRejected);
     /// <summary>
@@ -145,7 +163,18 @@ public sealed partial class ReadQueries
     /// the billed amount and the claims. HIS values as billed / claimed, not cost. Money is empty without revenue.view.
     /// </summary>
     public sealed record EncounterCharges(ChargeDoctor[] Doctors, ChargeStaff[] Staff, ChargeItem[] Consumables, ChargeItem[] Medicine,
-        ChargeBilled? Billed, ChargeClaims? Claims, bool ShowsMoney);
+        ChargeBilled? Billed, ChargeClaims? Claims, bool ShowsMoney)
+    {
+        /// <summary>
+        /// The materials split as the run splits them (see PackageBillingSummary): covered is a consumable on an invoice line
+        /// billed at nothing (the package price covers it), or HIS medicine given with no billed amount; everything else is billed.
+        /// A covered item's Covered is its value: HIS UnitPrice for a consumable, the pharmacy's selling price × quantity for medicine.
+        /// </summary>
+        public ChargeItem[] CoveredConsumables { get; init; } = [];
+        public ChargeItem[] CoveredMedicine { get; init; } = [];
+        public ChargeItem[] BilledConsumables { get; init; } = [];
+        public ChargeItem[] BilledMedicine { get; init; } = [];
+    }
 
     // Properties, not a constructor: EF has to filter and sort on these after the projection.
     private sealed class EncounterBase
@@ -303,8 +332,12 @@ public sealed partial class ReadQueries
             .GroupBy(x => x.EncounterId).Select(g => new { g.Key, N = g.Count() }).ToDictionaryAsync(x => x.Key, x => x.N, ct);
         var billed = p.Can("revenue.view")
             ? await CountedRevenue(s).Where(x => ids.Contains(x.EncounterId)).GroupBy(x => x.EncounterId)
-                .Select(g => new { g.Key, Gross = g.Sum(x => x.GrossAmount), Discount = g.Sum(x => x.Discount), Net = g.Sum(x => x.NetAmount - (x.RefundedAmount ?? 0m)) })
-                .ToDictionaryAsync(x => x.Key, x => (x.Gross, x.Discount, x.Net), ct)
+                .Select(g => new
+                {
+                    g.Key, Gross = g.Sum(x => x.GrossAmount), Discount = g.Sum(x => x.Discount), Net = g.Sum(x => x.NetAmount - (x.RefundedAmount ?? 0m)),
+                    Vat = g.Sum(x => x.RefundedAmount != null && x.NetAmount > 0m && x.RefundedAmount >= x.NetAmount ? 0m : x.TaxAmount ?? 0m),
+                })
+                .ToDictionaryAsync(x => x.Key, x => (x.Gross, x.Discount, x.Net, x.Vat), ct)
             : [];
         var money = p.Can("revenue.view");
         var fees = money
@@ -352,7 +385,8 @@ public sealed partial class ReadQueries
                 Materials: Money.R4(materials.GetValueOrDefault(x.Id).Materials),
                 Medicine: Money.R4(materials.GetValueOrDefault(x.Id).Medicine),
                 Claimed: Money.R4(claimed.GetValueOrDefault(x.Id)),
-                DoctorBilled: Money.R4(doctorBilled.GetValueOrDefault(x.Id)));
+                DoctorBilled: Money.R4(doctorBilled.GetValueOrDefault(x.Id)),
+                Vat: Money.R4(b.Vat));
         }).ToArray();
     }
 
@@ -572,12 +606,144 @@ public sealed partial class ReadQueries
         // Package headers are billed as procedures of the same code but listed under Packages, not Procedure/Activity.
         var packageByCode = await db.Packages.AsNoTracking().Where(x => x.HospitalId == s.Hospital.Id)
             .ToDictionaryAsync(x => x.Code, x => x.Id, ct);
+        var (totals, packageWork, procedureWork) = await EncounterWorkAsync(s, p, id, ct);
         return new PatientEncounterDetail(encounter, lines.Select(l =>
         {
             var code = l.ProcedureId is { } procedure ? codes.GetValueOrDefault(procedure) : null;
             Guid? packageId = l.IsPackage && code is { } c && packageByCode.TryGetValue(c, out var pk) ? pk : null;
             return l with { ProcedureCode = code, PackageId = packageId };
-        }).ToArray(), await EncounterChargesAsync(s, p, id, services.Select(x => (x.SourceRef, x.Doctor)).ToList(), ct));
+        }).ToArray(), await EncounterChargesAsync(s, p, id, services.Select(x => (x.SourceRef, x.Doctor)).ToList(), ct))
+        {
+            Totals = totals, PackageWork = packageWork, ProcedureWork = procedureWork,
+        };
+    }
+
+    /// <summary>
+    /// Each package's figures on the encounter split by invoice line, worked out as the run works the package out
+    /// (PackageBillingSummary, one encounter): the package's own and child lines (Invoice Billed, claims), and the consumable
+    /// and medicine lines the run gives the package. Figures on no line (ward days, medicine given with no line) stay on the
+    /// package row only.
+    /// </summary>
+    private async Task<Dictionary<Guid, EncounterPackageLine[]>> PackageLinesOfAsync(ScopedRun s, Guid encounterId, bool money, CancellationToken ct)
+    {
+        var data = await PackageBillingSummary.LoadAsync(db, s.Run.Id, s.Hospital, s.Period, null, ct, onlyEncounter: encounterId);
+        var episodes = data.ByLine ?? [];
+        // What each line billed: its procedure, from the encounter's invoice lines.
+        var items = (await (from r in db.RevenueTransactions.AsNoTracking()
+                            join pr in db.Procedures.AsNoTracking() on r.ProcedureId equals pr.Id into pj
+                            from pr in pj.DefaultIfEmpty()
+                            where r.EncounterId == encounterId
+                            select new { r.SourceRef, Code = pr == null ? null : pr.Code, Name = pr == null ? null : pr.Name }).ToListAsync(ct))
+            .GroupBy(x => PackageBillingSummary.Tail(x.SourceRef)).ToDictionary(g => g.Key, g => g.First());
+        static (string Invoice, int Line) Parts(string lineRef)
+        {
+            var inv = PackageBillingSummary.Invoice(lineRef);
+            var no = int.TryParse(lineRef[(inv.Length + 1)..], out var n) ? n : 0;
+            return (inv.IndexOf('-') is var i and >= 0 ? inv[(i + 1)..] : inv, no);
+        }
+        return data.Lines.Where(l => l.Encounter == encounterId).Select(l => l.Package)
+            .Concat(episodes.Keys.Where(k => k.Encounter == encounterId).Select(k => k.Package)).Distinct()
+            .ToDictionary(pkg => pkg, pkg =>
+            {
+                var own = data.Lines.Where(l => l.Package == pkg && l.Encounter == encounterId).Select(l => l.Ref).ToHashSet();
+                return own.Concat(episodes.Keys.Where(k => k.Package == pkg && k.Encounter == encounterId && k.Ref.Length > 0).Select(k => k.Ref))
+                    .Distinct()
+                    .Select(lineRef =>
+                    {
+                        var m = own.Contains(lineRef) ? data.Money.GetValueOrDefault((encounterId, lineRef)) : null;
+                        var e = episodes.GetValueOrDefault((pkg, encounterId, lineRef)) ?? new PackageBillingSummary.Episode();
+                        var (invoice, no) = Parts(lineRef);
+                        var item = items.GetValueOrDefault(lineRef);
+                        var onClaim = (m?.ClaimedOnClaimedInvoice ?? 0m) + e.MaterialsClaimedOnClaimed + e.MedicineClaimedOnClaimed;
+                        return new EncounterPackageLine(invoice, no, item?.Code, item?.Name, own.Contains(lineRef),
+                            money ? Money.R4(m?.Net ?? 0m) : 0, Money.R4(e.Materials), Money.R4(e.MaterialsCovered), Money.R4(e.Medicine), Money.R4(e.MedicineCovered),
+                            money && data.ClaimFlagKnown ? Money.R4(onClaim) : null, money ? Money.R4((m?.Rejected ?? 0m)) : 0);
+                    })
+                    .OrderBy(x => x.Invoice).ThenBy(x => x.Line).ToArray();
+            });
+    }
+
+    /// <summary>
+    /// Each non-package procedure's invoice lines on the encounter, as the run counts them (ProcedureBillingSummary): a counted
+    /// line not refunded in full, not a package procedure's own line and naming no package; Invoice Billed is net of refunds
+    /// plus VAT; Consumables and Medicine are the consumption records tied to the line (UnitPrice; MedicinePrice × quantity).
+    /// </summary>
+    private async Task<Dictionary<Guid, EncounterPackageLine[]>> ProcedureLinesOfAsync(ScopedRun s, Guid encounterId, bool money, CancellationToken ct)
+    {
+        var hid = s.Hospital.Id;
+        var packageProcedures = (await (from pr in db.Procedures.AsNoTracking()
+                                        join pkg in db.Packages.AsNoTracking() on new { pr.HospitalId, pr.Code } equals new { pkg.HospitalId, pkg.Code }
+                                        where pr.HospitalId == hid
+                                        select pr.Id).ToListAsync(ct)).ToHashSet();
+        var packageCodes = (await db.Packages.AsNoTracking().Where(k => k.HospitalId == hid).Select(k => k.Code).ToListAsync(ct)).ToHashSet();
+        var lines = (await (from r in CountedRevenue(s)
+                            join pr in db.Procedures.AsNoTracking() on r.ProcedureId equals pr.Id
+                            where r.EncounterId == encounterId
+                            select new { r.SourceRef, ProcedureId = pr.Id, pr.Code, pr.Name, r.PackageProcedureId, r.NetAmount, r.RefundedAmount, r.TaxAmount,
+                                r.ClaimedAmount, r.RejectedAmount, r.HisIsClaimed }).ToListAsync(ct))
+            .Where(r => !FromHis(s) || r.RefundedAmount == null || r.NetAmount <= 0m || r.RefundedAmount < r.NetAmount)
+            .Where(r => !packageProcedures.Contains(r.ProcedureId) && !(r.PackageProcedureId is { Length: > 0 } c && c != "0" && packageCodes.Contains(c)))
+            .ToList();
+        if (lines.Count == 0) return [];
+        var claimFlagKnown = lines.Any(r => r.HisIsClaimed != null);
+        var prices = await db.MedicinePrices.AsNoTracking().Where(m => m.HospitalId == hid && m.StdSellingPrice != null)
+            .ToDictionaryAsync(m => m.MedicineCode, m => m.StdSellingPrice!.Value, ct);
+        var consumed = (await db.ConsumptionItems.AsNoTracking().Where(c => c.EncounterId == encounterId && c.ServiceRef != null)
+                .Select(c => new { c.ServiceRef, c.Category, c.ItemKey, c.Quantity, c.HisUnitPrice }).ToListAsync(ct))
+            .GroupBy(c => PackageBillingSummary.Tail(c.ServiceRef!))
+            .ToDictionary(g => g.Key, g => (Consumables: g.Where(c => c.Category != "MEDICINE").Sum(c => c.HisUnitPrice ?? 0m),
+                Medicine: g.Where(c => c.Category == "MEDICINE").Sum(c => c.Quantity * prices.GetValueOrDefault(c.ItemKey))));
+        return lines.GroupBy(r => r.ProcedureId).ToDictionary(g => g.Key, g => g.Select(r =>
+        {
+            var lineRef = PackageBillingSummary.Tail(r.SourceRef);
+            var inv = PackageBillingSummary.Invoice(lineRef);
+            var no = int.TryParse(lineRef[Math.Min(inv.Length + 1, lineRef.Length)..], out var n) ? n : 0;
+            var c = consumed.GetValueOrDefault(lineRef);
+            return new EncounterPackageLine(inv.IndexOf('-') is var i and >= 0 ? inv[(i + 1)..] : inv, no, r.Code, r.Name, false,
+                money ? Money.R4(r.NetAmount - (r.RefundedAmount ?? 0m) + (r.TaxAmount ?? 0m)) : 0, Money.R4(c.Consumables), 0, Money.R4(c.Medicine), 0,
+                money && claimFlagKnown ? Money.R4(r.HisIsClaimed == true ? r.ClaimedAmount ?? 0m : 0m) : null, money ? Money.R4(r.RejectedAmount ?? 0m) : 0);
+        }).OrderBy(x => x.Invoice).ThenBy(x => x.Line).ToArray());
+    }
+
+    /// <summary>
+    /// One invoice line of a package on an encounter. PackageLine: the package's own or child line (its Invoice Billed);
+    /// otherwise a consumable or medicine line the run gives the package. Consumables and Medicine are the materials on the line.
+    /// </summary>
+    public sealed record EncounterPackageLine(string Invoice, int Line, string? Code, string? Item, bool PackageLine, decimal FeeBilled,
+        decimal ConsumablesBilled, decimal ConsumablesCovered, decimal MedicineBilled, decimal MedicineCovered, decimal? ClaimsReceived, decimal RejectedClaims);
+
+    /// <summary>The encounter's main tiles and its package and procedure work from the run's stored rows.</summary>
+    private async Task<(EncounterTotals Totals, PackageWorkRow[] Packages, PackageWorkRow[] Procedures)> EncounterWorkAsync(
+        ScopedRun s, Principal p, Guid encounterId, CancellationToken ct)
+    {
+        PackageWorkRow[] packageWork = [], procs = [];
+        var providerId = await db.Encounters.AsNoTracking().Where(e => e.Id == encounterId).Select(e => e.ProviderId).FirstOrDefaultAsync(ct);
+        var doctor = providerId is { } pid
+            ? await db.Providers.AsNoTracking().Where(x => x.Id == pid).Select(x => new { x.Code, x.Name }).FirstOrDefaultAsync(ct)
+            : null;
+        DepartmentPackageTotals? t = null;
+        if (s.Run.Id != Guid.Empty)
+        {
+            var money = p.Can("revenue.view");
+            var pkgRows = await db.RunPackageDoctors.AsNoTracking().Where(r => r.RunId == s.Run.Id && r.EncounterId == encounterId).ToListAsync(ct);
+            var pkgIds = pkgRows.Select(r => r.PackageId).Distinct().ToList();
+            var prices = await db.Packages.AsNoTracking().Where(k => pkgIds.Contains(k.Id)).ToDictionaryAsync(k => k.Id, k => k.Price, ct);
+            var procRows = await db.RunProcedureDoctors.AsNoTracking().Where(r => r.RunId == s.Run.Id && r.EncounterId == encounterId).ToListAsync(ct);
+            procs = await ProcedureWorkOfAsync(procRows, money, ct);
+            var procLines = procRows.Count == 0 ? [] : await ProcedureLinesOfAsync(s, encounterId, money, ct);
+            procs = procs.Select(x => x with { Lines = x.Id is { } pid ? procLines.GetValueOrDefault(pid) ?? [] : [] }).ToArray();
+            t = AllTotalsOf(pkgRows.Select(r => (r, prices.GetValueOrDefault(r.PackageId))).ToArray(), procs, money);
+            var encNo = await db.Encounters.AsNoTracking().Where(e => e.Id == encounterId).ToDictionaryAsync(e => e.Id, e => e.EncounterNo, ct);
+            var packages = await db.Packages.AsNoTracking().Where(k => pkgIds.Contains(k.Id)).ToDictionaryAsync(k => k.Id, ct);
+            var lineRows = pkgRows.Count == 0 ? [] : await PackageLinesOfAsync(s, encounterId, money, ct);
+            packageWork = pkgRows.GroupBy(r => r.PackageId)
+                .Select(g => WorkRowOf(g.Key, packages.GetValueOrDefault(g.Key)?.Code ?? "", packages.GetValueOrDefault(g.Key)?.Name ?? "", g.ToList(), encNo, money)
+                    with { Lines = lineRows.GetValueOrDefault(g.Key) ?? [] })
+                .OrderByDescending(x => x.FeeBilled).ThenBy(x => x.Name).ToArray();
+        }
+        var showMoney = p.Can("revenue.view") && t != null;
+        return (new EncounterTotals(providerId, doctor?.Name, doctor?.Code, showMoney ? t!.ResourcesConsumed : null,
+            showMoney ? t!.AmountBilled : null, showMoney ? t!.ClaimsReceived : null), packageWork, procs);
     }
 
     private sealed class DoctorAcc
@@ -648,18 +814,32 @@ public sealed partial class ReadQueries
 
         // Materials: what was consumed, per item.
         var items = await db.ConsumptionItems.AsNoTracking().Where(c => c.EncounterId == id)
-            .Select(c => new { c.Category, c.ItemKey, c.Description, c.OracleItemCode, c.Quantity, c.Uom, c.PrescribedQty, c.ServiceRef })
+            .Select(c => new ConsumedItem(c.Category, c.ItemKey, c.Description, c.OracleItemCode, c.Quantity, c.Uom, c.PrescribedQty, c.ServiceRef,
+                c.HisUnitPrice, c.ItemKeySystem, c.SourceRef, c.BilledAmount))
             .ToListAsync(ct);
-        ChargeItem[] Items(bool medicine) => items.Where(c => (c.Category == "MEDICINE") == medicine)
-            .GroupBy(c => new { c.Category, c.ItemKey, c.Uom })
-            .Select(g => new ChargeItem(g.Key.Category, g.Key.ItemKey, g.Select(x => x.Description).FirstOrDefault(x => !string.IsNullOrWhiteSpace(x)),
-                g.Select(x => x.OracleItemCode).FirstOrDefault(x => !string.IsNullOrWhiteSpace(x)), Money.R4(g.Sum(x => x.Quantity)), g.Key.Uom,
+        // Covered, as the run decides it (PackageBillingSummary): a consumable on a counted invoice line billed at nothing, or
+        // HIS medicine given with no billed amount (MED-BIL records are the billed lines themselves).
+        var unbilledLines = (await CountedRevenue(s).Where(r => r.EncounterId == id && r.NetAmount == 0m).Select(r => r.SourceRef).ToListAsync(ct))
+            .Select(PackageBillingSummary.Tail).ToHashSet();
+        var medPrices = await db.MedicinePrices.AsNoTracking().Where(m => m.HospitalId == s.Hospital.Id && m.StdSellingPrice != null)
+            .ToDictionaryAsync(m => m.MedicineCode, m => m.StdSellingPrice!.Value, ct);
+        var split = items.Select(c => (Item: c, Covered: c.Category != "MEDICINE"
+            ? c.ServiceRef != null && unbilledLines.Contains(PackageBillingSummary.Tail(c.ServiceRef)) ? c.HisUnitPrice ?? 0m : (decimal?)null
+            : c.ItemKeySystem == "HIS_MED" && !c.SourceRef.StartsWith("MED-BIL-") && (c.BilledAmount == null || c.BilledAmount == 0m) && c.Quantity > 0m
+                ? c.Quantity * medPrices.GetValueOrDefault(c.ItemKey) : null)).ToList();
+        ChargeItem[] Group(IEnumerable<(ConsumedItem Item, decimal? Covered)> rows, bool covered) => rows
+            .GroupBy(x => new { x.Item.Category, x.Item.ItemKey, x.Item.Uom })
+            .Select(g => new ChargeItem(g.Key.Category, g.Key.ItemKey, g.Select(x => x.Item.Description).FirstOrDefault(x => !string.IsNullOrWhiteSpace(x)),
+                g.Select(x => x.Item.OracleItemCode).FirstOrDefault(x => !string.IsNullOrWhiteSpace(x)), Money.R4(g.Sum(x => x.Item.Quantity)), g.Key.Uom,
                 // HIS holds no charge per item: a record's BilledAmount is its invoice line's amount, copied onto every item on the line.
                 null,
-                g.Any(x => x.PrescribedQty != null) ? Money.R4(g.Sum(x => x.PrescribedQty ?? 0m)) : null,
-                g.Count(x => x.ServiceRef != null) == g.Count() ? "Procedure line" : g.Any(x => x.ServiceRef != null) ? "Partly to a procedure line" : "Encounter",
-                g.Count()))
+                g.Any(x => x.Item.PrescribedQty != null) ? Money.R4(g.Sum(x => x.Item.PrescribedQty ?? 0m)) : null,
+                g.Count(x => x.Item.ServiceRef != null) == g.Count() ? "Procedure line" : g.Any(x => x.Item.ServiceRef != null) ? "Partly to a procedure line" : "Encounter",
+                g.Count(), covered && showMoney ? Money.R4(g.Sum(x => x.Covered ?? 0m)) : null))
             .OrderByDescending(x => x.Quantity).ToArray();
+        ChargeItem[] Items(bool medicine) => Group(split.Where(x => (x.Item.Category == "MEDICINE") == medicine), false);
+        ChargeItem[] Split(bool medicine, bool covered) =>
+            Group(split.Where(x => (x.Item.Category == "MEDICINE") == medicine && (x.Covered != null) == covered), covered);
 
         ChargeBilled? billed = null;
         ChargeClaims? claims = null;
@@ -674,8 +854,17 @@ public sealed partial class ReadQueries
             claims = new ChargeClaims(Money.R4(claimed), Money.R4(settled), Money.R4(rejected), Money.R4(claimed - settled - rejected),
                 revenue.Count(r => (r.ClaimedAmount ?? 0m) != 0m), revenue.Count(r => (r.RejectedAmount ?? 0m) != 0m));
         }
-        return new EncounterCharges(doctorRows, staffRows, Items(false), Items(true), billed, claims, showMoney);
+        return new EncounterCharges(doctorRows, staffRows, Items(false), Items(true), billed, claims, showMoney)
+        {
+            CoveredConsumables = Split(false, true), CoveredMedicine = Split(true, true),
+            // Billed medicine is invoice lines of medicine procedures, and the page already shows every one: a line billed under a
+            // package is that package's line, one naming no package is its own row under Procedures performed. Not repeated here.
+            BilledConsumables = Split(false, false), BilledMedicine = [],
+        };
     }
+
+    private sealed record ConsumedItem(string Category, string ItemKey, string? Description, string? OracleItemCode, decimal Quantity, string Uom,
+        decimal? PrescribedQty, string? ServiceRef, decimal? HisUnitPrice, string? ItemKeySystem, string SourceRef, decimal? BilledAmount);
 
     private static string RoleLabel(string role) => role.ToUpperInvariant() switch
     {

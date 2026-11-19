@@ -1,3 +1,4 @@
+using Microsoft.EntityFrameworkCore;
 using Verita.Application;
 using Verita.Domain;
 
@@ -33,7 +34,7 @@ public sealed partial class ReadQueries
 
     public async Task<CataloguePage<ProcedureRow>> ProcedurePageAsync(ScopedRun s, Principal p, CatalogueListQuery q, CancellationToken ct)
     {
-        var all = await ProcedureListAsync(s, p, ct);
+        var all = await WithProcedureBillingAsync(s, p, await ProcedureListAsync(s, p, ct), ct);
         static bool Medicine(ProcedureRow x) => string.Equals(x.Category?.Trim(), ProcedureTypeMedicine, StringComparison.OrdinalIgnoreCase);
 
         // Tiles count every row: a zero price row only on its own tile, a medicine only on the Medicine tile.
@@ -66,9 +67,49 @@ public sealed partial class ReadQueries
             "unitCost" => x.UnitCost,
             "totalCost" => x.TotalCost,
             "code" => ListedId(x.Code),
+            "performed" => x.Performed,
+            "feeBilled" => x.FeeBilled,
+            "materialsBilled" => x.MaterialsBilled,
+            "medicineBilled" => x.MedicineBilled,
+            "claimsReceived" => x.ClaimsReceived ?? 0m,
+            "avgLos" => x.Encounters == 0 ? 0m : x.StayDays / x.Encounters,
             _ => x.Volume,
         }, x => x.Code);
         return Paged(sorted, q, counts);
+    }
+
+    /// <summary>
+    /// The procedure list's billing figures from the run's stored non-package lines (RunProcedureDoctor), as the procedure
+    /// page adds them up; Avg. LOS is the length of stay of the encounters with those lines (procedure lines carry no ward days).
+    /// </summary>
+    private async Task<ProcedureRow[]> WithProcedureBillingAsync(ScopedRun s, Principal p, ProcedureRow[] rows, CancellationToken ct)
+    {
+        if (s.Run.Id == Guid.Empty) return rows;
+        var money = p.Can("revenue.view");
+        var lines = await db.RunProcedureDoctors.AsNoTracking().Where(r => r.RunId == s.Run.Id)
+            .GroupBy(r => r.ProcedureId)
+            .Select(g => new
+            {
+                g.Key, Performed = g.Sum(r => r.Performed), Fee = g.Sum(r => r.FeeBilled), Consumables = g.Sum(r => r.Consumables),
+                Medicine = g.Sum(r => r.Medicine), Claimed = g.Sum(r => r.ClaimsReceived ?? 0m), HasClaims = g.Count(r => r.ClaimsReceived != null),
+                Rejected = g.Sum(r => r.Rejected),
+            }).ToDictionaryAsync(x => x.Key, ct);
+        var stays = (await (from r in db.RunProcedureDoctors.AsNoTracking()
+                            join e in db.Encounters.AsNoTracking() on r.EncounterId equals e.Id
+                            where r.RunId == s.Run.Id
+                            select new { r.ProcedureId, r.EncounterId, e.LengthOfStay }).Distinct().ToListAsync(ct))
+            .GroupBy(x => x.ProcedureId).ToDictionary(g => g.Key, g => (Encounters: g.Count(), Days: g.Sum(x => (decimal)x.LengthOfStay)));
+        return rows.Select(x =>
+        {
+            if (!lines.TryGetValue(x.Id, out var l)) return x;
+            var st = stays.GetValueOrDefault(x.Id);
+            return x with
+            {
+                Performed = (int)Math.Round(l.Performed), FeeBilled = money ? l.Fee : 0, MaterialsBilled = l.Consumables, MedicineBilled = l.Medicine,
+                ClaimsReceived = money && l.HasClaims > 0 ? l.Claimed : null, ClaimRejected = money ? l.Rejected : 0,
+                Encounters = st.Encounters, StayDays = st.Days,
+            };
+        }).ToArray();
     }
 
     public async Task<CataloguePage<PackageRow>> PackagePageAsync(ScopedRun s, Principal p, CatalogueListQuery q, CancellationToken ct)
@@ -91,6 +132,7 @@ public sealed partial class ReadQueries
             "doctorShare" => x.DoctorShare ?? 0m,
             "feeBilled" => x.FeeBilled,
             "wardDays" => x.WardDays * 1440m + x.StaffMinutes,
+            "avgLos" => x.Encounters == 0 ? 0m : x.WardDays / x.Encounters,
             "materialsBilled" => x.MaterialsBilled,
             "medicineBilled" => x.MedicineBilled,
             "claimed" => x.Claimed,

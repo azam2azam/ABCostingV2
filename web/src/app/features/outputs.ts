@@ -1,5 +1,7 @@
 import { Component, computed, effect, inject, input, linkedSignal, signal, untracked } from '@angular/core';
 import { firstValueFrom } from 'rxjs';
+import { RouterLink } from '@angular/router';
+import { Icon } from '../shared/icon';
 import {
   Api, ComponentDto, Envelope, PackageDetail as PackageDetailDto, PackageRow,
   ProcedureDetail as ProcedureDetailDto, ProcedureRow, RecipeLineDto,
@@ -8,7 +10,9 @@ import { Auth, toApiError } from '../core/auth';
 import { RunContext } from '../core/context';
 import { catalogueResource } from '../core/resource';
 import { formatDec, formatMoney } from '../core/decimal';
-import { Col, TypeCounts, UI, hisProcedureId } from '../shared/ui';
+import { Col, TileInfo, TypeCounts, UI, hisProcedureId } from '../shared/ui';
+import { packageTileInfo, procedureTileInfo } from '../shared/tile-info';
+import { packageColumns } from '../shared/package-cols';
 
 export const componentCols: Col<ComponentDto>[] = [
   { key: 'label', label: 'Component', sub: r => r.calcExpression, link: r => r.resourceId ? `/resources/${r.resourceId}` : null },
@@ -114,11 +118,17 @@ const LIST_STYLES = `.list-bar { justify-content: space-between; margin: 0 0 10p
   .pager { margin-left: auto; }
   .reloading { opacity: .6; transition: opacity .15s; }`;
 
+/** The run's stored lines of a procedure billed outside a package; OpenAPI types catch up on the next api:types run. */
+type ProcedureListRow = ProcedureRow & {
+  performed?: number; feeBilled?: number | string; materialsBilled?: number | string; medicineBilled?: number | string;
+  claimsReceived?: number | string | null; claimRejected?: number | string; encounters?: number; stayDays?: number | string;
+};
+
 @Component({
   selector: 'v-procedures',
   imports: [...UI],
   template: `
-    <v-page title="Procedure/Activity" purpose="HIS procedure id, name, contracted price, and cases in this run.">
+    <v-page title="Procedure/Activity" purpose="HIS procedure id, name, and what HIS billed and claimed on the procedure's lines billed outside a package in this run.">
       <v-state [loading]="list.res.isLoading() && !list.last()" [error]="list.res.error()">
         @if (list.last(); as r) {
           <v-type-tiles [counts]="r.data.counts" [selected]="list.type()" (selectedChange)="list.setType($event)" />
@@ -134,25 +144,32 @@ const LIST_STYLES = `.list-bar { justify-content: space-between; margin: 0 0 10p
   styles: LIST_STYLES,
 })
 export class Procedures {
-  list = new ServerList<ProcedureRow>('procedures', 'volume');
-  private auth = inject(Auth);
-  /** Only a run holds actual revenue, and a role without revenue.view reads it as 0. */
-  private inLoss(r: { revenue: string; totalCost: string }): boolean {
-    return !!this.list.last()?.meta.run && this.auth.can('revenue.view') && Number(r.totalCost) > Number(r.revenue);
-  }
-  cols: Col<ProcedureRow>[] = [
+  list = new ServerList<ProcedureListRow>('procedures', 'performed');
+  /** As the Packages list, from the procedure's lines billed outside a package (the procedure page's figures). */
+  cols: Col<ProcedureListRow>[] = [
     { key: 'code', label: 'Id', value: r => hisProcedureId(r.code), link: r => `/procedures/${r.id}` },
-    { key: 'name', label: 'Name' },
-    { key: 'category', label: 'Category' },
-    { key: 'procType', label: 'Type' },
-    { key: 'listPrice', label: 'Contracted price', type: 'money', blankZero: true },
-    { key: 'volume', label: 'Cases', type: 'num', dp: 0, blankZero: true },
-    { key: 'billedRevenue', label: 'Exp. Revenue', type: 'money', blankZero: true, value: r => Number(r.listPrice) * Number(r.volume) },
-    { key: 'revenue', label: 'Act. Revenue', type: 'money', blankZero: true, bad: r => Number(r.revenue) < Number(r.totalCost) },
-    { key: 'unitCost', label: 'Unit Cost', type: 'money', blankZero: true },
-    { key: 'totalCost', label: 'Total Cost', type: 'money', blankZero: true, bad: r => this.inLoss(r) },
+    { key: 'name', label: 'Name', minWidth: '22rem' },
+    { key: 'performed', label: 'Cases', type: 'num', dp: 0, blankZero: true },
+    { key: 'materialsBilled', label: 'Consumables', type: 'money', dp: 0, blankZero: true },
+    // Length of stay of the encounters with the lines: procedure lines carry no ward days.
+    { key: 'avgLos', label: 'Avg. LOS', type: 'num', dp: 1, blankZero: true,
+      value: r => Number(r.encounters) ? Number(r.stayDays ?? 0) / Number(r.encounters) : 0 },
+    { key: 'feeBilled', label: 'Invoice Billed', type: 'money', dp: 0, blankZero: true },
+    { key: 'medicineBilled', label: 'Medicine', type: 'money', dp: 0, blankZero: true },
+    // Claimed: what HIS claimed on invoices it put on a claim (HIS_InvoiceMain.IsClaimed = 1).
+    { key: 'claimsReceived', label: 'Claimed', type: 'money', dp: 0, blankZero: true, bad: r => Number(r.claimRejected) > 0 },
   ];
 }
+
+/** A doctor's lines of the procedure billed outside a package (the run's stored rows), with the encounters under it. */
+interface ProcDoctorEncounter {
+  encounterId: string; encounterNo: string; performed: number; feeBilled: number | string; consumablesBilled: number | string;
+  medicineBilled: number | string; claimsReceived: number | string | null; rejectedClaims: number | string;
+}
+interface ProcDoctorRow extends Omit<ProcDoctorEncounter, 'encounterId' | 'encounterNo'> {
+  id: string | null; code: string; name: string; encounters: number; encounterRows: ProcDoctorEncounter[];
+}
+type ProcDoctorTableRow = ProcDoctorRow & { kind: 'doctor' | 'encounter'; encounterId?: string };
 
 @Component({
   selector: 'v-procedure',
@@ -162,20 +179,21 @@ export class Procedures {
       @if (res.value(); as r) {
         <v-page [title]="hisProcedureId(r.data.procedure.code) + ' - ' + r.data.procedure.name">
           <div class="grid tiles">
-            <v-tile label="Contracted Price" [value]="r.data.procedure.listPrice" />
-            <v-tile label="Unit Cost" [value]="r.data.procedure.unitCost" />
-            <v-tile label="Cases / Encounters" [value]="r.data.procedure.volume" unit="" />
-            <v-tile label="Revenue" [value]="revenue()" />
-            <v-tile label="Total Cost" [value]="r.data.procedure.totalCost" />
+            <v-tile label="Performed (cases)" [value]="total()?.performed ?? 0" unit="" [info]="info.performed" />
+            <v-tile label="Resources Consumed" [value]="resourcesTile()" [info]="info.resources" />
+            <v-tile label="Amount billed" [value]="total() ? total()!.feeBilled : null" [info]="info.billed" />
+            <v-tile label="Claimed" [value]="claimsReceivedTile()" [info]="info.claims" />
           </div>
           <section class="card" style="margin-top:14px">
-            <h2>Standard recipe</h2>
-            <v-table [rows]="r.data.recipe" [columns]="recipeCols" empty="No standard recipe." />
-            @if (recipeError()) { <p class="bad">{{ recipeError() }}</p> }
+            <h2>Doctors who performed this procedure</h2>
+            <p class="muted">Doctor on each line of this procedure billed outside a package in {{ r.meta.period }}; lines billed as or under a package are on the package's page.</p>
+            <v-table [rows]="doctorRows()" [columns]="doctorCols" [total]="total()" caption="Doctors who performed this procedure"
+              empty="No lines of this procedure billed outside a package in this period." />
           </section>
-          <section class="card" style="margin-top:14px">
-            <h2>Packages</h2>
-            <v-table [rows]="pkgRows()" [columns]="pkgCols" sortBy="cases" [empty]="pkgEmpty()" />
+          <section class="card">
+            <h2>Packages included in</h2>
+            <p class="muted">Packages whose standard composition has this procedure.</p>
+            <v-table [rows]="pkgRows()" [columns]="pkgCols" sortBy="cases" [empty]="pkgEmpty()" caption="Packages included in" />
             @if (!showAllPkgs() && pkgAll().length > pkgRows().length) {
               <p class="muted">Showing {{ pkgRows().length }} of {{ pkgAll().length }}. <button type="button" class="text-link" (click)="showAllPkgs.set(true)">Show all</button></p>
             }
@@ -195,44 +213,53 @@ export class Procedures {
 export class ProcedureDetail {
   id = input.required<string>();
   hisProcedureId = hisProcedureId;
-  private api = inject(Api);
-  private ctx = inject(RunContext);
-  res = catalogueResource<ProcedureDetailDto>(() => `procedures/${this.id()}`);
-  busy = signal(false);
-  recipeError = signal<string | null>(null);
-  showAllPkgs = signal(false);
-  recipeCols: Col<RecipeLineDto>[] = [
-    { key: 'resource', label: 'Resource', link: r => `/resources/${r.resourceId}` },
-    { key: 'resourceType', label: 'Type' },
-    { key: 'stdQuantity', label: 'Std qty', type: 'num', dp: 4 },
-    { key: 'uom', label: 'Unit' },
-    { key: 'rate', label: 'Rate', type: 'num', dp: 6, value: r => r.rate ?? '••••' },
-    { key: 'lineCost', label: 'Line cost', type: 'money' },
-    {
-      key: 'delete', label: '', type: 'button', sortable: false,
-      button: () => this.busy() ? null : 'Remove from recipe',
-      icon: () => 'trash',
-      onButton: r => void this.remove(r),
-    },
-  ];
-  async remove(row: RecipeLineDto): Promise<void> {
-    this.busy.set(true);
-    this.recipeError.set(null);
-    try {
-      const q = this.ctx.scopeQuery();
-      await firstValueFrom(this.api.delete(`procedures/${this.id()}/recipe/${row.resourceId}${q}`));
-      this.res.reload();
-    } catch (err) {
-      this.recipeError.set(toApiError(err).message);
-    } finally {
-      this.busy.set(false);
-    }
+  res = catalogueResource<ProcedureDetailDto & { doctors?: ProcDoctorRow[] }>(() => `procedures/${this.id()}`);
+  info = procedureTileInfo();
+  /** Doctors whose encounters are shown under them. */
+  openDoctors = signal<ReadonlySet<string>>(new Set());
+  private doctorKey(r: ProcDoctorRow): string { return r.id ?? 'none'; }
+  private toggleDoctor(r: ProcDoctorTableRow): void {
+    const key = this.doctorKey(r);
+    this.openDoctors.update(open => { const next = new Set(open); if (next.has(key)) next.delete(key); else next.add(key); return next; });
   }
-  revenue = computed(() => {
-    const p = this.res.value()?.data.procedure;
-    if (!p) return null;
-    return Number(p.listPrice) * Number(p.volume);
+  /** Doctor rows, each open one followed by its encounters (encounter number under Doctor, that encounter's figures). */
+  doctorRows = computed<ProcDoctorTableRow[]>(() => {
+    const open = this.openDoctors();
+    return (this.res.value()?.data.doctors ?? []).flatMap(d => {
+      const row: ProcDoctorTableRow = { ...d, kind: 'doctor' };
+      if (!open.has(this.doctorKey(d))) return [row];
+      return [row, ...(d.encounterRows ?? []).map(e => ({ ...d, ...e, kind: 'encounter' as const, name: e.encounterNo, encounters: 1 }))];
+    });
   });
+  doctorCols: Col<ProcDoctorTableRow>[] = [
+    { key: 'toggle', label: '', type: 'button', sortable: false, icon: () => 'chevron',
+      button: r => r.kind === 'doctor' && r.encounterRows?.length ? (this.openDoctors().has(this.doctorKey(r)) ? 'Hide encounters' : 'Show encounters') : null,
+      expanded: r => r.kind === 'doctor' && this.openDoctors().has(this.doctorKey(r)), onButton: r => this.toggleDoctor(r) },
+    { key: 'name', label: 'Doctor', minWidth: '16rem', sortable: false,
+      link: r => r.kind === 'encounter' ? `/patient-encounters/${r.encounterId}` : r.id && r.code ? `/doctors/${r.id}` : null },
+    { key: 'performed', label: 'Performed', type: 'num', dp: 0, sortable: false, blankZero: true },
+    { key: 'consumablesBilled', label: 'Consumables', type: 'money', dp: 0, blankZero: true, sortable: false },
+    { key: 'feeBilled', label: 'Invoice Billed', type: 'money', dp: 0, blankZero: true, sortable: false },
+    { key: 'medicineBilled', label: 'Medicine', type: 'money', dp: 0, blankZero: true, sortable: false },
+    // Claimed: what HIS claimed on invoices it put on a claim (HIS_InvoiceMain.IsClaimed = 1).
+    { key: 'claimsReceived', label: 'Claimed', type: 'money', dp: 0, blankZero: true, sortable: false, bad: r => Number(r.rejectedClaims) > 0 },
+  ];
+  /** Sum of the doctor rows: the tiles and the table's total row. */
+  total = computed(() => {
+    const rows = this.res.value()?.data.doctors ?? [];
+    if (!rows.length) return null;
+    const sum = (f: (r: ProcDoctorRow) => unknown) => rows.reduce((t, r) => t + Number(f(r) ?? 0), 0);
+    return { performed: sum(r => r.performed), feeBilled: sum(r => r.feeBilled), consumablesBilled: sum(r => r.consumablesBilled),
+      medicineBilled: sum(r => r.medicineBilled), claimsReceived: sum(r => r.claimsReceived) };
+  });
+  /** Fee billed plus the consumables and medicine tied to the lines. */
+  resourcesTile = computed(() => { const t = this.total(); return t ? t.feeBilled + t.consumablesBilled + t.medicineBilled : null; });
+  /** Blank until the facts carry the IsClaimed flag. */
+  claimsReceivedTile = computed(() => {
+    const rows = this.res.value()?.data.doctors ?? [];
+    return !rows.length || rows.every(r => r.claimsReceived == null) ? null : this.total()!.claimsReceived;
+  });
+  showAllPkgs = signal(false);
   pkgAll = computed(() => this.res.value()?.data.packages ?? []);
   pkgRows = computed(() => {
     const all = this.pkgAll();
@@ -245,32 +272,20 @@ export class ProcedureDetail {
   pkgEmpty = computed(() => this.pkgAll().length ? 'No billed packages this run.' : 'Not added to any package.');
   pkgCols: Col<NonNullable<ProcedureDetailDto['packages']>[number]>[] = [
     { key: 'code', label: 'Id', value: r => hisProcedureId(r.code), link: r => `/packages/${r.id}` },
-    { key: 'name', label: 'Name' },
+    { key: 'name', label: 'Name', minWidth: '16rem' },
+    { key: 'quantity', label: 'Qty in package', type: 'num', dp: 0 },
     { key: 'price', label: 'Contracted price', type: 'money' },
     { key: 'cases', label: 'Cases', type: 'num', dp: 0 },
     { key: 'billedRevenue', label: 'Revenue', type: 'money', value: r => Number(r.price) * Number(r.cases) },
   ];
 }
 
-/** Ward days from HIS transfers (shared among an encounter's packages); blank when there was no ward stay. */
-function wardTime(r: { wardDays: number | string }): string {
-  const d = Number(r.wardDays);
-  return d ? `${formatDec(String(d), d % 1 ? 1 : 0)} ${d === 1 ? 'day' : 'days'}` : '';
-}
-
-/** Measured staff time (all roles, as the encounters screen's Staff min) in minutes, hours, then days. */
-function staffTime(minutes: number): string | null {
-  if (!minutes) return null;
-  if (minutes < 60) return `Staff ${formatDec(String(minutes), 0)} min`;
-  if (minutes < 1440) return `Staff ${formatDec(String(minutes / 60), 1)} h`;
-  return `Staff ${formatDec(String(minutes / 1440), 1)} days`;
-}
-
 @Component({
   selector: 'v-packages',
-  imports: [...UI],
+  imports: [RouterLink, Icon, ...UI],
   template: `
     <v-page title="Packages" purpose="HIS package id, name, contracted price, cases, and what HIS billed and claimed on the package and its child lines in this run.">
+      <a actions class="btn primary" routerLink="/packages/compare" queryParamsHandling="preserve"><v-icon name="compare" [size]="16" /> Compare Doctors</a>
       <v-state [loading]="list.res.isLoading() && !list.last()" [error]="list.res.error()">
         @if (list.last(); as r) {
           @if (!r.meta.run && r.meta.costingVersion) {
@@ -291,21 +306,7 @@ function staffTime(minutes: number): string | null {
 /** The packages list. Figures beyond the price are what the run stored on the package's own and child lines. */
 export class Packages {
   list = new ServerList<PackageRow>('packages', 'cases');
-  cols: Col<PackageRow>[] = [
-    { key: 'code', label: 'Id', value: r => hisProcedureId(r.code), link: r => `/packages/${r.id}` },
-    { key: 'name', label: 'Name' },
-    { key: 'procType', label: 'Type' },
-    { key: 'compositionPrice', label: 'Composition Price', type: 'money', blankZero: true },
-    { key: 'price', label: 'Contracted price', type: 'money', blankZero: true },
-    { key: 'cases', label: 'Cases', type: 'num', dp: 0, blankZero: true },
-    { key: 'feeBilled', label: 'Amount Billed', type: 'money', dp: 0, blankZero: true },
-    { key: 'wardDays', label: 'Nurse/Ward', value: r => wardTime(r) || (Number(r.staffMinutes) ? staffTime(Number(r.staffMinutes))! : ''), sub: r => wardTime(r) ? staffTime(Number(r.staffMinutes)) : null },
-    { key: 'materialsBilled', label: 'Materials consumed', type: 'money', dp: 0, blankZero: true },
-    { key: 'medicineBilled', label: 'Medicine', type: 'money', dp: 0, blankZero: true },
-    { key: 'claimed', label: 'Claimed Amount', type: 'money', dp: 0, blankZero: true },
-    { key: 'claimsReceived', label: 'Claim received', type: 'money', dp: 0, blankZero: true },
-    { key: 'claimRejected', label: 'Claim rejected', type: 'money', dp: 0, blankZero: true, bad: r => Number(r.claimRejected) > 0 },
-  ];
+  cols = packageColumns();
 }
 
 
@@ -315,16 +316,17 @@ type DoctorTableRow = DoctorRow & { kind: 'doctor' | 'encounter'; encounterId?: 
 
 @Component({
   selector: 'v-package',
-  imports: [...UI],
+  imports: [RouterLink, Icon, ...UI],
   template: `
     <v-state [loading]="res.isLoading()" [error]="res.error()">
       @if (res.value(); as r) {
         <v-page [title]="hisProcedureId(r.data.package.code) + ' - ' + r.data.package.name">
+          <a actions class="btn" routerLink="/packages/compare" [queryParams]="{ package: r.data.package.id }" queryParamsHandling="merge"><v-icon name="compare" [size]="16" /> Compare Doctors</a>
           <div class="grid tiles">
-            <v-tile label="Performed (cases)" [value]="r.data.package.cases" unit="" />
-            <v-tile label="Resources Consumed" [value]="resourcesTile()?.total ?? null" />
-            <v-tile label="Amount billed" [value]="billedTile()?.total ?? null" />
-            <v-tile label="Claims Received" [value]="claimsReceivedTile()" />
+            <v-tile label="Performed (cases)" [value]="r.data.package.cases" unit="" [info]="info.performed" />
+            <v-tile label="Resources Consumed" [value]="resourcesTile()?.total ?? null" [info]="withValues(info.resources, resourcesTile()?.note)" />
+            <v-tile label="Amount billed" [value]="billedTile()?.total ?? null" [info]="withValues(info.billed, billedValues())" />
+            <v-tile label="Claimed" [value]="claimsReceivedTile()" [info]="info.claims" />
           </div>
           <section class="card" style="margin-top:14px">
             <h2>Doctors who performed this package</h2>
@@ -372,19 +374,17 @@ export class PackageDetail {
       button: r => r.kind === 'doctor' && r.encounterRows?.length ? (this.openDoctors().has(this.doctorKey(r)) ? 'Hide encounters' : 'Show encounters') : null,
       expanded: r => r.kind === 'doctor' && this.openDoctors().has(this.doctorKey(r)), onButton: r => this.toggleDoctor(r) },
     { key: 'name', label: 'Doctor', minWidth: '16rem', sortable: false,
-      value: r => r.kind === 'encounter' ? `\u00a0\u00a0\u00a0${r.name}` : r.name,
+      value: r => r.name,
       link: r => r.kind === 'encounter' ? `/patient-encounters/${r.encounterId}` : r.id ? `/doctors/${r.id}` : null },
     { key: 'quantity', label: 'Performed', type: 'num', dp: 0, sortable: false, blankZero: true },
-    { key: 'feeBilled', label: 'Amount billed', type: 'money', dp: 0, blankZero: true, sortable: false },
     { key: 'consumablesAll', label: 'Consumables', type: 'money', dp: 0, blankZero: true, sortable: false,
       value: r => Number(r.consumablesBilled ?? 0) + Number(r.consumablesCovered ?? 0) },
-    { key: 'medicineAll', label: 'Medicine', type: 'money', dp: 0, blankZero: true, sortable: false,
-      value: r => Number(r.medicineBilled ?? 0) + Number(r.medicineCovered ?? 0) },
     { key: 'avgLos', label: 'Avg. LOS', type: 'num', dp: 1, blankZero: true, sortable: false,
       value: r => Number(r.encounters) ? Number(r.wardDays ?? 0) / Number(r.encounters) : 0 },
-    { key: 'allClaimed', label: 'Claimed', type: 'money', dp: 0, blankZero: true, sortable: false, bad: r => Number(r.rejectedClaims) > 0,
-      value: r => Number(r.claimed) + Number(r.consumablesClaimed ?? 0) + Number(r.medicineClaimed ?? 0) },
-    { key: 'claimsReceived', label: 'Claims received', type: 'money', dp: 0, blankZero: true, sortable: false },
+    { key: 'feeBilled', label: 'Invoice Billed', type: 'money', dp: 0, blankZero: true, sortable: false },
+    { key: 'medicineBilled', label: 'Medicine', type: 'money', dp: 0, blankZero: true, sortable: false },
+    // Claimed: what HIS claimed on invoices it put on a claim (HIS_InvoiceMain.IsClaimed = 1): package, consumable and medicine lines.
+    { key: 'claimsReceived', label: 'Claimed', type: 'money', dp: 0, blankZero: true, sortable: false, bad: r => Number(r.rejectedClaims) > 0 },
   ];
   /** Contracted price × cases, the consumables and medicine the package price covered, and those billed separately. */
   resourcesTile = computed(() => {
@@ -405,15 +405,26 @@ export class PackageDetail {
     };
   });
   /** Package lines billed plus medicine, both including VAT: the doctor table's totals, so the tile matches it. */
-  billedTile = computed(() => this.tile(['feeBilled', 'package lines'], ['consumablesBilled', 'consumables'], ['medicineBilled', 'medicine']));
+  info = packageTileInfo('package');
+  /** A tile's info with this package's figures filled in. */
+  withValues(i: TileInfo, values: string | null | undefined): TileInfo { return values ? { ...i, values } : i; }
+  billedTile = computed(() => this.tile(['feeBilled', 'Invoice Billed'], ['consumablesBilled', 'consumables billed'], ['medicineBilled', 'medicine billed']));
   /** Claims on invoices HIS put on a claim (HIS_InvoiceMain.IsClaimed = 1): package, consumable and medicine lines. Blank until the facts carry the flag. */
   claimsReceivedTile = computed(() => {
     const rows = this.res.value()?.data.doctors ?? [];
     if (!rows.length || rows.every(r => r.claimsReceived == null)) return null;
     return rows.reduce((t, r) => t + Number(r.claimsReceived ?? 0), 0);
   });
-  /** Claims on the package lines, the consumable lines and the medicine lines. */
-  claimedTile = computed(() => this.tile(['claimed', 'package'], ['consumablesClaimed', 'consumables'], ['medicineClaimed', 'medicine']));
+  /** The billed parts, and how the doctor table's Consumables and Medicine columns differ from them (they add what the package covered). */
+  billedValues = computed(() => {
+    const b = this.billedTile(), t = this.doctorTotal() as Record<string, number> | null;
+    if (!b || !t) return null;
+    const m = (v: number) => formatMoney(String(v), { dp: 0 });
+    const col = (label: string, billed: number, covered: number) =>
+      `${label} column ${m(billed + covered)} = ${m(billed)} billed + ${m(covered)} covered (not billed)`;
+    return `${b.note}. ${col('Consumables', Number(t['consumablesBilled'] ?? 0), Number(t['consumablesCovered'] ?? 0))}; `
+      + `${col('Medicine', Number(t['medicineBilled'] ?? 0), Number(t['medicineCovered'] ?? 0))}.`;
+  });
   private tile(...parts: [string, string][]): { total: number; note: string } | null {
     const t = this.doctorTotal() as Record<string, number> | null;
     if (!t) return null;
@@ -432,7 +443,6 @@ export class PackageDetail {
       quantity: sum(r => r.quantity), feeBilled: sum(r => r.feeBilled),
       consumablesBilled: sum(r => r.consumablesBilled), consumablesCovered: sum(r => r.consumablesCovered), medicineCovered: sum(r => r.medicineCovered), medicineBilled: sum(r => r.medicineBilled), claimed: sum(r => r.claimed), settled: sum(r => r.settled), claimsReceived: sum(r => r.claimsReceived), medicineClaimed: sum(r => r.medicineClaimed), consumablesClaimed: sum(r => r.consumablesClaimed),
       wardDays: sum(r => r.wardDays), encounters: sum(r => r.encounters),
-      allClaimed: sum(r => Number(r.claimed) + Number(r.consumablesClaimed ?? 0) + Number(r.medicineClaimed ?? 0)),
     };
   });
   /** Sum of child contracted prices × quantity — same as Composition Price on the list. */
