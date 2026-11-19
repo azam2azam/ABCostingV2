@@ -78,7 +78,8 @@ export class Chip {
     </header>
     <ng-content />
   `,
-  styles: `.page-head { display: flex; gap: 16px; align-items: flex-end; justify-content: space-between; flex-wrap: wrap; margin-bottom: 20px; }
+  styles: `:host { display: block; width: 100%; }
+           .page-head { display: flex; gap: 16px; align-items: flex-end; justify-content: space-between; flex-wrap: wrap; margin-bottom: 20px; }
            .page-head > div:first-child { flex: 1; min-width: 0; }
            .page-head h1 { font-size: 26px; }
            .page-head p { margin: 0; }
@@ -387,7 +388,8 @@ export interface Col<T = any> {
       @else { <span [class]="dirClass(c, r)">{{ text }}</span> }
     </ng-template>
   `,
-  styles: `.sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
+  styles: `:host { display: block; width: 100%; }
+           .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
            .more { margin-top: 8px; }
            .list-bar { justify-content: space-between; margin: 0 0 10px; }
            .pager { margin-left: auto; }
