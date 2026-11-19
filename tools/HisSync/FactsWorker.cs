@@ -9,15 +9,31 @@ namespace Verita.HisSync;
 
 /// <summary>
 /// Syncs the fact dates queued on the HIS Sync screen, oldest first, straight into VERITA (no parking).
-/// Each pass does one small unit per hospital: list a day's encounters, sync one batch of them, or write the
-/// day's own refunds. Once a day is listed, the next pass only reads that day's next pending batch and
-/// continues. A recycle or crash repeats the batch in hand.
+/// Each pass writes one batch per hospital. That write starts only after the batch has been read from HIS.
+/// While VERITA writes it, HIS reads the next batch, and may start one more when that read finishes, so the
+/// read stays at most two batches ahead of the write. A recycle or crash repeats the batch in hand; a read
+/// that was only ahead is done again.
 /// </summary>
 public sealed class FactsWorker(SyncStore store, PackRunner packs, ILogger<FactsWorker> log) : BackgroundService
 {
     private const string Kind = "FACTS";
+    /// <summary>HIS may have this many batches (or the day's refunds) read and waiting before VERITA has written them.</summary>
+    private const int MaxReadAhead = 2;
     private static readonly TimeSpan CacheLife = TimeSpan.FromHours(6);
     private readonly Dictionary<Guid, (DateTime At, Dictionary<string, object> Values)> _caches = [];
+    private readonly object _cacheGate = new();
+    private readonly SemaphoreSlim _oneHisRead = new(1, 1);
+    private readonly List<ReadAhead> _ahead = [];
+
+    private sealed class ReadAhead
+    {
+        public required Guid HospitalId { get; init; }
+        public required Guid DayId { get; init; }
+        public required int BatchNo { get; init; }
+        public required bool Refund { get; init; }
+        public required Settings Settings { get; init; }
+        public required Task<(Pack Pack, double Seconds)> Read { get; init; }
+    }
 
     protected override async Task ExecuteAsync(CancellationToken stop)
     {
@@ -172,9 +188,14 @@ public sealed class FactsWorker(SyncStore store, PackRunner packs, ILogger<Facts
         try
         {
             var s = Day(h, day.Date);
-            await using var his = await SyncStore.OpenHisAsync(s);
-            his.SlowQuery = (sec, rows, sql) => s.SlowSteps.Add($"HIS {sec:N1}s, {rows:N0} rows — {sql}");
-            manifest = await SyncStore.StageAsync("Reading the day's encounters from HIS", () => FactsManifest.BuildAsync(his, s));
+            await _oneHisRead.WaitAsync(ct);
+            try
+            {
+                await using var his = await SyncStore.OpenHisAsync(s);
+                his.SlowQuery = (sec, rows, sql) => s.SlowSteps.Add($"HIS {sec:N1}s, {rows:N0} rows — {sql}");
+                manifest = await SyncStore.StageAsync("Reading the day's encounters from HIS", () => FactsManifest.BuildAsync(his, s));
+            }
+            finally { _oneHisRead.Release(); }
             if (s.SlowSteps.Count > 0)
                 await store.LogAsync(h.Id, Kind, "INFO", $"{day.Date:yyyy-MM-dd}: listing encounters hit {s.SlowSteps.Count} slow HIS quer{(s.SlowSteps.Count == 1 ? "y" : "ies")}.",
                     string.Join("\n", s.SlowSteps.Take(8)), day.Date, ct);
@@ -247,19 +268,15 @@ public sealed class FactsWorker(SyncStore store, PackRunner packs, ILogger<Facts
         var batchesDone = Math.Max(0, day.Batches - pendingBatches);
         await Progress(h, range, day, $"{day.Date:yyyy-MM-dd}: batch {batchesDone + 1} of {day.Batches} ({rows.Count} encounters)", ct, batchesDone);
 
-        var batch = new FactBatch(
-            rows.Where(r => r.Type == "IP").Select(r => r.HisNo).ToArray(),
-            rows.Where(r => r.Type == "OP").Select(r => r.HisNo).ToArray(),
-            rows.Where(r => r.Type == "ER").Select(r => r.HisNo).ToArray(),
-            rows.Where(r => r.Type == "ER" && (r.LinkAppointmentId is not null || r.LinkInvoiceAppointment is not null))
-                .Select(r => new ErLink(r.HisNo, r.LinkAppointmentId, r.LinkInvoiceAppointment, r.LinkInvoiceCompany)).ToArray());
+        var batch = BatchOf(rows);
         try
         {
-            var s = Day(h, day.Date);
-            s.Batch = batch;
-            s.Part = FactsPart.Batch;
-            s.OnProgress = step => Progress(h, range, day, $"{day.Date:yyyy-MM-dd}: batch {batchesDone + 1} of {day.Batches} — {step}", ct, batchesDone);
-            var results = await ExtractAndImportAsync(h, s, $"batch {batchNo}", ct);
+            var (s, pack, readSec, overlapped) = await PackForBatchAsync(h, range, day, batchNo, batchesDone, batch, ct);
+            await FillAheadAsync(db, h, day, batchNo, ct);
+            var reading = AheadNote(h.Id, day.Id);
+            await Progress(h, range, day,
+                $"{day.Date:yyyy-MM-dd}: batch {batchesDone + 1} of {day.Batches} — Importing into VERITA{reading}", ct, batchesDone);
+            var results = await ImportPackAsync(h, s, pack, $"batch {batchNo}", readSec, overlapped, ct);
             foreach (var r in rows) { r.Status = "SYNCED"; r.SyncedAt = DateTime.UtcNow; r.Error = null; }
             day.Synced += rows.Count;
             await db.SaveChangesAsync(ct);
@@ -316,16 +333,35 @@ public sealed class FactsWorker(SyncStore store, PackRunner packs, ILogger<Facts
     private async Task<bool> RefundsAsync(Verita.Infrastructure.Data.VeritaDbContext db, SyncHospital h, HisSyncRange range, HisSyncDay day, CancellationToken ct)
     {
         await Progress(h, range, day, $"{day.Date:yyyy-MM-dd}: refunds dated that day", ct, day.Batches);
-        var links = await db.HisSyncEncounters.AsNoTracking()
-            .Where(e => e.DayId == day.Id && e.Type == "ER" && (e.LinkAppointmentId != null || e.LinkInvoiceAppointment != null))
-            .Select(e => new ErLink(e.HisNo, e.LinkAppointmentId, e.LinkInvoiceAppointment, e.LinkInvoiceCompany)).ToArrayAsync(ct);
         try
         {
-            var s = Day(h, day.Date);
-            s.Batch = new FactBatch([], [], [], links);
-            s.Part = FactsPart.DayRefunds;
-            s.OnProgress = step => Progress(h, range, day, $"{day.Date:yyyy-MM-dd}: refunds — {step}", ct, day.Batches);
-            var results = await ExtractAndImportAsync(h, s, "refunds", ct);
+            Settings s;
+            Pack pack;
+            double readSec;
+            var overlapped = false;
+            if (TryTake(h.Id, day.Id, refund: true, batchNo: 0, out var ahead))
+            {
+                s = ahead.Settings;
+                var read = await ahead.Read;
+                pack = read.Pack;
+                readSec = read.Seconds;
+                overlapped = true;
+            }
+            else
+            {
+                var links = await db.HisSyncEncounters.AsNoTracking()
+                    .Where(e => e.DayId == day.Id && e.Type == "ER" && (e.LinkAppointmentId != null || e.LinkInvoiceAppointment != null))
+                    .Select(e => new ErLink(e.HisNo, e.LinkAppointmentId, e.LinkInvoiceAppointment, e.LinkInvoiceCompany)).ToArrayAsync(ct);
+                s = Day(h, day.Date);
+                s.Batch = new FactBatch([], [], [], links);
+                s.Part = FactsPart.DayRefunds;
+                s.OnProgress = step => Progress(h, range, day, $"{day.Date:yyyy-MM-dd}: refunds — {step}", ct, day.Batches);
+                var read = await ReadPackAsync(h, s, "refunds", ct);
+                pack = read.Pack;
+                readSec = read.Seconds;
+            }
+            await Progress(h, range, day, $"{day.Date:yyyy-MM-dd}: refunds — Importing into VERITA", ct, day.Batches);
+            var results = await ImportPackAsync(h, s, pack, "refunds", readSec, overlapped, ct);
             day.RefundsDone = true;
             day.Attempts = 0;
             await db.SaveChangesAsync(ct);
@@ -350,21 +386,116 @@ public sealed class FactsWorker(SyncStore store, PackRunner packs, ILogger<Facts
         return true;
     }
 
-    private async Task<ImportResult[]> ExtractAndImportAsync(SyncHospital h, Settings s, string what, CancellationToken ct)
+    /// <summary>
+    /// The pack for this batch. If a previous write already started the read, wait for that read; otherwise read it now.
+    /// The VERITA write does not start until this returns.
+    /// </summary>
+    private async Task<(Settings Settings, Pack Pack, double ReadSec, bool Overlapped)> PackForBatchAsync(
+        SyncHospital h, HisSyncRange range, HisSyncDay day, int batchNo, int batchesDone, FactBatch batch, CancellationToken ct)
     {
-        UseCache(h, s);
-        s.SlowSteps.Clear();
+        if (TryTake(h.Id, day.Id, refund: false, batchNo, out var ahead))
+        {
+            var read = await ahead.Read;
+            return (ahead.Settings, read.Pack, read.Seconds, true);
+        }
+        var s = Day(h, day.Date);
+        s.Batch = batch;
+        s.Part = FactsPart.Batch;
+        s.OnProgress = step => Progress(h, range, day, $"{day.Date:yyyy-MM-dd}: batch {batchesDone + 1} of {day.Batches} — {step}", ct, batchesDone);
+        var fresh = await ReadPackAsync(h, s, $"batch {batchNo}", ct);
+        return (s, fresh.Pack, fresh.Seconds, false);
+    }
+
+    /// <summary>
+    /// Start HIS reads for the following batches until two are ahead of the write, one HIS read at a time.
+    /// The day's refund read can take the last slot once no encounter batch is left.
+    /// </summary>
+    private async Task FillAheadAsync(Verita.Infrastructure.Data.VeritaDbContext db, SyncHospital h, HisSyncDay day, int writingBatchNo, CancellationToken ct)
+    {
+        while (AheadCount(h.Id, day.Id) < MaxReadAhead)
+        {
+            var skip = _ahead.Where(a => a.HospitalId == h.Id && a.DayId == day.Id && !a.Refund).Select(a => a.BatchNo).ToList();
+            skip.Add(writingBatchNo);
+            var nextNo = await db.HisSyncEncounters
+                .Where(e => e.DayId == day.Id && e.Status == "PENDING" && !skip.Contains(e.BatchNo))
+                .OrderBy(e => e.BatchNo).Select(e => (int?)e.BatchNo).FirstOrDefaultAsync(ct);
+            if (nextNo is int n)
+            {
+                var rows = await db.HisSyncEncounters.AsNoTracking()
+                    .Where(e => e.DayId == day.Id && e.Status == "PENDING" && e.BatchNo == n).ToListAsync(ct);
+                if (rows.Count == 0) break;
+                var s = Day(h, day.Date);
+                s.Batch = BatchOf(rows);
+                s.Part = FactsPart.Batch;
+                _ahead.Add(new ReadAhead
+                {
+                    HospitalId = h.Id, DayId = day.Id, BatchNo = n, Refund = false, Settings = s,
+                    Read = ReadPackAsync(h, s, $"batch {n}", ct),
+                });
+                continue;
+            }
+            if (!day.RefundsDone && !_ahead.Any(a => a.HospitalId == h.Id && a.DayId == day.Id && a.Refund))
+            {
+                var links = await db.HisSyncEncounters.AsNoTracking()
+                    .Where(e => e.DayId == day.Id && e.Type == "ER" && (e.LinkAppointmentId != null || e.LinkInvoiceAppointment != null))
+                    .Select(e => new ErLink(e.HisNo, e.LinkAppointmentId, e.LinkInvoiceAppointment, e.LinkInvoiceCompany)).ToArrayAsync(ct);
+                var s = Day(h, day.Date);
+                s.Batch = new FactBatch([], [], [], links);
+                s.Part = FactsPart.DayRefunds;
+                _ahead.Add(new ReadAhead
+                {
+                    HospitalId = h.Id, DayId = day.Id, BatchNo = 0, Refund = true, Settings = s,
+                    Read = ReadPackAsync(h, s, "refunds", ct),
+                });
+            }
+            break;
+        }
+    }
+
+    private int AheadCount(Guid hospitalId, Guid dayId) =>
+        _ahead.Count(a => a.HospitalId == hospitalId && a.DayId == dayId);
+
+    private string AheadNote(Guid hospitalId, Guid dayId)
+    {
+        var names = _ahead.Where(a => a.HospitalId == hospitalId && a.DayId == dayId)
+            .Select(a => a.Refund ? "refunds" : $"batch {a.BatchNo}").ToList();
+        return names.Count == 0 ? "" : "; HIS reading " + string.Join(" and ", names);
+    }
+
+    private bool TryTake(Guid hospitalId, Guid dayId, bool refund, int batchNo, out ReadAhead ahead)
+    {
+        var i = _ahead.FindIndex(a => a.HospitalId == hospitalId && a.DayId == dayId && a.Refund == refund && (refund || a.BatchNo == batchNo));
+        if (i < 0) { ahead = null!; return false; }
+        ahead = _ahead[i];
+        _ahead.RemoveAt(i);
+        return true;
+    }
+
+    /// <summary>One HIS read. A second call waits, so two batches can be queued without two reads hitting HIS together.</summary>
+    private async Task<(Pack Pack, double Seconds)> ReadPackAsync(SyncHospital h, Settings s, string what, CancellationToken ct)
+    {
+        await _oneHisRead.WaitAsync(ct);
+        try
+        {
+            UseCache(h, s);
+            s.SlowSteps.Clear();
+            var sw = Stopwatch.StartNew();
+            Pack pack;
+            await using (var his = await SyncStore.OpenHisAsync(s))
+                pack = await SyncStore.StageAsync("Reading HIS", () => packs.ExtractAsync(s, $"{s.PackPrefix}-{s.From:yyyy-MM-dd}-facts.zip",
+                    PackRunner.Readme(s, "facts", $"Day {s.From:yyyy-MM-dd}, {what}"), p => FactsExtract.RunAsync(his, s, p), ct));
+            var readSec = sw.Elapsed.TotalSeconds;
+            KeepCache(h, s);
+            // A skipped step would leave rows missing for good (the sync only moves forward): fail and retry instead.
+            if (pack.Warnings.Count > 0) throw new InvalidOperationException("HIS steps failed: " + string.Join("; ", pack.Warnings));
+            return (pack, readSec);
+        }
+        finally { _oneHisRead.Release(); }
+    }
+
+    private async Task<ImportResult[]> ImportPackAsync(SyncHospital h, Settings s, Pack pack, string what, double readSec, bool overlapped, CancellationToken ct)
+    {
         var sw = Stopwatch.StartNew();
-        Pack pack;
-        await using (var his = await SyncStore.OpenHisAsync(s))
-            pack = await SyncStore.StageAsync("Reading HIS", () => packs.ExtractAsync(s, $"{s.PackPrefix}-{s.From:yyyy-MM-dd}-facts.zip",
-                PackRunner.Readme(s, "facts", $"Day {s.From:yyyy-MM-dd}, {what}"), p => FactsExtract.RunAsync(his, s, p), ct));
-        var readSec = sw.Elapsed.TotalSeconds;
-        KeepCache(h, s);
-        // A skipped step would leave rows missing for good (the sync only moves forward): fail and retry instead.
-        if (pack.Warnings.Count > 0) throw new InvalidOperationException("HIS steps failed: " + string.Join("; ", pack.Warnings));
-        if (s.OnProgress is not null) await s.OnProgress("Importing into VERITA");
-        sw.Restart();
         var results = await SyncStore.StageAsync("Importing into VERITA", () => packs.ImportAsync(pack, h.Code, dryRun: false, ct));
         var importSec = sw.Elapsed.TotalSeconds;
         var detail = new StringBuilder();
@@ -375,11 +506,19 @@ public sealed class FactsWorker(SyncStore store, PackRunner packs, ILogger<Facts
             detail.AppendLine();
             detail.Append(string.Join("\n", s.SlowSteps.Take(8)));
         }
+        var readNote = overlapped ? " (read while an earlier batch was written)" : "";
         await store.LogAsync(h.Id, Kind, "INFO",
-            $"{s.From:yyyy-MM-dd} {what}: HIS read {readSec:N1}s, VERITA import {importSec:N1}s, {results.Sum(r => r.Created)} new / {results.Sum(r => r.Updated)} updated.",
+            $"{s.From:yyyy-MM-dd} {what}: HIS read {readSec:N1}s{readNote}, VERITA import {importSec:N1}s, {results.Sum(r => r.Created)} new / {results.Sum(r => r.Updated)} updated.",
             detail.ToString().Trim(), s.From is { } from ? DateOnly.FromDateTime(from) : null, ct);
         return results;
     }
+
+    private static FactBatch BatchOf(List<HisSyncEncounter> rows) => new(
+        rows.Where(r => r.Type == "IP").Select(r => r.HisNo).ToArray(),
+        rows.Where(r => r.Type == "OP").Select(r => r.HisNo).ToArray(),
+        rows.Where(r => r.Type == "ER").Select(r => r.HisNo).ToArray(),
+        rows.Where(r => r.Type == "ER" && (r.LinkAppointmentId is not null || r.LinkInvoiceAppointment is not null))
+            .Select(r => new ErLink(r.HisNo, r.LinkAppointmentId, r.LinkInvoiceAppointment, r.LinkInvoiceCompany)).ToArray());
 
     private Settings Day(SyncHospital h, DateOnly date)
     {
@@ -391,16 +530,22 @@ public sealed class FactsWorker(SyncStore store, PackRunner packs, ILogger<Facts
 
     private void UseCache(SyncHospital h, Settings s)
     {
-        if (!_caches.TryGetValue(h.Id, out var c) || DateTime.UtcNow - c.At > CacheLife) return;
-        foreach (var (k, v) in c.Values) s.Cache[k] = v;
+        lock (_cacheGate)
+        {
+            if (!_caches.TryGetValue(h.Id, out var c) || DateTime.UtcNow - c.At > CacheLife) return;
+            foreach (var (k, v) in c.Values) s.Cache[k] = v;
+        }
     }
 
     private void KeepCache(SyncHospital h, Settings s)
     {
-        if (s.Cache.Count == 0) return;
-        if (!_caches.TryGetValue(h.Id, out var c) || DateTime.UtcNow - c.At > CacheLife)
-            _caches[h.Id] = c = (DateTime.UtcNow, new Dictionary<string, object>(StringComparer.Ordinal));
-        foreach (var (k, v) in s.Cache) c.Values[k] = v;
+        lock (_cacheGate)
+        {
+            if (s.Cache.Count == 0) return;
+            if (!_caches.TryGetValue(h.Id, out var c) || DateTime.UtcNow - c.At > CacheLife)
+                _caches[h.Id] = c = (DateTime.UtcNow, new Dictionary<string, object>(StringComparer.Ordinal));
+            foreach (var (k, v) in s.Cache) c.Values[k] = v;
+        }
     }
 
     private async Task<bool> PausedAsync(SyncHospital h, HisSyncRange range, string why, CancellationToken ct)
