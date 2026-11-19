@@ -130,7 +130,8 @@ p { margin: 0 0 8px; }
   min-width: 0;
 }
 .grid { display: grid; gap: 14px; }
-.grid.tiles { grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); }
+/* Wide enough for an uppercase label such as "Resources Consumed" to stay on one line at 110% zoom. */
+.grid.tiles { grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); }
 .grid.two { grid-template-columns: repeat(auto-fit, minmax(min(100%, 440px), 1fr)); }
 .row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
 .spacer { flex: 1; }

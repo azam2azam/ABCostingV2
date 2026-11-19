@@ -138,7 +138,7 @@ export interface TileInfo {
                    border-radius: var(--radius); padding: 14px 16px 14px 18px; box-shadow: var(--shadow-sm); transition: box-shadow .15s, transform .15s; }
            .tile::before { content: ""; position: absolute; left: 0; top: 14px; bottom: 14px; width: 3px; border-radius: 0 3px 3px 0; background: linear-gradient(var(--accent), var(--accent-strong)); opacity: .8; }
            .tile:hover { box-shadow: var(--shadow); transform: translateY(-1px); }
-           .label { color: var(--text-3); font-size: 12px; font-weight: 600; letter-spacing: .04em; text-transform: uppercase; }
+           .label { color: var(--text-3); font-size: 12px; font-weight: 600; letter-spacing: .04em; text-transform: uppercase; white-space: nowrap; }
            .value { font-size: 24px; font-weight: 700; letter-spacing: -0.02em; text-align: left; margin-top: 6px; min-height: 1.2em; }
            .value a { color: inherit; }
            .value.compact { font-size: 16px; font-weight: 600; letter-spacing: 0; line-height: 1.3; white-space: normal; overflow-wrap: break-word; }
@@ -160,7 +160,8 @@ export interface TileInfo {
            dt { font-weight: 600; color: var(--text); }
            dd { margin: 0; line-height: 1.4; }
            .info-v { margin-top: 8px; line-height: 1.45; } .info-v span { font-weight: 600; color: var(--text); }
-           .info-n { margin-top: 8px; color: var(--text-3); line-height: 1.45; }`,
+           .info-n { margin-top: 8px; color: var(--text-3); line-height: 1.45; }
+           @media print { .label { white-space: normal; } }`,
 })
 export class Tile {
   private host = inject(ElementRef<HTMLElement>);
