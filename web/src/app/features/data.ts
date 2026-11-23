@@ -1069,7 +1069,7 @@ interface StorageGroupRow {
 
 const GROUP_ORDER = ['Facts', 'Catalogue', 'Calculation results', 'Import files', 'History', 'System'];
 const GROUP_NOTE: Record<string, string> = {
-  Facts: 'Monthly HIS data: encounters, services, revenue, refunds, consumption, staff time, transfers, ledger. Activity×Resource invent from HIS clocks is not used.',
+  Facts: 'Monthly HIS data: episodes, services, revenue, refunds, consumption, staff time, transfers, ledger. Activity×Resource invent from HIS clocks is not used.',
   Catalogue: 'Departments, cost centres, procedures, resources, rates and the rest of the costing model. The hospital entry is kept.',
   'Calculation results': 'What calculation runs wrote. Removed with the run.',
   'Import files': 'Uploaded files kept for re-import, and import batches.',
@@ -1100,7 +1100,7 @@ const GROUP_NOTE: Record<string, string> = {
 
           <section class="card">
             <h2>Facts by period · {{ d.hospital }}</h2>
-            <p class="muted">Facts belong to a period by encounter admit date, as on each period's detail screen. Calculation results are the rows the period's runs wrote.</p>
+            <p class="muted">Facts belong to a period by episode admit date, as on each period's detail screen. Calculation results are the rows the period's runs wrote.</p>
             <v-table [rows]="d.periods" [columns]="periodCols()" [total]="periodTotal()" caption="Facts by period" empty="This hospital has no periods." />
           </section>
 
@@ -1224,7 +1224,7 @@ export class Storage {
   periodCols = computed<Col<StoragePeriod>[]>(() => [
     { key: 'code', label: 'Period', link: r => `/periods/${r.id}`, sub: r => `${r.startDate} – ${r.endDate}`, minWidth: '12rem' },
     { key: 'run', label: 'Calculation run', value: r => r.run ?? 'Not run', link: r => r.run ? `/runs/${r.run}` : null, sub: r => r.runStatus ?? null },
-    { key: 'enc', label: 'Encounters', type: 'num', dp: 0, value: this.count('enc', 'Encounter') },
+    { key: 'enc', label: 'Episodes', type: 'num', dp: 0, value: this.count('enc', 'Encounter') },
     { key: 'svc', label: 'Services', type: 'num', dp: 0, value: this.count('svc', 'EncounterService') },
     { key: 'act', label: 'Activity', type: 'num', dp: 0, value: this.count('act', 'ActivityTransaction') },
     { key: 'rev', label: 'Revenue', type: 'num', dp: 0, value: this.count('rev', 'RevenueTransaction') },

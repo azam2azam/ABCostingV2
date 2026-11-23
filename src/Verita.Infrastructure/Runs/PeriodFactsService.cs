@@ -16,9 +16,13 @@ public sealed record PeriodFactEntity(
 
 public sealed record PeriodFactRun(string Code, string Status, string? CostingVersion);
 
+/// <summary>Counted: false when the summary was asked for without its record counts (they come from the counts call).</summary>
 public sealed record PeriodFactsDto(
     Guid PeriodId, string Period, string Hospital, DateOnly StartDate, DateOnly EndDate, string Status,
-    PeriodFactEntity[] Entities, long TotalRows, long TotalEstimatedBytes, PeriodFactRun[] Runs, string? Blocker);
+    PeriodFactEntity[] Entities, long TotalRows, long TotalEstimatedBytes, PeriodFactRun[] Runs, string? Blocker, bool Counted = true);
+
+/// <summary>One entity's records in the period, and its estimated share of the table's storage.</summary>
+public sealed record PeriodFactCount(string Entity, long Rows, long EstimatedBytes);
 
 public sealed record PeriodFactsDeleted(string Entity, long Rows);
 
@@ -55,14 +59,14 @@ public sealed class PeriodFactsService(IDbContextFactory<VeritaDbContext> factor
 
     private static readonly Def[] Defs =
     [
-        new("Encounter", "Encounters", "Clinical", "Encounter",
+        new("Encounter", "Episodes", "Clinical", "Encounter",
             "t.HospitalId = @h AND t.AdmitAt >= @s AND t.AdmitAt < @e", true,
             ["EncounterService", "ActivityTransaction", "RevenueTransaction", "RefundTransaction", "InvoicePackageItem", "ConsumptionItem", "StaffTime", "EncounterTransfer", "ClaimLine", "SettlementLine", "NphiesClaimLine", "Patient"],
             "Admitted in this period."),
         new("Patient", "Patients", "Clinical", "Patient",
             $"t.Id IN (SELECT x.PatientId FROM [Encounter] x WHERE x.Id IN ({Enc})) AND NOT EXISTS (SELECT 1 FROM [Encounter] o WHERE o.PatientId = t.Id AND o.Id NOT IN ({Enc}))",
-            false, [], "Only those with no encounter in another period. Removed with encounters."),
-        new("EncounterService", "Encounter services", "Clinical", "EncounterService",
+            false, [], "Only those with no episode in another period. Removed with episodes."),
+        new("EncounterService", "Episode services", "Clinical", "EncounterService",
             $"t.EncounterId IN ({Enc})", true, ["ActivityTransaction"], "Also removes activity rows that point to these services."),
         new("ActivityTransaction", "Activity transactions", "Clinical", "ActivityTransaction",
             $"t.EncounterId IN ({Enc})", true, []),
@@ -70,10 +74,10 @@ public sealed class PeriodFactsService(IDbContextFactory<VeritaDbContext> factor
             $"t.EncounterId IN ({Enc})", true, []),
         new("RefundTransaction", "Refund transactions", "Financial", "RefundTransaction",
             $"t.HospitalId = @h AND (t.EncounterId IN ({Enc}) OR (t.EncounterId IS NULL AND t.RefundDate >= @s AND t.RefundDate < @e))", true, [],
-            "On this period's encounters, or dated in it when not linked."),
+            "On this period's episodes, or dated in it when not linked."),
         new("InvoicePackageItem", "Invoice package items", "Financial", "InvoicePackageItem",
             $"t.HospitalId = @h AND (t.EncounterId IN ({Enc}) OR (t.EncounterId IS NULL AND t.InvoiceDate >= @s AND t.InvoiceDate < @e))", true, [],
-            "On this period's encounters, or dated in it when not linked."),
+            "On this period's episodes, or dated in it when not linked."),
         new("ConsumptionItem", "Consumption items", "Clinical", "ConsumptionItem",
             $"t.HospitalId = @h AND (t.EncounterId IN ({Enc}) OR (t.EncounterId IS NULL AND t.OccurredAt >= @s AND t.OccurredAt < @e))", true, [],
             "Consumables, implants and medicine by item. Unlinked rows count by date."),
@@ -85,16 +89,19 @@ public sealed class PeriodFactsService(IDbContextFactory<VeritaDbContext> factor
             "HIS INP_Transfer as stored (TransferDate, StartTime, EndTime, Duration). Unlinked rows count by TransferDate."),
         new("ClaimLine", "Claim lines", "Financial", "ClaimLine",
             $"t.HospitalId = @h AND (t.EncounterId IN ({Enc}) OR (t.EncounterId IS NULL AND t.ClaimDate >= @s AND t.ClaimDate < @e))", true, [],
-            "HIS claim lines on this period's encounters, or claimed in it when not linked."),
+            "HIS claim lines on this period's episodes, or claimed in it when not linked."),
         new("SettlementLine", "Settlement lines", "Financial", "SettlementLine",
             $"t.HospitalId = @h AND (t.EncounterId IN ({Enc}) OR (t.EncounterId IS NULL AND t.SettlementDate >= @s AND t.SettlementDate < @e))", true, [],
-            "Paid and rejected per line, on this period's encounters, or settled in it when not linked."),
+            "Paid and rejected per line, on this period's episodes, or settled in it when not linked."),
         new("NphiesClaimLine", "NPHIES claim lines", "Financial", "NphiesClaimLine",
             $"t.HospitalId = @h AND (t.EncounterId IN ({Enc}) OR (t.EncounterId IS NULL AND t.LineCreatedOn >= @s AND t.LineCreatedOn < @e))", true, [],
             "NPHIES submitted / approved per procedure."),
         new("NphiesPayment", "NPHIES payments", "Financial", "NphiesPayment",
             "t.HospitalId = @h AND t.PaymentDate >= @s AND t.PaymentDate < @e", true, [],
             "NPHIES payment reconciliation lines, by payment date."),
+        new("AdmissionRequest", "Admission requests", "Clinical", "AdmissionRequest",
+            "t.HospitalId = @h AND t.RequestedAt >= @s AND t.RequestedAt < @e", true, [],
+            "HIS admission requests, by request date."),
         new("GLPosting", "GL postings", "Ledger", "GLPosting",
             "t.HospitalId = @h AND t.PeriodId = @p", true, []),
         new("DriverVolume", "Driver volumes", "Ledger", "DriverVolume",
@@ -103,11 +110,15 @@ public sealed class PeriodFactsService(IDbContextFactory<VeritaDbContext> factor
 
     // Children before parents: NoAction foreign keys.
     private static readonly string[] DeleteOrder =
-        ["ActivityTransaction", "EncounterService", "RevenueTransaction", "RefundTransaction", "InvoicePackageItem", "ConsumptionItem", "StaffTime", "EncounterTransfer", "ClaimLine", "SettlementLine", "NphiesClaimLine", "NphiesPayment", "GLPosting", "DriverVolume", "Encounter", "Patient"];
+        ["ActivityTransaction", "EncounterService", "RevenueTransaction", "RefundTransaction", "InvoicePackageItem", "ConsumptionItem", "StaffTime", "EncounterTransfer", "ClaimLine", "SettlementLine", "NphiesClaimLine", "NphiesPayment", "AdmissionRequest", "GLPosting", "DriverVolume", "Encounter", "Patient"];
 
     private sealed record Scope(Guid PeriodId, string PeriodCode, DateOnly Start, DateOnly End, string PeriodStatus, Guid HospitalId, string HospitalCode);
 
-    public async Task<PeriodFactsDto> SummaryAsync(Principal p, Guid periodId, string hospital, CancellationToken ct)
+    /// <summary>
+    /// The period's facts per entity. With <paramref name="counts"/> false the record counts are left at 0 so the
+    /// page can show at once; <see cref="CountsAsync"/> then fills them in.
+    /// </summary>
+    public async Task<PeriodFactsDto> SummaryAsync(Principal p, Guid periodId, string hospital, CancellationToken ct, bool counts = true)
     {
         await using var db = await factory.CreateDbContextAsync(ct);
         var s = await ScopeAsync(db, p, periodId, hospital, ct);
@@ -115,18 +126,56 @@ public sealed class PeriodFactsService(IDbContextFactory<VeritaDbContext> factor
         await db.Database.OpenConnectionAsync(ct);
 
         var storage = await TableStorageAsync(conn, ct);
-        var entities = new List<PeriodFactEntity>();
-        foreach (var d in Defs)
+        var counted = counts ? (await CountAllAsync(conn, s, storage, ct)).ToDictionary(x => x.Entity) : [];
+        var entities = Defs.Select(d =>
         {
-            var rows = await ScalarAsync(conn, $"SELECT COUNT_BIG(*) FROM [{d.Table}] t WHERE {d.Where}", s, 300, ct);
             var (tableRows, tableBytes) = storage.GetValueOrDefault(d.Table);
-            var est = tableRows > 0 ? (long)Math.Round((double)tableBytes * rows / tableRows) : 0;
-            entities.Add(new PeriodFactEntity(d.Entity, d.Label, d.Group, rows, est, tableRows, tableBytes, d.Deletable, d.AlsoDeletes, d.Note));
-        }
+            var c = counted.GetValueOrDefault(d.Entity);
+            return new PeriodFactEntity(d.Entity, d.Label, d.Group, c?.Rows ?? 0, c?.EstimatedBytes ?? 0, tableRows, tableBytes, d.Deletable, d.AlsoDeletes, d.Note);
+        }).ToArray();
 
         var runs = await RunsAsync(db, s, ct);
         return new PeriodFactsDto(s.PeriodId, s.PeriodCode, s.HospitalCode, s.Start, s.End, s.PeriodStatus,
-            entities.ToArray(), entities.Sum(x => x.Rows), entities.Sum(x => x.EstimatedBytes), runs, Blocker(s, runs));
+            entities, entities.Sum(x => x.Rows), entities.Sum(x => x.EstimatedBytes), runs, Blocker(s, runs), counts);
+    }
+
+    /// <summary>Every entity's records in the period, counted in one query.</summary>
+    public async Task<PeriodFactCount[]> CountsAsync(Principal p, Guid periodId, string hospital, CancellationToken ct)
+    {
+        await using var db = await factory.CreateDbContextAsync(ct);
+        var s = await ScopeAsync(db, p, periodId, hospital, ct);
+        var conn = db.Database.GetDbConnection();
+        await db.Database.OpenConnectionAsync(ct);
+        return await CountAllAsync(conn, s, await TableStorageAsync(conn, ct), ct);
+    }
+
+    /// <summary>
+    /// One round trip: the period's episodes are found once into #enc, then every entity is counted in a single
+    /// SELECT, instead of one query per entity each finding the episodes again.
+    /// </summary>
+    private static async Task<PeriodFactCount[]> CountAllAsync(DbConnection conn, Scope s, Dictionary<string, (long Rows, long Bytes)> storage, CancellationToken ct)
+    {
+        var counts = string.Join(",\n       ", Defs.Select((d, i) =>
+            $"(SELECT COUNT_BIG(*) FROM [{d.Table}] t WHERE {d.Where.Replace(Enc, "SELECT k.Id FROM #enc k")}) AS c{i}"));
+        var sql = $"""
+            SET NOCOUNT ON;
+            CREATE TABLE #enc (Id uniqueidentifier NOT NULL PRIMARY KEY);
+            INSERT #enc (Id) {Enc};
+            SELECT {counts};
+            DROP TABLE #enc;
+            """;
+        await using var cmd = Command(conn, sql, s, 300);
+        await using var r = await cmd.ExecuteReaderAsync(ct);
+        var result = new PeriodFactCount[Defs.Length];
+        if (!await r.ReadAsync(ct)) return Defs.Select(d => new PeriodFactCount(d.Entity, 0, 0)).ToArray();
+        for (var i = 0; i < Defs.Length; i++)
+        {
+            var rows = r.IsDBNull(i) ? 0 : Convert.ToInt64(r.GetValue(i));
+            var (tableRows, tableBytes) = storage.GetValueOrDefault(Defs[i].Table);
+            var est = tableRows > 0 ? (long)Math.Round((double)tableBytes * rows / tableRows) : 0;
+            result[i] = new PeriodFactCount(Defs[i].Entity, rows, est);
+        }
+        return result;
     }
 
     /// <summary>Delete one entity's facts for the period (with what depends on it), or all of them when entity is null.</summary>
@@ -142,13 +191,17 @@ public sealed class PeriodFactsService(IDbContextFactory<VeritaDbContext> factor
         {
             var d = Defs.FirstOrDefault(x => string.Equals(x.Entity, entity, StringComparison.OrdinalIgnoreCase))
                 ?? throw AppError.Invalid($"Unknown entity {entity}.");
-            if (!d.Deletable) throw AppError.Invalid($"{d.Label} are removed together with encounters.");
+            if (!d.Deletable) throw AppError.Invalid($"{d.Label} are removed together with episodes.");
             var set = new HashSet<string>([d.Entity, .. d.AlsoDeletes], StringComparer.OrdinalIgnoreCase);
             targets = DeleteOrder.Where(set.Contains).ToArray();
         }
 
         var runs = await RunsAsync(db, s, ct);
         if (Blocker(s, runs) is { } blocker) throw AppError.Conflict("PERIOD_HAS_RUN", blocker);
+        // A custom period's data is the months' data for those days: clear it from the month instead.
+        var owned = await db.Periods.AsNoTracking().Where(x => x.HospitalId == s.HospitalId).ToListAsync(ct);
+        if (owned.FirstOrDefault(x => x.Id == s.PeriodId) is { } period && PeriodCalendar.IsCustom(period, owned))
+            throw AppError.Conflict("PERIOD_CUSTOM", $"{period.Code} overlaps other periods, so its data is theirs too. Clear the data from the month instead.");
 
         // Patients are chosen before their encounters go; afterwards they have no encounter to find them by.
         var conn = db.Database.GetDbConnection();

@@ -44,7 +44,7 @@ public sealed partial class ReadQueries
                 var best = prof.Rows.FirstOrDefault();
                 var worst = prof.Rows.LastOrDefault();
                 return new ReportDto(def.Key, def.Title, def.Audience,
-                    best is null ? "No encounters were costed." : p.Can("revenue.view")
+                    best is null ? "No episodes were costed." : p.Can("revenue.view")
                         ? $"{best.Label} contributes the most operating margin (SAR {best.Operating:N0}); {worst!.Label} the least (SAR {worst.Operating:N0}). Full-cost margin after idle capacity is SAR {prof.FullCostMargin:N0}."
                         : "Revenue is masked for your role, so service lines are ranked by cost.",
                     prof);
@@ -68,8 +68,8 @@ public sealed partial class ReadQueries
                     .OrderBy(r => r.Specialty).ThenByDescending(r => r.VsSpecialtyPct).ToArray();
                 var outlier = result.Where(r => r.Encounters >= 5).OrderByDescending(r => r.VsSpecialtyPct).FirstOrDefault();
                 return new ReportDto(def.Key, def.Title, def.Audience,
-                    outlier is null ? "Too few encounters per physician to compare practice."
-                        : $"{outlier.Physician} runs {outlier.VsSpecialtyPct:N1}% above the {outlier.Specialty} average cost per encounter across {outlier.Encounters} encounters. Variation is shown against the specialty, not the hospital, so case mix is roughly like for like.",
+                    outlier is null ? "Too few episodes per physician to compare practice."
+                        : $"{outlier.Physician} runs {outlier.VsSpecialtyPct:N1}% above the {outlier.Specialty} average cost per episode across {outlier.Encounters} episodes. Variation is shown against the specialty, not the hospital, so case mix is roughly like for like.",
                     result);
             }
             case "payer-margin":
@@ -112,7 +112,7 @@ public sealed partial class ReadQueries
                 }
                 return new ReportDto(def.Key, def.Title, def.Audience,
                     rows.Count < 2 ? "Only one hospital is in your scope for this period."
-                        : $"Attribution ranges from {rows.Min(r => r.AttributionPct):N1}% to {rows.Max(r => r.AttributionPct):N1}% — the comparable measure across hospitals, because unlike cost per encounter it does not depend on case mix (FR-7.8).",
+                        : $"Attribution ranges from {rows.Min(r => r.AttributionPct):N1}% to {rows.Max(r => r.AttributionPct):N1}% — the comparable measure across hospitals, because unlike cost per episode it does not depend on case mix (FR-7.8).",
                     rows.OrderBy(r => r.Hospital).ToArray());
             }
         }

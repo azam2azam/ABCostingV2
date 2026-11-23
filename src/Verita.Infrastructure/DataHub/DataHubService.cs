@@ -830,7 +830,7 @@ public sealed class DataHubService(IDbContextFactory<VeritaDbContext> factory, I
             {
                 if (replaced.TryGetValue((merged.HospitalId, merged.SourceAssessmentNo), out var old) && old.Costed)
                 {
-                    rejects.Add(new RowError(rowNo, key, [$"ER encounter {merged.SourceAssessmentNo} merges into {merged.EncounterNo}, but it is costed in a calculation run. Delete that run first."], values));
+                    rejects.Add(new RowError(rowNo, key, [$"ER episode {merged.SourceAssessmentNo} merges into {merged.EncounterNo}, but it is costed in a calculation run. Delete that run first."], values));
                     continue;
                 }
                 merges.Add((merged.HospitalId, merged.SourceAssessmentNo, key));
@@ -843,7 +843,7 @@ public sealed class DataHubService(IDbContextFactory<VeritaDbContext> factory, I
                 if (current is Encounter was && entity is Encounter now && !string.Equals(was.EncType, now.EncType, StringComparison.OrdinalIgnoreCase)
                     && !(was.EncType == "OP" && now.EncType == "ER"))
                 {
-                    rejects.Add(new RowError(rowNo, key, [$"Encounter {now.EncounterNo} already exists as {was.EncType}; it would be overwritten by this {now.EncType} row."], values));
+                    rejects.Add(new RowError(rowNo, key, [$"Episode {now.EncounterNo} already exists as {was.EncType}; it would be overwritten by this {now.EncType} row."], values));
                     continue;
                 }
                 if (spec.Versioned)

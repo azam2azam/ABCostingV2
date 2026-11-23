@@ -18,18 +18,24 @@ public sealed class CostingController : VeritaController
 {
     [HttpGet("dashboard")]
     [Authorize(Policy = "dashboard.view")]
-    public async Task<Envelope<DashboardDto>> Dashboard([FromQuery] string? encType = null, CancellationToken ct = default)
-    { var (p, s) = await Scoped(); return Wrap(s, await Q.DashboardAsync(s, p, ct, encType)); }
+    public async Task<Envelope<DashboardDto>> Dashboard([FromQuery] string? encType = null, [FromQuery] string? careArea = null, CancellationToken ct = default)
+    { var (p, s) = await Scoped(); return Wrap(s, await Q.DashboardAsync(s, p, ct, encType, careArea)); }
 
     [HttpGet("dashboard/trend")]
     [Authorize(Policy = "dashboard.view")]
-    public async Task<Envelope<DashboardTrendDto>> DashboardTrend([FromQuery] string? encType = null, CancellationToken ct = default)
-    { var (p, s) = await Scoped(); return Wrap(s, await Q.DashboardTrendAsync(s, p, ct, encType)); }
+    public async Task<Envelope<DashboardTrendDto>> DashboardTrend([FromQuery] string? encType = null, [FromQuery] string? careArea = null, CancellationToken ct = default)
+    { var (p, s) = await Scoped(); return Wrap(s, await Q.DashboardTrendAsync(s, p, ct, encType, careArea)); }
+
+    /// <summary>The run split into IPD, OR, OPD and ER; the four add up to the run.</summary>
+    [HttpGet("dashboard/care-areas")]
+    [Authorize(Policy = "dashboard.view")]
+    public async Task<Envelope<CareAreaSplitDto>> DashboardCareAreas(CancellationToken ct = default)
+    { var (p, s) = await Scoped(); return Wrap(s, await Q.CareAreaSplitAsync(s, p, ct)); }
 
     [HttpGet("profitability")]
     [Authorize(Policy = "profitability.view")]
-    public async Task<Envelope<ProfitDto>> Profitability([FromQuery] string dimension = "serviceLine", [FromQuery] string? encType = null, CancellationToken ct = default)
-    { var (p, s) = await Scoped(); return Wrap(s, await Q.ProfitabilityAsync(s, p, dimension, ct, encType)); }
+    public async Task<Envelope<ProfitDto>> Profitability([FromQuery] string dimension = "serviceLine", [FromQuery] string? encType = null, [FromQuery] string? careArea = null, CancellationToken ct = default)
+    { var (p, s) = await Scoped(); return Wrap(s, await Q.ProfitabilityAsync(s, p, dimension, ct, encType, careArea)); }
 
     [HttpGet("variance")]
     [Authorize(Policy = "variance.view")]
@@ -340,13 +346,13 @@ public sealed class CostingController : VeritaController
     public async Task<Envelope<PatientEncounterPage>> PatientEncounters([FromQuery] int page = 1, [FromQuery] int pageSize = 50, [FromQuery] string sort = "admitAt",
         [FromQuery] bool desc = true, [FromQuery] string? search = null, [FromQuery] string? encType = null, [FromQuery] Guid? billedPackageId = null,
         [FromQuery] string? serviceLine = null, [FromQuery] string? department = null, [FromQuery] string? resource = null, [FromQuery] string? physician = null,
-        [FromQuery] string? payer = null, [FromQuery] string? insurer = null, [FromQuery] string? noBillableType = null, [FromQuery] string? drg = null, [FromQuery] string? segment = null, CancellationToken ct = default)
+        [FromQuery] string? payer = null, [FromQuery] string? insurer = null, [FromQuery] string? noBillableType = null, [FromQuery] string? drg = null, [FromQuery] string? segment = null, [FromQuery] string? careArea = null, CancellationToken ct = default)
     {
         var (p, s) = await CatalogueScoped();
         return Wrap(s, await Q.PatientEncountersAsync(s, p, new PatientEncounterQuery
         {
             Page = page, PageSize = pageSize, Sort = sort, Desc = desc, Search = search, EncType = encType, BilledPackageId = billedPackageId,
-            ServiceLine = serviceLine, Department = department, Resource = resource, Physician = physician, Payer = payer, Insurer = insurer, NoBillableType = noBillableType, Drg = drg, Segment = segment,
+            ServiceLine = serviceLine, Department = department, Resource = resource, Physician = physician, Payer = payer, Insurer = insurer, NoBillableType = noBillableType, Drg = drg, Segment = segment, CareArea = careArea,
         }, ct));
     }
 

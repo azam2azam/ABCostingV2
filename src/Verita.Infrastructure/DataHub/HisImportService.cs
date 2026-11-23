@@ -163,7 +163,7 @@ public sealed class HisImportService(IDbContextFactory<VeritaDbContext> factory,
             files = files.Where(f => f.Spec!.Name != "Hospital").ToList();
             hospital = h.Code;
             (files, var unbilled) = HisImportPack.SkipUnbilledEncounters(files);
-            if (unbilled > 0) log.LogInformation("Import {File}: skipped {Count} encounters with nothing billed", fileName, unbilled);
+            if (unbilled > 0) log.LogInformation("Import {File}: skipped {Count} episodes with nothing billed", fileName, unbilled);
             var mentioned = files.Where(f => f.Spec!.Name is "Encounter" or "EncounterService" or "StaffTime")
                 .SelectMany(f => f.Rows).Select(r => r.GetValueOrDefault("providerCode")?.Trim())
                 .Where(c => !string.IsNullOrEmpty(c)).Distinct(StringComparer.OrdinalIgnoreCase).ToList();

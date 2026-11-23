@@ -37,7 +37,7 @@ interface CompareTypeDraft extends CompareTypeRow { expanded: boolean; items: Co
     @if (stream() === 'indirect') {
       <section class="card overhead-block">
         <div class="head">
-          <h2>{{ title() }} · Encounter level overheads (Cost will be considered for every encounter)</h2>
+          <h2>{{ title() }} · Episode level overheads (Cost will be considered for every episode)</h2>
         </div>
         @if (!ready()) {
           <ng-container [ngTemplateOutlet]="notReady" />
@@ -45,7 +45,7 @@ interface CompareTypeDraft extends CompareTypeRow { expanded: boolean; items: Co
           <v-state [loading]="overheads.isLoading()" [error]="overheads.error()">
             <div class="table-wrap">
               <table class="data">
-                <caption class="sr-only">Encounter level overheads, {{ from() }} to {{ to() }}</caption>
+                <caption class="sr-only">Episode level overheads, {{ from() }} to {{ to() }}</caption>
                 <thead>
                   <tr>
                     <th scope="col">Cost Center Code</th>
@@ -67,7 +67,7 @@ interface CompareTypeDraft extends CompareTypeRow { expanded: boolean; items: Co
                       <td class="num">{{ o.toAmount | money }}</td>
                     </tr>
                   } @empty {
-                    <tr><td class="faint" colspan="6">No encounter-level overheads.</td></tr>
+                    <tr><td class="faint" colspan="6">No episode-level overheads.</td></tr>
                   }
                 </tbody>
               </table>
@@ -336,7 +336,7 @@ export class CompareCosting {
           @if (!versions().length) {
             <p class="muted">This is the hospital's first version, so it starts blank. Enter its percentages on Direct Costing and Indirect Costing.</p>
           } @else {
-          <p class="muted">Copies recipes, Direct costing, Indirect costing and encounter overheads from the source version. The new version starts as Draft and can be edited.</p>
+          <p class="muted">Copies recipes, Direct costing, Indirect costing and episode overheads from the source version. The new version starts as Draft and can be edited.</p>
           }
           <div class="fields">
             @if (versions().length) {
@@ -1173,7 +1173,7 @@ interface OverheadDraft {
   template: `
     <section class="card" [class.pick-open]="ccOpen()">
       <div class="head">
-        <h2>Encounter level overheads (Cost will be considered for every encounter)</h2>
+        <h2>Episode level overheads (Cost will be considered for every episode)</h2>
         <button class="btn primary" type="button" (click)="startAdd()" [disabled]="!!draft() || busy() || locked()">Add</button>
       </div>
       @if (locked()) {
@@ -1234,7 +1234,7 @@ interface OverheadDraft {
         @if (res.value()) {
           <div class="table-wrap">
             <table class="data">
-              <caption class="sr-only">Encounter level overheads</caption>
+              <caption class="sr-only">Episode level overheads</caption>
               <thead>
                 <tr>
                   <th scope="col">Cost Center Code</th>
@@ -1259,7 +1259,7 @@ interface OverheadDraft {
                     </td>
                   </tr>
                 } @empty {
-                  @if (!draft()) { <tr><td class="faint" colspan="5">No encounter-level overheads.</td></tr> }
+                  @if (!draft()) { <tr><td class="faint" colspan="5">No episode-level overheads.</td></tr> }
                 }
               </tbody>
             </table>
@@ -1409,7 +1409,7 @@ export class EncounterOverheads {
   }
   async remove(row: EncounterOverheadRow): Promise<void> {
     if (this.locked()) return;
-    if (!confirm(`Delete encounter overhead for ${hisProcedureId(row.costCenterCode)}?`)) return;
+    if (!confirm(`Delete episode overhead for ${hisProcedureId(row.costCenterCode)}?`)) return;
     this.busy.set(true);
     this.message.set(null);
     this.error.set(false);
@@ -1551,8 +1551,9 @@ interface PeriodFactEntity {
 interface PeriodFactsDto {
   periodId: string; period: string; hospital: string; startDate: string; endDate: string; status: string;
   entities: PeriodFactEntity[]; totalRows: number; totalEstimatedBytes: number;
-  runs: { code: string; status: string; costingVersion: string | null }[]; blocker: string | null;
+  runs: { code: string; status: string; costingVersion: string | null }[]; blocker: string | null; counted?: boolean;
 }
+interface PeriodFactCount { entity: string; rows: number; estimatedBytes: number; }
 
 /** Facts held for one hospital's period, per entity, with deletion once no calculation run uses them. */
 @Component({
@@ -1560,15 +1561,16 @@ interface PeriodFactsDto {
   imports: [...UI, RouterLink],
   template: `
     <v-state [loading]="res.isLoading() && !res.value()" [error]="res.error()">
-      @if (res.value(); as d) {
-        <v-page [title]="'Period ' + d.period" [purpose]="d.hospital + ' · ' + d.startDate + ' to ' + d.endDate + ' · ' + d.status + '. Facts belong to the period by encounter admit date.'">
+      @if (view(); as d) {
+        <v-page [title]="'Period ' + d.period" [purpose]="d.hospital + ' · ' + d.startDate + ' to ' + d.endDate + ' · ' + d.status + '. Facts belong to the period by episode admit date.'">
           <div actions class="row">
             <a class="btn" routerLink="/periods" queryParamsHandling="preserve">Back to periods</a>
             @if (canEdit()) {
-              <button class="btn danger" type="button" (click)="remove(null)" [disabled]="busy() || !!d.blocker || !d.totalRows">Delete all facts</button>
+              <button class="btn danger" type="button" (click)="remove(null)" [disabled]="busy() || !counted() || !!d.blocker || !d.totalRows">Delete all facts</button>
             }
           </div>
           @if (message()) { <p class="notice" [class.bad]="error()">{{ message() }}</p> }
+          @if (counts.error()) { <p class="notice bad">The record counts could not be loaded. <button class="btn" type="button" (click)="counts.reload()">Try again</button></p> }
           @if (d.blocker) {
             <div class="notice warn"><strong>Facts cannot be deleted.</strong> {{ d.blocker }}
               <ul>@for (r of d.runs; track r.code) {
@@ -1577,9 +1579,9 @@ interface PeriodFactsDto {
             </div>
           }
           <div class="grid tiles" style="margin-bottom:14px">
-            <v-tile label="Fact records" [value]="d.totalRows" unit="num" />
-            <v-tile label="Storage (estimated)" [value]="size(d.totalEstimatedBytes)" unit="id" note="Share of each table's data and indexes" />
-            <v-tile label="Encounters" [value]="count(d, 'Encounter')" unit="num" />
+            <v-tile label="Fact records" [value]="counted() ? d.totalRows : null" unit="num" [note]="counted() ? null : 'Counting…'" />
+            <v-tile label="Storage (estimated)" [value]="counted() ? size(d.totalEstimatedBytes) : null" unit="id" [note]="counted() ? storageNote : 'Counting…'" />
+            <v-tile label="Episodes" [value]="counted() ? count(d, 'Encounter') : null" unit="num" [note]="counted() ? null : 'Counting…'" />
             <v-tile label="Calculation runs" [value]="d.runs.length" unit="num" [note]="d.runs.length ? 'Delete them before the facts' : 'None — facts can be deleted'" />
           </div>
           <section class="card">
@@ -1601,39 +1603,57 @@ export class PeriodDetail {
   error = signal(false);
   message = signal<string | null>(null);
   canEdit = computed(() => this.auth.can('masterdata.edit'));
+  /** The page without its record counts, so it shows at once; the counts come after in one query. */
   res = apiResource<PeriodFactsDto>(
     () => this.ctx.hospitalParam() ? `periods/${this.id()}/facts` : null,
+    () => ({ hospital: this.ctx.hospitalParam(), counts: 'false' }));
+  counts = apiResource<PeriodFactCount[]>(
+    () => this.ctx.hospitalParam() && this.res.value() ? `periods/${this.id()}/facts/counts` : null,
     () => ({ hospital: this.ctx.hospitalParam() }));
+  counted = computed(() => !!this.counts.value());
+  storageNote = "Share of each table's data and indexes";
+  /** The summary with the counts filled in once they arrive. */
+  view = computed<PeriodFactsDto | null>(() => {
+    const d = this.res.value();
+    if (!d) return null;
+    const c = this.counts.value();
+    if (!c) return d;
+    const by = new Map(c.map(x => [x.entity, x]));
+    const entities = d.entities.map(e => ({ ...e, rows: by.get(e.entity)?.rows ?? 0, estimatedBytes: by.get(e.entity)?.estimatedBytes ?? 0 }));
+    return { ...d, entities, counted: true,
+      totalRows: entities.reduce((t, e) => t + e.rows, 0), totalEstimatedBytes: entities.reduce((t, e) => t + e.estimatedBytes, 0) };
+  });
   size = formatBytes;
   count(d: PeriodFactsDto, entity: string): number { return d.entities.find(e => e.entity === entity)?.rows ?? 0; }
   cols = computed<Col<PeriodFactEntity>[]>(() => {
     const blocked = !!this.res.value()?.blocker;
+    const ready = this.counted();
     const cols: Col<PeriodFactEntity>[] = [
       { key: 'label', label: 'Entity', sub: r => r.note },
       { key: 'group', label: 'Group', type: 'chip' },
-      { key: 'rows', label: 'Records', type: 'num', dp: 0 },
-      { key: 'estimatedBytes', label: 'Storage (est.)', value: r => r.rows ? formatBytes(r.estimatedBytes) : '—' },
-      { key: 'share', label: 'Of whole table', value: r => r.tableRows ? `${pctText(r.rows, r.tableRows)} of ${r.tableRows.toLocaleString()} rows (${formatBytes(r.tableBytes)})` : '—' },
+      ready ? { key: 'rows', label: 'Records', type: 'num', dp: 0 } : { key: 'rows', label: 'Records', value: () => 'Counting…', sortable: false },
+      { key: 'estimatedBytes', label: 'Storage (est.)', value: r => !ready ? '…' : r.rows ? formatBytes(r.estimatedBytes) : '—' },
+      { key: 'share', label: 'Of whole table', value: r => !r.tableRows ? '—' : ready ? `${pctText(r.rows, r.tableRows)} of ${r.tableRows.toLocaleString()} rows (${formatBytes(r.tableBytes)})` : `${r.tableRows.toLocaleString()} rows (${formatBytes(r.tableBytes)})` },
       { key: 'alsoDeletes', label: 'Deleting also removes', value: r => r.alsoDeletes.length ? r.alsoDeletes.map(x => this.labelOf(x)).join(', ') : '—', sortable: false },
     ];
     if (this.canEdit()) {
       cols.push({
         key: 'delete', label: '', type: 'button', sortable: false,
-        button: r => r.deletable && r.rows > 0 && !blocked ? 'Delete' : null,
+        button: r => ready && r.deletable && r.rows > 0 && !blocked ? 'Delete' : null,
         onButton: r => void this.remove(r),
       });
     }
     return cols;
   });
   private labelOf(entity: string): string {
-    return this.res.value()?.entities.find(e => e.entity === entity)?.label.toLowerCase() ?? entity;
+    return this.view()?.entities.find(e => e.entity === entity)?.label.toLowerCase() ?? entity;
   }
   async remove(row: PeriodFactEntity | null): Promise<void> {
-    const d = this.res.value();
+    const d = this.view();
     const hospital = this.ctx.hospitalParam();
-    if (!d || !hospital || this.busy()) return;
+    if (!d || !d.counted || !hospital || this.busy()) return;
     if (row) {
-      const extra = row.alsoDeletes.filter(x => this.res.value()?.entities.find(e => e.entity === x)?.rows);
+      const extra = row.alsoDeletes.filter(x => d.entities.find(e => e.entity === x)?.rows);
       const also = extra.length ? `\n\nThis also deletes: ${extra.map(x => this.labelOf(x)).join(', ')}.` : '';
       if (!confirm(`Delete ${row.rows.toLocaleString()} ${row.label.toLowerCase()} of ${d.hospital} ${d.period}?${also}\n\nThis cannot be undone. Re-import the facts to restore them.`)) return;
     } else {
@@ -1652,6 +1672,7 @@ export class PeriodDetail {
         ? `Deleted ${removed.map(x => `${x.rows.toLocaleString()} ${this.labelOf(x.entity)}`).join(', ')}.`
         : 'Nothing to delete.');
       this.res.reload();
+      this.counts.reload();
     } catch (err) {
       this.error.set(true);
       this.message.set(toApiError(err).message);
@@ -1681,8 +1702,8 @@ function rerunWarning(r: { period: string; costingVersion: string; costingVersio
     force,
     effects: [
       `Delete the stored results for ${r.period} and recalculate them.`,
-      `Use costing model ${r.costingVersion} (${r.costingVersionStatus}) with its current percentages, and the current encounters and prices.`,
-      'May change the numbers on the Dashboard, Cost Centres, Procedures, Packages and Patient Encounters for this period.',
+      `Use costing model ${r.costingVersion} (${r.costingVersionStatus}) with its current percentages, and the current episodes and prices.`,
+      'May change the numbers on the Dashboard, Cost Centres, Procedures, Packages and Patient Episodes for this period.',
     ],
     current: [
       metrics.patientCost != null ? `Total cost: ${formatMoney(String(metrics.patientCost))}` : '',
@@ -1844,11 +1865,11 @@ export class Runs {
   /** The method follows the hospital: its Direct and Indirect costing, or the ledger-based engine. */
   steps = computed(() => this.ctx.hospitals().find(h => h.code === this.ctx.hospitalParam())?.usesCostingModel ? [
     'Takes one hospital and one period, under the costing model in effect at the end of that period: a published one, or a draft if none is published.',
-    'Checks the source data and warns about encounters with no services, and procedures with no Margin Cost % or no contracted price.',
+    'Checks the source data and warns about episodes with no services, and procedures with no Margin Cost % or no contracted price.',
     'Works out direct cost: contracted price × Margin Cost %, using the procedure\'s own %, else its type\'s, else All. A procedure with no % costs SAR 0.',
     'Works out indirect cost: contracted price × Overhead %, using the same order.',
-    'Adds encounter level overheads: the % of the encounter\'s contracted value up to its cap, or the fixed amount when there is no %.',
-    'Adds revenue and works out the margin for every encounter.',
+    'Adds episode level overheads: the % of the episode\'s contracted value up to its cap, or the fixed amount when there is no %.',
+    'Adds revenue and works out the margin for every episode.',
     'Stores the results for the Dashboard, Cost Centres, Packages and Procedure/Activity screens.',
     'Changes to Direct or Indirect costing reach those results only when a run is executed again.',
   ] : [
@@ -1856,7 +1877,7 @@ export class Runs {
     'Checks the source data, and stops if anything blocks costing.',
     'Finds the resource rates in effect and builds cost pools from the general ledger.',
     'Works out capacity and unit costs, then allocates support and overhead costs to activities.',
-    'Costs each procedure at standard, and each encounter from what it actually used.',
+    'Costs each procedure at standard, and each episode from what it actually used.',
     'Rolls costs up to packages and DRGs, and explains the variance from standard.',
     'Reconciles the result back to the general ledger, and stores it for the costing screens.',
   ]);
@@ -2066,7 +2087,7 @@ export class RunDetail {
   publish() { return this.act(() => firstValueFrom(this.api.post(`runs/${this.id()}/transition`, { to: 'PUBLISHED' })), 'Published. This run is now immutable.'); }
 }
 
-// ── Patient encounters ──────────────────────────────────────────────────────────
+// ── Patient episodes ──────────────────────────────────────────────────────────
 
 interface PatientEncounterRow {
   id: string; encounterNo: string; mrn: string; patient: string; segment: string; encType: string; department: string; payer: string; insurer?: string | null;
@@ -2075,9 +2096,11 @@ interface PatientEncounterRow {
   doctorFee?: string | number | null; doctorBilled?: string | number; staffMinutes?: string | number; materials?: string | number; medicine?: string | number; claimed?: string | number;
   /** VAT on the counted lines; Net + VAT is Invoice Billed. */
   vat?: string | number;
+  /** IPD, OR, OPD or ER. */
+  careArea?: string | null;
 }
 /** Resource and no-billable type have no dropdown, but the Dashboard's counts still open the list filtered by them. */
-const ENCOUNTER_FILTER_KEYS = ['department', 'resource', 'physician', 'insurer', 'encType', 'segment', 'noBillableType'] as const;
+const ENCOUNTER_FILTER_KEYS = ['department', 'resource', 'physician', 'insurer', 'careArea', 'encType', 'segment', 'noBillableType'] as const;
 type EncounterFilterKey = typeof ENCOUNTER_FILTER_KEYS[number];
 interface PatientEncounterPage { rows: PatientEncounterRow[]; total: number; page: number; pageSize: number; phiMasked: boolean; }
 interface PatientEncounterLine {
@@ -2136,7 +2159,7 @@ export class HisInvoicing {
     { key: 'invoiceType', label: 'Invoice type' },
     { key: 'name', label: 'Name' },
     { key: 'invoices', label: 'Invoices', type: 'num', dp: 0 },
-    { key: 'encounters', label: 'Encounters', type: 'num', dp: 0 },
+    { key: 'encounters', label: 'Episodes', type: 'num', dp: 0 },
     { key: 'patients', label: 'Patients', type: 'num', dp: 0 },
     { key: 'refunded', label: 'Refunded', type: 'money', dp: 0, blankZero: true },
     { key: 'revenue', label: 'Revenue', type: 'money', dp: 0 },
@@ -2147,13 +2170,13 @@ export class HisInvoicing {
   selector: 'v-patient-encounters',
   imports: [RouterLink, ...UI],
   template: `
-    <v-page title="Patient Encounters" purpose="Patient encounters in the selected period and what was invoiced for each. Patient names show only with phi.view (FR-0.7).">
+    <v-page title="Patient Episodes" purpose="Patient episodes in the selected period and what was invoiced for each. Patient names show only with phi.view (FR-0.7).">
       @if (billedPackageId()) {
-        <p class="muted">Showing encounters billed to this package. <a [routerLink]="['/patient-encounters']" [queryParams]="{ billedPackageId: null }" queryParamsHandling="merge">Show all</a></p>
+        <p class="muted">Showing episodes billed to this package. <a [routerLink]="['/patient-encounters']" [queryParams]="{ billedPackageId: null }" queryParamsHandling="merge">Show all</a></p>
       }
-      @if (resourceName(); as name) { <p class="muted">Showing encounters for resource: {{ name }}.</p> }
+      @if (resourceName(); as name) { <p class="muted">Showing episodes for resource: {{ name }}.</p> }
       @if (filters().noBillableType; as type) {
-        <p class="muted">Showing encounters with non-billable procedures{{ type === 'ALL' ? '' : ' of type: ' + type.charAt(0) + type.slice(1).toLowerCase() }}.</p>
+        <p class="muted">Showing episodes with non-billable procedures{{ type === 'ALL' ? '' : ' of type: ' + type.charAt(0) + type.slice(1).toLowerCase() }}.</p>
       }
       <section class="card filters">
         @for (f of filterDefs(); track f.key) {
@@ -2167,11 +2190,11 @@ export class HisInvoicing {
         <button class="btn clear" type="button" (click)="clearFilters()" [disabled]="!anyFilter()">Clear filters</button>
       </section>
       <div class="list-head">
-        <input type="search" placeholder="Encounter number or MRN" [value]="search()" (change)="runSearch($any($event.target).value)" (input)="searchCleared($any($event.target).value)" (paste)="searchPasted($event)" aria-label="Search by encounter number or MRN" style="width:min(16rem,100%)" />
+        <input type="search" placeholder="Episode number or MRN" [value]="search()" (change)="runSearch($any($event.target).value)" (input)="searchCleared($any($event.target).value)" (paste)="searchPasted($event)" aria-label="Search by episode number or MRN" style="width:min(16rem,100%)" />
         @if (last(); as r) {
           <div class="row pager">
             <button class="btn" type="button" [disabled]="page() <= 1" (click)="page.set(page() - 1)">Previous</button>
-            <span class="muted">Page {{ r.data.page }} of {{ pages() }} · {{ r.data.total }} encounters</span>
+            <span class="muted">Page {{ r.data.page }} of {{ pages() }} · {{ r.data.total }} episodes</span>
             <button class="btn" type="button" [disabled]="page() >= pages()" (click)="page.set(page() + 1)">Next</button>
           </div>
         }
@@ -2179,7 +2202,7 @@ export class HisInvoicing {
       <v-state [loading]="res.isLoading() && !last()" [error]="res.error()">
         @if (last(); as r) {
           <div [class.reloading]="res.isLoading()">
-            <v-table [rows]="r.data.rows" [columns]="cols()" [serverSort]="tableSort()" (sortChange)="sortFromHeader($event)" caption="Patient encounters" empty="No encounters in this period." />
+            <v-table [rows]="r.data.rows" [columns]="cols()" [serverSort]="tableSort()" (sortChange)="sortFromHeader($event)" caption="Patient episodes" empty="No episodes in this period." />
           </div>
         }
       </v-state>
@@ -2211,14 +2234,15 @@ export class PatientEncounters {
     const defs: { key: EncounterFilterKey; label: string; options: { value: string; label: string }[] }[] = [
       { key: 'department', label: 'Department', options: o?.['departments'] ?? [] }, { key: 'physician', label: 'Physician', options: o?.['physicians'] ?? [] },
       { key: 'insurer', label: 'Insurer', options: o?.['insurers'] ?? [] },
-      { key: 'encType', label: 'Encounter type', options: o?.['encounterTypes'] ?? [] }, { key: 'segment', label: 'Patient segment', options: o?.['segments'] ?? [] },
+      { key: 'careArea', label: 'Care area', options: o?.['careAreas'] ?? [] },
+      { key: 'encType', label: 'Episode type', options: o?.['encounterTypes'] ?? [] }, { key: 'segment', label: 'Patient segment', options: o?.['segments'] ?? [] },
     ];
     // A filter from a link shows as selected straight away, even before or without its choice in the list.
     const chosen = this.filters();
     return defs.map(d => {
       const value = chosen[d.key];
       if (!value || d.options.some(x => x.value === value)) return d;
-      const label = !o ? 'Loading…' : value === 'none' ? 'Not assigned' : 'No encounters';
+      const label = !o ? 'Loading…' : value === 'none' ? 'Not assigned' : 'No episodes';
       return { ...d, options: [{ value, label }, ...d.options] };
     });
   });
@@ -2299,8 +2323,9 @@ export class PatientEncounters {
   cols = computed<Col<PatientEncounterRow>[]>(() => {
     const cols: Col<PatientEncounterRow>[] = [
       { key: 'admitAt', label: 'Date', type: 'date' },
-      { key: 'encounterNo', label: 'Encounter', link: r => `/patient-encounters/${r.id}`, sub: this.auth.can('phi.view') ? r => r.patient : undefined },
+      { key: 'encounterNo', label: 'Episode', link: r => `/patient-encounters/${r.id}`, sub: this.auth.can('phi.view') ? r => r.patient : undefined },
       { key: 'mrn', label: 'MRN' },
+      { key: 'careArea', label: 'Care area', type: 'chip', sortable: false },
     ];
     if (this.canRevenue()) cols.push(
       { key: 'gross', label: 'Gross', type: 'money', blankZero: true }, { key: 'discount', label: 'Discount', type: 'money', blankZero: true },
@@ -2318,7 +2343,7 @@ export class PatientEncounters {
 }
 
 type ChargesDto = components['schemas']['ReadQueriesEncounterCharges'];
-/** A package or procedure on the encounter, with the run's stored figures (as the doctor page's work rows). */
+/** A package or procedure on the episode, with the run's stored figures (as the doctor page's work rows). */
 interface EncounterWork {
   id: string | null; code: string; name: string; encounters: number; performed: number; feeBilled: number | string;
   consumablesBilled: number | string; consumablesCovered: number | string; medicineBilled: number | string;
@@ -2326,7 +2351,7 @@ interface EncounterWork {
   /** Packages only: the package's figures split by invoice (encounterNo is the invoice number). */
   lines?: EncounterLine[] | null;
 }
-/** One invoice line of a package or procedure on the encounter, with what the run gives the row from it. */
+/** One invoice line of a package or procedure on the episode, with what the run gives the row from it. */
 interface EncounterLine {
   invoice: string; line: number; code: string | null; item: string | null; packageLine: boolean; feeBilled: number | string;
   consumablesBilled: number | string; consumablesCovered: number | string; medicineBilled: number | string; medicineCovered: number | string;
@@ -2345,7 +2370,7 @@ interface EncounterTotals {
   template: `
     <v-state [loading]="res.isLoading()" [error]="res.error()">
       @if (res.value(); as r) {
-        <v-page [title]="'Encounter ' + r.data.encounter.encounterNo" [purpose]="(canPhi() ? r.data.encounter.patient + ' · ' : '') + 'MRN ' + r.data.encounter.mrn + ' · ' + r.data.encounter.department">
+        <v-page [title]="'Episode ' + r.data.encounter.encounterNo" [purpose]="(canPhi() ? r.data.encounter.patient + ' · ' : '') + 'MRN ' + r.data.encounter.mrn + ' · ' + r.data.encounter.department">
           @let m = mainTiles(r.data);
           <div class="grid tiles">
             <v-tile label="Primary Doctor" [value]="m?.primaryDoctor ?? null" unit="id" compact
@@ -2359,14 +2384,14 @@ interface EncounterTotals {
           <section class="card" style="margin-top:14px">
             <h2>Packages performed</h2>
             <v-table [rows]="workRows(w.packages, 'pkg')" [columns]="packageWorkCols" [total]="workSum(w.packages)" caption="Packages performed"
-              empty="No packages billed on this encounter in this period." />
+              empty="No packages billed on this episode in this period." />
           </section>
           }
           @if (w.procedures.length) {
           <section class="card" style="margin-top:14px">
             <h2>Procedures performed (not packaged)</h2>
             <v-table paged [rows]="workRows(w.procedures, 'proc')" [columns]="procedureWorkCols" [total]="workSum(w.procedures)" caption="Procedures performed (not packaged)"
-              empty="No procedures billed outside a package on this encounter in this period." />
+              empty="No procedures billed outside a package on this episode in this period." />
           </section>
           }
           @if (r.data.charges; as c) {
@@ -2402,10 +2427,10 @@ interface EncounterTotals {
           }
           <section class="card his-source" style="margin-top:14px">
             <h2>HIS source</h2>
-            <p class="muted">The values loaded from HIS for this encounter, under the HIS table and column each came from, for checking against HIS.</p>
+            <p class="muted">The values loaded from HIS for this episode, under the HIS table and column each came from, for checking against HIS.</p>
             <v-state [loading]="his.isLoading()" [error]="his.error()">
               @if (his.value(); as h) {
-                <v-table [rows]="h.data.fields" [columns]="hisFieldCols" caption="Encounter fields" />
+                <v-table [rows]="h.data.fields" [columns]="hisFieldCols" caption="Episode fields" />
                 @for (t of hisTables(h.data); track t.title) {
                   <details style="margin-top:12px">
                     <summary><strong>{{ t.title }} ({{ t.rows.length }})</strong> <span class="muted">{{ t.source }}</span></summary>
@@ -2421,11 +2446,11 @@ interface EncounterTotals {
   `,
 })
 export class EncounterDetail {
-  /** All items (package and non-package) on the encounter, as the doctor and department pages add them up. */
+  /** All items (package and non-package) on the episode, as the doctor and department pages add them up. */
   info = packageTileInfo('encounter', true);
   /** A doctor's id as HIS shows it: no hospital prefix and no "DOC-". */
   doctorCode(code: string): string { return code.slice(code.indexOf('.') + 1).replace(/^DOC-/i, ''); }
-  /** The encounter's package and procedure work from the run's stored rows. */
+  /** The episode's package and procedure work from the run's stored rows. */
   work(d: unknown): { packages: EncounterWork[]; procedures: EncounterWork[] } {
     const x = d as { packageWork?: EncounterWork[]; procedureWork?: EncounterWork[] };
     return { packages: x.packageWork ?? [], procedures: x.procedureWork ?? [] };
@@ -2553,7 +2578,7 @@ export class EncounterDetail {
     ...this.moneyCols(),
     { key: 'cost', label: 'Cost', type: 'money', blankZero: true, bad: r => this.canRevenue() && r.cost > r.net },
   ]);
-  /** The invoices behind this encounter's lines, as INV-2-7-1 and REV-2-7-1 both hold invoice 7. */
+  /** The invoices behind this episode's lines, as INV-2-7-1 and REV-2-7-1 both hold invoice 7. */
   invoiceText(lines: PatientEncounterLine[]): string {
     const invoices = [...new Set(lines.map(l => /^(?:INV|REV)-\d+-(\d+)-\d+$/i.exec(l.sourceRef)?.[1]).filter(Boolean))].sort((a, b) => Number(a) - Number(b));
     if (!invoices.length) return '';

@@ -27,7 +27,7 @@ public static class SeedTemplates
     public static readonly PoolDef[] Pools =
     [
         new("PHYS-COMP", "Physician compensation", "Consultant time funded on the OPD hub.", "DIRECT", "TDABC", "MDMIN"),
-        new("OPD-OPS", "Outpatient clinic operations", "Clinic overhead allocated by encounter volume.", "INDIRECT", "ABC", "ENCOUNTER"),
+        new("OPD-OPS", "Outpatient clinic operations", "Clinic overhead allocated by episode volume.", "INDIRECT", "ABC", "ENCOUNTER"),
         new("ER-STAFF", "Emergency staffing & bays", "ER physicians, nurses and treatment bays.", "DIRECT", "TDABC", "ERVISIT"),
         new("WARD-NURSE", "Ward nursing & beds", "Medical-ward nursing and bed space.", "DIRECT", "TDABC", "NURSEHR"),
         new("ICU-NURSE", "ICU nursing", "Intensive-care nursing hours.", "DIRECT", "TDABC", "NURSEHR"),
@@ -57,8 +57,8 @@ public static class SeedTemplates
     public static readonly DriverDef[] Drivers =
     [
         new("MDMIN", "Physician minutes", "Productive clinical minutes by physicians.", "MIN", "TIME", "HR-PAYROLL", "roster.clinical_minutes", "SUM(clinical_sessions) x session_minutes", "TDABC", "PHYS-COMP"),
-        new("ENCOUNTER", "Number of encounters", "Patient encounters attributed to the cost center.", "CASE", "VOLUME", "VIDA-HIS", "encounter.count", "COUNT(DISTINCT encounter_id)", "ABC", "OPD-OPS"),
-        new("ERVISIT", "Emergency visits", "Emergency department registrations.", "CASE", "VOLUME", "VIDA-HIS", "encounter.er_count", "COUNT(encounters where type = ER)", "ABC", "ER-STAFF"),
+        new("ENCOUNTER", "Number of episodes", "Patient episodes attributed to the cost center.", "CASE", "VOLUME", "VIDA-HIS", "encounter.count", "COUNT(DISTINCT encounter_id)", "ABC", "OPD-OPS"),
+        new("ERVISIT", "Emergency visits", "Emergency department registrations.", "CASE", "VOLUME", "VIDA-HIS", "encounter.er_count", "COUNT(episodes where type = ER)", "ABC", "ER-STAFF"),
         new("NURSEHR", "Nursing hours", "Productive nursing hours worked at the bedside.", "HOUR", "TIME", "HR-PAYROLL", "roster.productive_hours", "SUM(worked_hours) - SUM(non_productive_hours)", "TDABC", "WARD-NURSE"),
         new("ICUDAY", "ICU patient days", "Midnight census days in the intensive care unit.", "DAY", "VOLUME", "BED-MGMT", "census.icu_days", "COUNT(midnight census where unit = ICU)", "ABC", "ICU-BED"),
         new("ORMIN", "Operating room minutes", "Wheels-in to wheels-out theatre time per case.", "MIN", "TIME", "OR-SYSTEM", "case.theatre_minutes", "SUM(wheels_out - wheels_in) in minutes", "TDABC", "OR-FAC"),
@@ -96,7 +96,7 @@ public static class SeedTemplates
         new("HR-HEAD", "HR by headcount", 2, 40, "WEIGHTED", "STEP_DOWN", 1m, "ADMIN-HR", "HEADCOUNT"),
         new("FIN-WAU", "Finance by weighted activity", 2, 50, "WEIGHTED", "STEP_DOWN", 1m, "ADMIN-FIN", "WAU"),
         new("PHARM-VAL", "Pharmacy ops by drug value", 3, 10, "VALUE", "ABC", 1m, "PHARM-OPS", "DRUGVAL"),
-        new("OPD-ENC", "OPD ops by encounters", 3, 20, "VOLUME", "ABC", 1m, "OPD-OPS", "ENCOUNTER"),
+        new("OPD-ENC", "OPD ops by episodes", 3, 20, "VOLUME", "ABC", 1m, "OPD-OPS", "ENCOUNTER"),
     ];
 
     public static readonly MdRoleDef[] MdRoles =

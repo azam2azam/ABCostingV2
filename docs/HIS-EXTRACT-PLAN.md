@@ -324,7 +324,7 @@ Only rows whose **clinical/invoice date** falls in `[From, To)`.
 
 `payerCode`: invoice/admission `CompanyID` → `PAY-{id}`, else `PAY-SELF`.  
 `departmentCode`: clinic / admitting clinic / ER clinic as in the mapping doc.  
-`isSurgical`: IP with an `INP_OTReservation` in the stay.  
+`isSurgical`: IP with an `INP_OTReservation` in the stay that was not cancelled (`Status` not 4 or 5). It puts the episode in the OR care area (see `Verita.Domain.CareArea`).  
 `lengthOfStay`: discharge days or datediff; OP/ER = 0.
 
 Filter OP to visits that happened (`Status` not cancelled; prefer `IsVisitClosed = 1` or actual visit times — confirm with `probe` + a sample). Filter invoices to non-cancelled `Status`.

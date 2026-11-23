@@ -6,7 +6,7 @@
       "label": "Summary",
       "permission": "dashboard.view",
       "path": "dashboard",
-      "keywords": { "summary": 1.0, "overview": 1.0, "dashboard": 1.0, "headline": 0.8, "kpi": 1.0, "total": 0.5, "revenue": 0.6, "margin": 0.4, "overall": 0.6, "cost": 0.35, "spend": 0.4, "encounter": 0.3, "inpatient": 0.5, "outpatient": 0.5, "emergency": 0.5 },
+      "keywords": { "summary": 1.0, "overview": 1.0, "dashboard": 1.0, "headline": 0.8, "kpi": 1.0, "total": 0.5, "revenue": 0.6, "margin": 0.4, "overall": 0.6, "cost": 0.35, "spend": 0.4, "encounter": 0.3, "episode": 0.3, "inpatient": 0.5, "outpatient": 0.5, "emergency": 0.5 },
       "phrases": { "how are we doing": 1.0, "total cost": 0.9, "total revenue": 0.9, "overall cost": 0.9, "big picture": 0.9, "ip summary": 0.9, "op summary": 0.9, "er summary": 0.9, "ip dashboard": 0.8, "op dashboard": 0.8, "er dashboard": 0.8 },
       "entities": {},
       "required": [],
@@ -37,13 +37,13 @@
       "permission": "costing.view",
       "path": "procedures",
       "keywords": { "expensive": 0.9, "costliest": 1.0, "top": 0.4, "highest": 0.4, "biggest": 0.4, "largest": 0.4, "procedure": 0.5, "activity": 0.3, "cheapest": 0.9, "lowest": 0.3, "volume": 0.4, "busiest": 0.8, "common": 0.5 },
-      "phrases": { "most expensive": 1.0, "highest cost": 0.9, "top procedure": 0.9, "most common": 0.9, "highest volume": 0.9, "most performed": 0.9, "procedures by encounters": 1.0, "procedures by volume": 1.0, "procedures by total cost": 1.0, "procedures by cost": 1.0, "procedures by count": 1.0 },
+      "phrases": { "most expensive": 1.0, "highest cost": 0.9, "top procedure": 0.9, "most common": 0.9, "highest volume": 0.9, "most performed": 0.9, "procedures by encounters": 1.0, "procedures by episodes": 1.0, "procedures by volume": 1.0, "procedures by total cost": 1.0, "procedures by cost": 1.0, "procedures by count": 1.0 },
       "entities": {},
       "required": [],
       "uses": ["hospital", "period", "limit", "order", "metric", "measure"],
       "drilldown": false,
       "compare": false,
-      "examples": ["Most expensive procedures", "Top 10 procedures by volume", "Top 10 procedures by encounters", "Top 10 procedures by total cost", "Cheapest procedures this month"],
+      "examples": ["Most expensive procedures", "Top 10 procedures by volume", "Top 10 procedures by episodes", "Top 10 procedures by total cost", "Cheapest procedures this month"],
       "suggestions": ["Top 20", "By volume", "Which packages lose money?"]
     },
     {
@@ -98,15 +98,15 @@
       "label": "Non-billable services",
       "permission": "profitability.view",
       "path": "dashboard",
-      "keywords": { "nonbillable": 1.0, "unbilled": 1.0, "uncharged": 0.9, "billable": 0.4, "free": 0.3, "charge": 0.2, "service": 0.2, "line": 0.2, "encounter": 0.1 },
+      "keywords": { "nonbillable": 1.0, "unbilled": 1.0, "uncharged": 0.9, "billable": 0.4, "free": 0.3, "charge": 0.2, "service": 0.2, "line": 0.2, "encounter": 0.1, "episode": 0.1 },
       "phrases": { "non billable": 1.0, "no billable": 1.0, "not billable": 1.0, "zero price": 0.9, "no price": 0.8, "no charge": 0.8, "not charged": 0.8, "free of charge": 0.9, "billable vs": 0.6 },
       "entities": {},
       "required": [],
       "uses": ["hospital", "period", "limit", "order"],
       "drilldown": true,
       "compare": true,
-      "examples": ["Non-billable encounters this period", "Which services were invoiced at no price?", "Billable vs non-billable by procedure type"],
-      "suggestions": ["Compare with billable", "Open Summary", "Non-billable encounters"]
+      "examples": ["Non-billable episodes this period", "Which services were invoiced at no price?", "Billable vs non-billable by procedure type"],
+      "suggestions": ["Compare with billable", "Open Summary", "Non-billable episodes"]
     },
     {
       "id": "variance.top",

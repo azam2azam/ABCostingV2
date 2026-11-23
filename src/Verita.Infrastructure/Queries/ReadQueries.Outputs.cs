@@ -773,7 +773,7 @@ public sealed partial class ReadQueries
         if (id is { } existingId)
         {
             row = await db.EncounterOverheads.FirstOrDefaultAsync(x => x.Id == existingId && x.HospitalId == s.Hospital.Id && x.CostingVersionId == s.Version.Id, ct)
-                ?? throw AppError.NotFound("Encounter overhead");
+                ?? throw AppError.NotFound("Episode overhead");
             row.CostCenterId = cc.Id;
             row.Description = description;
             row.OverheadPct = pct;
@@ -801,7 +801,7 @@ public sealed partial class ReadQueries
     {
         EnsureVersionEditable(s);
         var row = await db.EncounterOverheads.FirstOrDefaultAsync(x => x.Id == id && x.HospitalId == s.Hospital.Id && x.CostingVersionId == s.Version.Id, ct)
-            ?? throw AppError.NotFound("Encounter overhead");
+            ?? throw AppError.NotFound("Episode overhead");
         db.EncounterOverheads.Remove(row);
         await db.SaveChangesAsync(ct);
         await audit.WriteAsync(p, "DELETE", "EncounterOverhead", row.Id.ToString(), row.CostCenterId.ToString(), ct: ct);

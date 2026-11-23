@@ -29,7 +29,7 @@ export const activityResourceCols: Col<ComponentDto>[] = [
   ...componentCols.slice(1),
 ];
 
-/** Recipe resources scaled by activity occurrences (per procedure unit, or billed qty on an encounter). */
+/** Recipe resources scaled by activity occurrences (per procedure unit, or billed qty on an episode). */
 export function recipeToComponents(
   activityId: string,
   activityQty: number,
@@ -151,7 +151,7 @@ export class Procedures {
     { key: 'name', label: 'Name', minWidth: '22rem' },
     { key: 'performed', label: 'Cases', type: 'num', dp: 0, blankZero: true },
     { key: 'materialsBilled', label: 'Consumables', type: 'money', dp: 0, blankZero: true },
-    // Length of stay of the encounters with the lines: procedure lines carry no ward days.
+    // Length of stay of the episodes with the lines: procedure lines carry no ward days.
     { key: 'avgLos', label: 'Avg. LOS', type: 'num', dp: 1, blankZero: true,
       value: r => Number(r.encounters) ? Number(r.stayDays ?? 0) / Number(r.encounters) : 0 },
     { key: 'feeBilled', label: 'Invoice Billed', type: 'money', dp: 0, blankZero: true },
@@ -161,7 +161,7 @@ export class Procedures {
   ];
 }
 
-/** A doctor's lines of the procedure billed outside a package (the run's stored rows), with the encounters under it. */
+/** A doctor's lines of the procedure billed outside a package (the run's stored rows), with the episodes under it. */
 interface ProcDoctorEncounter {
   encounterId: string; encounterNo: string; performed: number; feeBilled: number | string; consumablesBilled: number | string;
   medicineBilled: number | string; claimsReceived: number | string | null; rejectedClaims: number | string;
@@ -215,14 +215,14 @@ export class ProcedureDetail {
   hisProcedureId = hisProcedureId;
   res = catalogueResource<ProcedureDetailDto & { doctors?: ProcDoctorRow[] }>(() => `procedures/${this.id()}`);
   info = procedureTileInfo();
-  /** Doctors whose encounters are shown under them. */
+  /** Doctors whose episodes are shown under them. */
   openDoctors = signal<ReadonlySet<string>>(new Set());
   private doctorKey(r: ProcDoctorRow): string { return r.id ?? 'none'; }
   private toggleDoctor(r: ProcDoctorTableRow): void {
     const key = this.doctorKey(r);
     this.openDoctors.update(open => { const next = new Set(open); if (next.has(key)) next.delete(key); else next.add(key); return next; });
   }
-  /** Doctor rows, each open one followed by its encounters (encounter number under Doctor, that encounter's figures). */
+  /** Doctor rows, each open one followed by its episodes (episode number under Doctor, that episode's figures). */
   doctorRows = computed<ProcDoctorTableRow[]>(() => {
     const open = this.openDoctors();
     return (this.res.value()?.data.doctors ?? []).flatMap(d => {
@@ -233,7 +233,7 @@ export class ProcedureDetail {
   });
   doctorCols: Col<ProcDoctorTableRow>[] = [
     { key: 'toggle', label: '', type: 'button', sortable: false, icon: () => 'chevron',
-      button: r => r.kind === 'doctor' && r.encounterRows?.length ? (this.openDoctors().has(this.doctorKey(r)) ? 'Hide encounters' : 'Show encounters') : null,
+      button: r => r.kind === 'doctor' && r.encounterRows?.length ? (this.openDoctors().has(this.doctorKey(r)) ? 'Hide episodes' : 'Show episodes') : null,
       expanded: r => r.kind === 'doctor' && this.openDoctors().has(this.doctorKey(r)), onButton: r => this.toggleDoctor(r) },
     { key: 'name', label: 'Doctor', minWidth: '16rem', sortable: false,
       link: r => r.kind === 'encounter' ? `/patient-encounters/${r.encounterId}` : r.id && r.code ? `/doctors/${r.id}` : null },
@@ -311,7 +311,7 @@ export class Packages {
 
 
 type DoctorRow = PackageDetailDto['doctors'][number];
-/** A doctor row, or one of its encounters shown under it. */
+/** A doctor row, or one of its episodes shown under it. */
 type DoctorTableRow = DoctorRow & { kind: 'doctor' | 'encounter'; encounterId?: string; encounterNo?: string };
 
 @Component({
@@ -330,7 +330,7 @@ type DoctorTableRow = DoctorRow & { kind: 'doctor' | 'encounter'; encounterId?: 
           </div>
           <section class="card" style="margin-top:14px">
             <h2>Doctors who performed this package</h2>
-            <p class="muted">Doctor on each billed package line in {{ r.meta.period }}, counted the same way as the encounter count.</p>
+            <p class="muted">Doctor on each billed package line in {{ r.meta.period }}, counted the same way as the episode count.</p>
             <v-table [rows]="doctorRows()" [columns]="doctorCols" [total]="doctorTotal()" caption="Doctors who performed this package" empty="No billed package lines in this period." />
           </section>
           <section class="card"><h2>Standard composition</h2><v-table [rows]="r.data.components" [columns]="compCols" [total]="compTotal()" /></section>
@@ -351,14 +351,14 @@ export class PackageDetail {
     { key: 'price', label: 'Contracted price', type: 'money' },
   ];
   /** Money columns are what HIS billed and claimed (not cost). Share/Fee is "—" for facts extracted before the share was. */
-  /** Doctors whose encounters are shown under them. */
+  /** Doctors whose episodes are shown under them. */
   openDoctors = signal<ReadonlySet<string>>(new Set());
   private doctorKey(r: DoctorRow): string { return r.id ?? 'none'; }
   toggleDoctor(r: DoctorRow): void {
     const key = this.doctorKey(r);
     this.openDoctors.update(open => { const next = new Set(open); if (next.has(key)) next.delete(key); else next.add(key); return next; });
   }
-  /** Doctor rows, each open one followed by its encounters (encounter number under Doctor, Performed blank, that encounter's figures). */
+  /** Doctor rows, each open one followed by its episodes (episode number under Doctor, Performed blank, that episode's figures). */
   doctorRows = computed<DoctorTableRow[]>(() => {
     const open = this.openDoctors();
     return (this.res.value()?.data.doctors ?? []).flatMap(d => {
@@ -371,7 +371,7 @@ export class PackageDetail {
   });
   doctorCols: Col<DoctorTableRow>[] = [
     { key: 'toggle', label: '', type: 'button', sortable: false, icon: () => 'chevron',
-      button: r => r.kind === 'doctor' && r.encounterRows?.length ? (this.openDoctors().has(this.doctorKey(r)) ? 'Hide encounters' : 'Show encounters') : null,
+      button: r => r.kind === 'doctor' && r.encounterRows?.length ? (this.openDoctors().has(this.doctorKey(r)) ? 'Hide episodes' : 'Show episodes') : null,
       expanded: r => r.kind === 'doctor' && this.openDoctors().has(this.doctorKey(r)), onButton: r => this.toggleDoctor(r) },
     { key: 'name', label: 'Doctor', minWidth: '16rem', sortable: false,
       value: r => r.name,
@@ -434,7 +434,7 @@ export class PackageDetail {
       note: values.map(([v, label]) => `${formatMoney(String(v), { dp: 0 })} ${label}`).join(' + '),
     };
   }
-  /** Sum of the doctor rows; they add up to the package's figures on Packages (Performed can exceed Cases when an encounter has several doctors). */
+  /** Sum of the doctor rows; they add up to the package's figures on Packages (Performed can exceed Cases when an episode has several doctors). */
   doctorTotal = computed(() => {
     const rows = this.res.value()?.data.doctors ?? [];
     if (!rows.length) return null;

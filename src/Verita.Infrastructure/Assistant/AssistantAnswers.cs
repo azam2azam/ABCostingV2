@@ -116,7 +116,7 @@ public sealed class AssistantAnswers(ReadQueries q, DataHubService hub)
             pick = [first > 0 ? first : numeric[0]];
         }
         var head = t.Columns[pick[0]];
-        var format = head.Contains('%') ? "pct" : head is "Encounters" or "Cases" or "Volume" or "Billable" or "Non-billable" or "Issues" ? "count" : "money";
+        var format = head.Contains('%') ? "pct" : head is "Episodes" or "Encounters" or "Cases" or "Volume" or "Billable" or "Non-billable" or "Issues" ? "count" : "money";
         return new("chart", t.Title, [t.Columns[label], .. pick.Select(c => t.Columns[c])],
             rows.Select(r => new[] { r[label] }.Concat(pick.Select(c => Num(r[c])!.Value.ToString(System.Globalization.CultureInfo.InvariantCulture))).ToArray()).ToArray(), format);
     }
@@ -131,8 +131,8 @@ public sealed class AssistantAnswers(ReadQueries q, DataHubService hub)
     private static string EncLabel(string? enc) => enc switch { "IP" => "Inpatient (IP)", "OP" => "Outpatient (OP)", "ER" => "Emergency (ER)", _ => "" };
     private static (string Label, string Path) DashboardScreen(string? enc) => enc switch
     {
-        "IP" => ("Open IP Dashboard", "ip-dashboard"),
-        "OP" => ("Open OP Dashboard", "op-dashboard"),
+        "IP" => ("Open IPD Dashboard", "ip-dashboard"),
+        "OP" => ("Open OPD Dashboard", "op-dashboard"),
         "ER" => ("Open ER Dashboard", "er-dashboard"),
         _ => ("Open Summary", "dashboard"),
     };
@@ -147,7 +147,7 @@ public sealed class AssistantAnswers(ReadQueries q, DataHubService hub)
         foreach (var tile in d.Headline) a.Figures.Add(new(tile.Key, tile.Label, tile.Value, tile.Unit == "count" ? "" : tile.Unit));
         var total = t.GetValueOrDefault("total")?.Value ?? 0m;
         var scope = string.IsNullOrEmpty(EncLabel(enc)) ? Where(s) : $"{EncLabel(enc)} at {Where(s)}";
-        var encWord = enc is null ? "encounters" : $"{enc} encounters";
+        var encWord = enc is null ? "episodes" : $"{enc} episodes";
         var text = $"{scope}: total cost is {Cur(s)} {Money(total)} — direct {Money(t.GetValueOrDefault("direct")?.Value ?? 0)}, " +
                    $"indirect {Money(t.GetValueOrDefault("indirect")?.Value ?? 0)} and overheads {Money(t.GetValueOrDefault("overheads")?.Value ?? 0)}, " +
                    $"over {Number(t.GetValueOrDefault("encounters")?.Value ?? 0)} {encWord}.";
@@ -162,9 +162,9 @@ public sealed class AssistantAnswers(ReadQueries q, DataHubService hub)
             if (p.Can("profitability.view"))
             {
                 // The same breakdown the dashboard opens with: encounter type on Summary, department on IP/OP, patient segment on ER.
-                var (dimKey, dimLabel) = enc is null ? ("encounterType", "Encounter type") : enc == "ER" ? ("segment", "Patient segment") : ("department", "Department");
+                var (dimKey, dimLabel) = enc is null ? ("encounterType", "Episode type") : enc == "ER" ? ("segment", "Patient segment") : ("department", "Department");
                 var pr = await q.ProfitabilityAsync(s, p, dimKey, ct, enc);
-                a.Blocks.Add(new("table", $"By {dimLabel.ToLowerInvariant()} (highest cost first)", [dimLabel, "Encounters", "Total cost", "Margin %"],
+                a.Blocks.Add(new("table", $"By {dimLabel.ToLowerInvariant()} (highest cost first)", [dimLabel, "Episodes", "Total cost", "Margin %"],
                     pr.Rows.OrderByDescending(r => r.Total).Take(8).Select(r => new[] { r.Label, Number(r.Encounters), Money(r.Total), Pct(r.MarginPct) }).ToArray()));
             }
             a.Text += " The breakdown by cost nature is below.";
@@ -174,8 +174,9 @@ public sealed class AssistantAnswers(ReadQueries q, DataHubService hub)
         a.Links.Add(Screen(label, path, s));
         if (enc is null)
         {
-            a.Links.Add(Screen("Open IP Dashboard", "ip-dashboard", s));
-            a.Links.Add(Screen("Open OP Dashboard", "op-dashboard", s));
+            a.Links.Add(Screen("Open IPD Dashboard", "ip-dashboard", s));
+            a.Links.Add(Screen("Open OR Dashboard", "or-dashboard", s));
+            a.Links.Add(Screen("Open OPD Dashboard", "op-dashboard", s));
             a.Links.Add(Screen("Open ER Dashboard", "er-dashboard", s));
         }
         else a.Links.Add(Screen("Open Summary", "dashboard", s));
@@ -259,7 +260,7 @@ public sealed class AssistantAnswers(ReadQueries q, DataHubService hub)
         var what = rank switch
         {
             "volume" => bottom ? "least performed" : "most performed",
-            "encounters" => bottom ? "fewest encounters" : "most encounters",
+            "encounters" => bottom ? "fewest episodes" : "most episodes",
             "total" => bottom ? "lowest total cost" : "highest total cost",
             "revenue" => bottom ? "lowest revenue" : "highest revenue",
             _ => bottom ? "cheapest" : "most expensive",
@@ -267,7 +268,7 @@ public sealed class AssistantAnswers(ReadQueries q, DataHubService hub)
         var f = picked[0];
         a.Text = rank == "encounters" || rank == "revenue"
             ? $"The {picked.Count} procedures with the {what} in {Where(s)}. " +
-              $"First is {f.Name} ({f.Code}) with " + (rank == "encounters" ? $"{Number(Encounters(f))} encounters" : $"{Cur(s)} {Money(f.Revenue)} revenue") + "."
+              $"First is {f.Name} ({f.Code}) with " + (rank == "encounters" ? $"{Number(Encounters(f))} episodes" : $"{Cur(s)} {Money(f.Revenue)} revenue") + "."
             : $"The {picked.Count} {what} procedures in {Where(s)}. First is {f.Name} ({f.Code}) at " + rank switch
             {
                 "volume" => $"{Number(f.Volume)} performed",
@@ -275,7 +276,7 @@ public sealed class AssistantAnswers(ReadQueries q, DataHubService hub)
                 _ => $"{Cur(s)} {Money(f.UnitCost)} per unit",
             } + ".";
         var cols = new List<string> { "#", "Code", "Procedure" };
-        if (rank == "encounters") cols.Add("Encounters");
+        if (rank == "encounters") cols.Add("Episodes");
         cols.Add("Volume");
         cols.Add("Unit cost");
         cols.Add("Total cost");
@@ -403,7 +404,7 @@ public sealed class AssistantAnswers(ReadQueries q, DataHubService hub)
         else a.Text = $"Cost by {noun} in {where}, highest first. Margins need revenue.view, which your role does not hold.";
 
         // The usual columns, plus the ranking measure when it is not one of them.
-        var cols = (showRevenue ? new List<string> { label, "Encounters", "Revenue", "Total cost", "Margin", "Margin %" } : [label, "Encounters", "Total cost"]);
+        var cols = (showRevenue ? new List<string> { label, "Episodes", "Revenue", "Total cost", "Margin", "Margin %" } : [label, "Episodes", "Total cost"]);
         var extra = measure switch { "direct" => "Direct cost", "indirect" => "Indirect cost", "overhead" => "Overheads", "contribution" => "Contribution", _ => null };
         if (extra is not null) cols.Insert(1, extra);
         a.Blocks.Add(new("table", $"{(bottom ? "Lowest" : "Highest")} {measureLabel} first", cols.ToArray(),
@@ -439,13 +440,13 @@ public sealed class AssistantAnswers(ReadQueries q, DataHubService hub)
         }
         var ranked = (Bottom(it) ? d.Rows.OrderBy(r => r.Total) : d.Rows.OrderByDescending(r => r.Total)).Take(Limit(it)).ToList();
         var top = d.Rows.MaxBy(r => r.Total)!;
-        a.Figures.AddRange([new("encounters", "Encounters", d.Total.Volume, ""), new("services", "Services", services, ""), new("total", "Total cost", d.Total.Total, Cur(s))]);
-        a.Text = $"Non-billable (invoiced at no price) in {Where(s)}: {Number(services)} services on {Number(d.Total.Volume)} encounters, " +
+        a.Figures.AddRange([new("encounters", "Episodes", d.Total.Volume, ""), new("services", "Services", services, ""), new("total", "Total cost", d.Total.Total, Cur(s))]);
+        a.Text = $"Non-billable (invoiced at no price) in {Where(s)}: {Number(services)} services on {Number(d.Total.Volume)} episodes, " +
                  $"costing {Cur(s)} {Money(d.Total.Total)} across {d.Rows.Length} procedure types. " +
                  $"The largest procedure type is {top.Label}: {Number(top.Services ?? 0)} services, {Cur(s)} {Money(top.Total)} ({Pct(d.Total.Total == 0 ? 0 : Math.Round(top.Total / d.Total.Total * 100m, 1))} of the cost).";
         a.Blocks.Add(new("figures", null, ["Measure", "Value"],
-            [["Encounters", Number(d.Total.Volume)], ["Services", Number(services)], ["Total cost", $"{Cur(s)} {Money(d.Total.Total)}"], ["Procedure types", Number(d.Rows.Length)]]));
-        a.Blocks.Add(new("table", "By procedure type", ["Procedure type", "Encounters", "Services", "Total cost", "Share"],
+            [["Episodes", Number(d.Total.Volume)], ["Services", Number(services)], ["Total cost", $"{Cur(s)} {Money(d.Total.Total)}"], ["Procedure types", Number(d.Rows.Length)]]));
+        a.Blocks.Add(new("table", "By procedure type", ["Procedure type", "Episodes", "Services", "Total cost", "Share"],
             ranked.Select(r => new[] { r.Label, Number(r.Volume), Number(r.Services ?? 0), Money(r.Total), Pct(d.Total.Total == 0 ? 0 : Math.Round(r.Total / d.Total.Total * 100m, 1)) }).ToArray(),
             d.Rows.Length > ranked.Count ? $"{ranked.Count} of {d.Rows.Length} procedure types, by cost." : null));
         if (it.View is "detail" or "explain")
@@ -461,7 +462,7 @@ public sealed class AssistantAnswers(ReadQueries q, DataHubService hub)
             a.Blocks.Add(new("table", "Billable vs non-billable services", ["Procedure type", "Billable", "Non-billable", "% non-billable"], rows));
         }
         a.Links.Add(new("Open Non-billable on Summary", "dashboard", new(Scope(s)) { ["tab"] = "noBillable" }));
-        a.Links.Add(new("Non-billable encounters", "patient-encounters", new(Scope(s)) { ["noBillableType"] = "ALL" }));
+        a.Links.Add(new("Non-billable episodes", "patient-encounters", new(Scope(s)) { ["noBillableType"] = "ALL" }));
     }
 
     // ── Variance ─────────────────────────────────────────────────────────────────────
@@ -703,14 +704,14 @@ public sealed class AssistantAnswers(ReadQueries q, DataHubService hub)
         var how = it.Intent switch
         {
             "dashboard.summary" => EncType(it) is { } enc
-                ? $"Total cost is direct cost + indirect cost + overheads for {enc} encounters in the run. Margin is revenue minus total cost."
-                : "Total cost is direct cost + indirect cost + overheads for every encounter in the run. Margin is revenue minus total cost.",
+                ? $"Total cost is direct cost + indirect cost + overheads for {enc} episodes in the run. Margin is revenue minus total cost."
+                : "Total cost is direct cost + indirect cost + overheads for every episode in the run. Margin is revenue minus total cost.",
             "procedure.cost" => "Unit cost is the procedure's total cost in the run divided by how many times it was performed. The margin shown compares that unit cost with the list price.",
             "procedure.top" => "Procedures are ranked by unit cost (total cost ÷ volume) or by volume; procedures not performed in the run are left out.",
             "package.cost" => "A package's cost per case is the cost of its component procedures for one case. Its margin is the contracted price minus that cost.",
             "package.losing" => "A package loses money when the cost of its cases is more than what was billed for them.",
-            "profitability.by" => "Each encounter's revenue and cost are grouped by the chosen dimension. Margin = revenue − (direct + indirect + overheads).",
-            "billing.nonbillable" => "A non-billable line is a service invoiced at no price. It still costs money, so its cost is shown by procedure type; an encounter is counted once per type it has such a line in.",
+            "profitability.by" => "Each episode's revenue and cost are grouped by the chosen dimension. Margin = revenue − (direct + indirect + overheads).",
+            "billing.nonbillable" => "A non-billable line is a service invoiced at no price. It still costs money, so its cost is shown by procedure type; an episode is counted once per type it has such a line in.",
             "variance.top" => "Variance = actual − baseline. It is split into rate (a different price), quantity (a different amount used) and mix (a different case mix), which add up exactly to the total.",
             "capacity.idle" => "Idle capacity = (practical minutes available − minutes used) × cost per minute. It is paid for but not charged to patients.",
             "quality.issues" => "Each check in the register asks one question of the run's data. A check fails when it finds at least one issue.",

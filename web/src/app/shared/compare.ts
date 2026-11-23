@@ -42,7 +42,7 @@ export interface Stat {
   medicine: number;
   claimed: number | null;
   rejected: number;
-  /** Ward days ÷ encounters. */
+  /** Ward days ÷ episodes. */
   los: number;
   /** The package's covered length of stay (0 when it has none). */
   coveredLos: number;
@@ -114,7 +114,7 @@ const same = (x: number, y: number) => x === y || Math.abs(x - y) <= 1e-9 * Math
 interface Figure { label: string; score: (s: Stat) => number | null }
 const FIG: Record<string, Figure> = {
   volume: { label: 'more cases', score: s => s.performed || null },
-  encounters: { label: 'more encounters', score: s => s.encounters || null },
+  encounters: { label: 'more episodes', score: s => s.encounters || null },
   recovery: { label: 'better recovery', score: s => s.performed && s.claimed != null && s.rc ? s.claimed / s.rc : null },
   materials: { label: 'better materials billing', score: s => s.performed ? s.matBilled - s.matCovered : null },
   resources: { label: 'lower resources per case', score: s => s.performed ? -s.rc / s.performed : null },

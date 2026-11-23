@@ -592,6 +592,32 @@ public class NphiesClaimLine
     public string SourceRef { get; set; } = "";
 }
 
+/// <summary>
+/// HIS INP_AdmissionRequest: a request to admit a patient, raised from an OP clinic or the ER, with the admission it
+/// became when there is one (INP_Admission.AdmissionRequestNo). Counted on the Summary by request date.
+/// </summary>
+public class AdmissionRequest
+{
+    public Guid Id { get; set; }
+    public Guid HospitalId { get; set; }
+    public string RequestNo { get; set; } = "";
+    public DateTime RequestedAt { get; set; }
+    public DateTime? ExpectedAdmissionAt { get; set; }
+    /// <summary>INP_AdmissionRequest.Status as stored: 2 admitted, 4 cancelled (as HIS reads it).</summary>
+    public int? HisStatus { get; set; }
+    public bool? IsActive { get; set; }
+    /// <summary>Where it was raised: OPD (an appointment) or ER (an ER assessment).</summary>
+    public string Source { get; set; } = "";
+    public string? AppointmentNo { get; set; }
+    public string? AssessmentNo { get; set; }
+    public bool? IsEmergency { get; set; }
+    public string? HisClinicId { get; set; }
+    /// <summary>The IP episode it became (EncounterNo of the admission), when admitted.</summary>
+    public string? AdmissionEncounterNo { get; set; }
+    public string SourceSystem { get; set; } = "VIDA-HIS";
+    public string SourceRef { get; set; } = "";
+}
+
 /// <summary>HIS_NPHIESPaymentReconciliation_Detail line with its payment notice header. Every HIS column as stored, for evaluating claims; no calculation reads it.</summary>
 public class NphiesPayment
 {

@@ -263,7 +263,7 @@ public static class Costing
         var expected = Money.R4(capacity.TotalConsumed + alloc.ServiceOverhead.Values.Sum());
         return (result, new StepResult(output.EncounterCosts.Count + procActual.Count + written, expected, result.PatientCostTotal,
             Math.Abs(expected - result.PatientCostTotal) >= 1m ? "WARNING" : "SUCCESS",
-            $"{output.EncounterCosts.Count} encounters costed at {Fmt.Sar(patientCost)} against {Fmt.Sar(revenueTotal)} of revenue.",
+            $"{output.EncounterCosts.Count} episodes costed at {Fmt.Sar(patientCost)} against {Fmt.Sar(revenueTotal)} of revenue.",
             new Dictionary<string, object?>
             {
                 ["encounters"] = output.EncounterCosts.Count, ["patientCost"] = result.PatientCostTotal,

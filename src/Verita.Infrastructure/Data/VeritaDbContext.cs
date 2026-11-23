@@ -68,6 +68,7 @@ public sealed class VeritaDbContext(DbContextOptions<VeritaDbContext> options) :
     public DbSet<SettlementLine> SettlementLines => Set<SettlementLine>();
     public DbSet<NphiesClaimLine> NphiesClaimLines => Set<NphiesClaimLine>();
     public DbSet<NphiesPayment> NphiesPayments => Set<NphiesPayment>();
+    public DbSet<AdmissionRequest> AdmissionRequests => Set<AdmissionRequest>();
     // Rules & versions
     public DbSet<AllocationRule> AllocationRules => Set<AllocationRule>();
     public DbSet<AllocationRuleTarget> AllocationRuleTargets => Set<AllocationRuleTarget>();
@@ -369,6 +370,7 @@ public sealed class VeritaDbContext(DbContextOptions<VeritaDbContext> options) :
         Fk<NphiesClaimLine, Encounter>(x => x.EncounterId);
         Fk<NphiesClaimLine, Payer>(x => x.PayerId);
         Fk<NphiesPayment, Hospital>(x => x.HospitalId);
+        Fk<AdmissionRequest, Hospital>(x => x.HospitalId);
         Fk<AllocationRule, CostPool>(x => x.SourcePoolId);
         Fk<AllocationRule, CostDriver>(x => x.DriverId);
         Fk<AllocationRuleTarget, AllocationRule>(x => x.RuleId);
@@ -503,6 +505,16 @@ public sealed class VeritaDbContext(DbContextOptions<VeritaDbContext> options) :
         mb.Entity<NphiesPayment>().Property(x => x.ClaimRequestIdentifier).HasMaxLength(50);
         mb.Entity<NphiesPayment>().HasIndex(x => new { x.HospitalId, x.SourceRef }).IsUnique();
         mb.Entity<NphiesPayment>().HasIndex(x => new { x.HospitalId, x.ClaimRequestIdentifier });
+        mb.Entity<AdmissionRequest>().Property(x => x.RequestNo).HasMaxLength(30);
+        mb.Entity<AdmissionRequest>().Property(x => x.Source).HasMaxLength(10);
+        mb.Entity<AdmissionRequest>().Property(x => x.AppointmentNo).HasMaxLength(30);
+        mb.Entity<AdmissionRequest>().Property(x => x.AssessmentNo).HasMaxLength(30);
+        mb.Entity<AdmissionRequest>().Property(x => x.HisClinicId).HasMaxLength(30);
+        mb.Entity<AdmissionRequest>().Property(x => x.AdmissionEncounterNo).HasMaxLength(60);
+        mb.Entity<AdmissionRequest>().Property(x => x.SourceSystem).HasMaxLength(40);
+        mb.Entity<AdmissionRequest>().Property(x => x.SourceRef).HasMaxLength(60);
+        mb.Entity<AdmissionRequest>().HasIndex(x => new { x.HospitalId, x.SourceRef }).IsUnique();
+        mb.Entity<AdmissionRequest>().HasIndex(x => new { x.HospitalId, x.RequestedAt });
         mb.Entity<StaffTime>().Property(x => x.SourceRef).HasMaxLength(120);
         mb.Entity<StaffTime>().Property(x => x.StartTime).HasMaxLength(50);
         mb.Entity<StaffTime>().Property(x => x.EndTime).HasMaxLength(50);

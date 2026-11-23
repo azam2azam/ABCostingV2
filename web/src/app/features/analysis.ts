@@ -51,11 +51,11 @@ export class Reports {
   nature: Col[] = [{ key: 'label', label: 'Nature' }, { key: 'value', label: 'Amount', type: 'money' }, { key: 'share', label: 'Share', type: 'pct' }];
   lines: Col[] = [{ key: 'label', label: 'Line', sub: r => r.explanation }, { key: 'amount', label: 'Amount', type: 'money' }, { key: 'runningBalance', label: 'Running', type: 'money' }];
   profit: Col[] = [
-    { key: 'label', label: 'Item' }, { key: 'encounters', label: 'Encounters', type: 'num', dp: 0 }, { key: 'total', label: 'Cost', type: 'money', dp: 0 },
+    { key: 'label', label: 'Item' }, { key: 'encounters', label: 'Episodes', type: 'num', dp: 0 }, { key: 'total', label: 'Cost', type: 'money', dp: 0 },
     { key: 'revenue', label: 'Revenue', type: 'money', dp: 0 }, { key: 'operating', label: 'Margin', type: 'money', dp: 0, dir: 'higher' }, { key: 'marginPct', label: 'Margin %', type: 'pct', dir: 'higher' },
   ];
   physician: Col[] = [
-    { key: 'physician', label: 'Physician' }, { key: 'specialty', label: 'Specialty' }, { key: 'encounters', label: 'Encounters', type: 'num', dp: 0 },
+    { key: 'physician', label: 'Physician' }, { key: 'specialty', label: 'Specialty' }, { key: 'encounters', label: 'Episodes', type: 'num', dp: 0 },
     { key: 'avgCost', label: 'Avg cost', type: 'money', dp: 0 }, { key: 'specialtyAvgCost', label: 'Specialty avg', type: 'money', dp: 0 },
     { key: 'vsSpecialtyPct', label: 'vs specialty', type: 'pct', dir: 'lower' }, { key: 'avgLOS', label: 'Avg LOS', type: 'num', dp: 1 },
     { key: 'costVsStandardPct', label: 'vs standard', type: 'pct', dir: 'lower' },
@@ -68,7 +68,7 @@ export class Reports {
   group: Col[] = [
     { key: 'name', label: 'Hospital', sub: r => `${r.run} · ${r.runStatus}` }, { key: 'gl', label: 'Ledger', type: 'money', dp: 0 },
     { key: 'patientCost', label: 'Patient cost', type: 'money', dp: 0 }, { key: 'attributionPct', label: 'Attribution', type: 'pct' },
-    { key: 'encounters', label: 'Encounters', type: 'num', dp: 0 }, { key: 'costPerEncounter', label: 'Cost / encounter', type: 'money', dp: 0 },
+    { key: 'encounters', label: 'Episodes', type: 'num', dp: 0 }, { key: 'costPerEncounter', label: 'Cost / episode', type: 'money', dp: 0 },
     { key: 'operatingMargin', label: 'Margin', type: 'money', dp: 0, dir: 'higher' }, { key: 'idleCapacity', label: 'Idle capacity', type: 'money', dp: 0 },
   ];
 }

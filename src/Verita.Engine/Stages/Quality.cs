@@ -154,13 +154,13 @@ public static class Quality
         var withServices = ctx.Services.Select(s => s.EncounterId).ToHashSet();
         var empty = ctx.Encounters.Count(e => !withServices.Contains(e.Id));
         if (empty > 0)
-            Add("DQ-ENC-NO-SERVICE", "Encounter", null, $"{ctx.PeriodCode} encounters", $"{empty} encounter(s) recorded no services at all.", empty.ToString());
+            Add("DQ-ENC-NO-SERVICE", "Encounter", null, $"{ctx.PeriodCode} episodes", $"{empty} episode(s) recorded no services at all.", empty.ToString());
 
         var withRevenue = ctx.Revenue.Select(r => r.EncounterId).ToHashSet();
         var noRevenue = ctx.Encounters.Count(e => withServices.Contains(e.Id) && !withRevenue.Contains(e.Id));
         if (noRevenue > 0)
-            Add("DQ-ENC-NO-REVENUE", "Encounter", null, $"{ctx.PeriodCode} encounters",
-                $"{noRevenue} encounter(s) have clinical activity but nothing billed against them.", noRevenue.ToString());
+            Add("DQ-ENC-NO-REVENUE", "Encounter", null, $"{ctx.PeriodCode} episodes",
+                $"{noRevenue} episode(s) have clinical activity but nothing billed against them.", noRevenue.ToString());
 
         output.Issues.AddRange(issues);
 
@@ -234,7 +234,7 @@ public static class Quality
             {
                 Id = IdGen.Sequential(), RunId = ctx.RunId, CheckCode = def.Code, CheckName = def.Name, Category = def.Category,
                 Severity = def.Severity, EntityType = "DRG", EntityId = g.Key.ToString(), EntityLabel = $"DRG {g.Key}",
-                Message = $"{far} encounter(s) cost more than {Fmt.Sar(fence)}, three interquartile ranges above the DRG's upper quartile — check the consumption recorded against them.",
+                Message = $"{far} episode(s) cost more than {Fmt.Sar(fence)}, three interquartile ranges above the DRG's upper quartile — check the consumption recorded against them.",
                 Value = far.ToString(), DetectedAt = ctx.CalculatedAt, Status = "OPEN",
             });
             n++;

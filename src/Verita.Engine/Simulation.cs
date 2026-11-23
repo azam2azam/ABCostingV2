@@ -149,7 +149,7 @@ public static class Simulation
         var costDelta = s.Cost - b.Cost;
         var marginDelta = (s.Revenue - s.Cost) - (b.Revenue - b.Cost);
         var idleDelta = s.Idle - b.Idle;
-        var head = $"{leverCount} {Fmt.Plural(leverCount, "lever")} applied to {b.Encounters:N0} encounters: cost attributed to patients " +
+        var head = $"{leverCount} {Fmt.Plural(leverCount, "lever")} applied to {b.Encounters:N0} episodes: cost attributed to patients " +
                    $"{(costDelta >= 0m ? "increases" : "reduces")} by {Fmt.Sar(Math.Abs(costDelta))} ({(b.Cost == 0m ? "0" : Fmt.P(costDelta / b.Cost * 100m, 2))}%), " +
                    $"operating margin {(marginDelta >= 0m ? "improves" : "deteriorates")} by {Fmt.Sar(Math.Abs(marginDelta))}.";
         if (Math.Abs(idleDelta) < 1m) return head;

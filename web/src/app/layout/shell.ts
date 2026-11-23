@@ -1,7 +1,9 @@
 import { Component, computed, inject, signal } from '@angular/core';
 import { FormsModule } from '@angular/forms';
 import { RouterLink, RouterLinkActive, RouterOutlet } from '@angular/router';
-import { Auth } from '../core/auth';
+import { firstValueFrom } from 'rxjs';
+import { Api } from '../core/api';
+import { Auth, toApiError } from '../core/auth';
 import { MetaService, RunContext, runLiveStatus } from '../core/context';
 import { Theme } from '../core/theme';
 import { Icon } from '../shared/icon';
@@ -57,12 +59,31 @@ import { Chip } from '../shared/ui';
               </label>
               <label class="pick period">
                 <span class="sr-only">Period</span>
-                <select [ngModel]="ctx.periodParam()" (ngModelChange)="pickPeriod($event)" aria-label="Period">
+                <select #periodSel [ngModel]="ctx.periodParam()" (ngModelChange)="pickPeriod($event, periodSel)" aria-label="Period">
                   @for (p of ctx.periodsForHospital(); track p.id) {
                     <option [value]="p.code">{{ p.code }} ({{ p.startDate }} – {{ p.endDate }})</option>
                   }
+                  @if (canAddPeriod()) { <option [value]="NEW_PERIOD">+ Add new period…</option> }
                 </select>
               </label>
+              @if (adding()) {
+                <form class="new-period" (submit)="addPeriod($event)" aria-label="Add new period">
+                  <div class="np-h">Add new period</div>
+                  <p class="np-sub">Any dates, e.g. the days of Ramadan. It may overlap the months.
+                    @if (canRunPeriod()) { The calculation starts as soon as it is added. }</p>
+                  <label>Name <input name="code" [ngModel]="npCode()" (ngModelChange)="npCode.set($event)" placeholder="e.g. Ramadan 1447" maxlength="40" /></label>
+                  <div class="np-dates">
+                    <label>From <input type="date" name="start" required [ngModel]="npStart()" (ngModelChange)="npStart.set($event)" /></label>
+                    <label>To <input type="date" name="end" required [ngModel]="npEnd()" (ngModelChange)="npEnd.set($event)" /></label>
+                  </div>
+                  @if (npError()) { <p class="np-err" role="alert">{{ npError() }}</p> }
+                  <div class="np-actions">
+                    <button type="button" class="btn" (click)="adding.set(false)">Cancel</button>
+                    <button type="submit" class="btn primary" [disabled]="npBusy() || !npStart() || !npEnd()">{{ npBusy() ? 'Adding…' : canRunPeriod() ? 'Add and calculate' : 'Add period' }}</button>
+                  </div>
+                </form>
+              }
+              @if (npNotice(); as n) { <span class="np-notice" [class.bad]="n.bad" role="status">{{ n.text }}</span> }
             }
             @if (run(); as r) {
               <span class="pill"><v-icon name="layers" [size]="15" /> {{ r.costingVersion }}</span>
@@ -127,6 +148,17 @@ import { Chip } from '../shared/ui';
     .pick select { max-width: 260px; border-radius: 999px; padding: 6px 14px; font-size: 13px; }
     .pick.hospital select { max-width: min(280px, 42vw); }
     .pick.period select { max-width: min(320px, 60vw); }
+    .scope { position: relative; }
+    .new-period { position: absolute; top: calc(100% + 8px); left: 0; z-index: 30; width: min(380px, calc(100vw - 32px)); display: grid; gap: 10px;
+                  padding: 14px 16px; background: var(--surface-solid); border: 1px solid var(--border); border-top: 3px solid var(--accent);
+                  border-radius: var(--radius); box-shadow: var(--shadow-lg); }
+    .new-period label { display: grid; gap: 4px; font-size: 12.5px; font-weight: 600; color: var(--text-2); }
+    .new-period input { font: inherit; font-weight: 400; }
+    .np-h { font-weight: 700; } .np-sub { margin: -6px 0 0; color: var(--text-3); font-size: 12.5px; }
+    .np-dates { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+    .np-err { margin: 0; color: var(--bad, #b42318); font-size: 13px; }
+    .np-actions { display: flex; justify-content: flex-end; gap: 8px; }
+    .np-notice { font-size: 12.5px; color: var(--text-3); } .np-notice.bad { color: var(--bad, #b42318); }
     main { padding: 26px 28px 40px; max-width: none; }
     main:focus { outline: none; }
     .menu, .scrim { display: none; }
@@ -155,6 +187,7 @@ export class Shell {
   ctx = inject(RunContext);
   meta = inject(MetaService);
   theme = inject(Theme);
+  private api = inject(Api);
   menuOpen = signal(false);
   run = this.ctx.run;
   live = runLiveStatus;
@@ -170,13 +203,69 @@ export class Shell {
   }
 
   pickHospital(code: string): void {
+    this.npNotice.set(null);
     if (!code || code === this.ctx.hospitalParam()) return;
     this.ctx.selectScope(code, this.ctx.preferredPeriod(code));
   }
 
-  pickPeriod(code: string): void {
+  pickPeriod(code: string, select?: HTMLSelectElement): void {
     const hospital = this.ctx.hospitalParam();
+    if (code === this.NEW_PERIOD) {
+      // The choice is an action, not a period: show the form and keep the current period selected.
+      if (select) select.value = this.ctx.periodParam() ?? '';
+      this.npError.set(null);
+      this.adding.set(true);
+      return;
+    }
     if (!hospital || !code || code === this.ctx.periodParam()) return;
+    this.npNotice.set(null);
     this.ctx.selectScope(hospital, code);
+  }
+
+  readonly NEW_PERIOD = '__new_period__';
+  canAddPeriod = computed(() => this.auth.can('masterdata.edit'));
+  /** Adding a period also starts its calculation when the role may run one. */
+  canRunPeriod = computed(() => this.auth.can('run.execute'));
+  npNotice = signal<{ text: string; bad: boolean } | null>(null);
+  adding = signal(false);
+  npCode = signal('');
+  npStart = signal('');
+  npEnd = signal('');
+  npBusy = signal(false);
+  npError = signal<string | null>(null);
+
+  /** Adds the period for the selected hospital, opens it, and starts its calculation run (as New run on Calculation Runs). */
+  async addPeriod(event: Event): Promise<void> {
+    event.preventDefault();
+    const hospital = this.ctx.hospitalParam();
+    if (!hospital || this.npBusy()) return;
+    if (this.npEnd() < this.npStart()) { this.npError.set('The period ends before it starts.'); return; }
+    this.npBusy.set(true);
+    this.npError.set(null);
+    try {
+      const made = await firstValueFrom(this.api.post<{ code: string }>('periods',
+        { hospital, code: this.npCode().trim() || null, startDate: this.npStart(), endDate: this.npEnd() }));
+      this.adding.set(false);
+      this.npCode.set(''); this.npStart.set(''); this.npEnd.set('');
+      this.npNotice.set(null);
+      if (this.canRunPeriod()) {
+        try {
+          const run = await firstValueFrom(this.api.post<{ code: string }>('runs', { hospital, period: made.code }));
+          await firstValueFrom(this.api.post(`runs/${run.code}/execute`, { force: false }));
+        } catch (err) {
+          // The period stays; the run can be started from Calculation Runs.
+          this.npNotice.set({ text: `${made.code} was added, but its calculation did not start: ${toApiError(err).message}`, bad: true });
+        }
+      } else {
+        this.npNotice.set({ text: `${made.code} was added. Ask a costing manager to run its calculation.`, bad: false });
+      }
+      // Reloading picks up the new run; the top bar then follows it until it finishes.
+      await this.ctx.load(true);
+      this.ctx.selectScope(hospital, made.code);
+    } catch (err) {
+      this.npError.set(toApiError(err).message);
+    } finally {
+      this.npBusy.set(false);
+    }
   }
 }

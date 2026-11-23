@@ -68,8 +68,8 @@ public sealed partial class ReadQueries
                         var item = string.IsNullOrWhiteSpace(x.Description) ? (cc?.Name ?? proc) : x.Description;
                         return new[]
                         {
-                            ((proc, "Encounter %", item), x.OverheadPct),
-                            ((proc, "Encounter cap", item), x.OverheadAmount),
+                            ((proc, "Episode %", item), x.OverheadPct),
+                            ((proc, "Episode cap", item), x.OverheadAmount),
                         };
                     });
             }

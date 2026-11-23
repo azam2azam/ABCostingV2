@@ -20,6 +20,8 @@ public static class FactsExtract
             }
             await s.ReportAsync("Refunds");
             await RefundsAsync(db, s, c, pack);
+            await s.ReportAsync("Admission requests");
+            await AdmissionRequestsAsync(db, s, c, pack);
             return;
         }
         if (s.Part == FactsPart.Batch)
@@ -36,6 +38,12 @@ public static class FactsExtract
         await EncountersAsync(db, s, c, pack);
         await s.ReportAsync("Billing");
         await BillingAsync(db, s, c, pack);
+        // Admission requests go by date, not by encounter: once per day (a batch leaves them to the day's refunds part).
+        if (s.Part != FactsPart.Batch)
+        {
+            await s.ReportAsync("Admission requests");
+            await AdmissionRequestsAsync(db, s, c, pack);
+        }
         // Claims, settlements and NPHIES responses on the same invoices (#ip / #op / #er from billing), only with --claims:
         // claimed is the invoice's IsClaimed flag on each revenue line; received / rejected come from their own database later.
         if (s.Claims) await ClaimsExtract.RunAsync(db, s, c, pack);
@@ -162,7 +170,8 @@ public static class FactsExtract
                    ds.DaysStayed,
                    CAST(CASE WHEN EXISTS (
                         SELECT 1 FROM dbo.INP_OTReservation ot WITH (NOLOCK)
-                        WHERE ot.SetupID=i.SetupID AND ot.ProjectID=i.ProjectID AND ot.AdmissionNo=i.AdmissionNo)
+                        WHERE ot.SetupID=i.SetupID AND ot.ProjectID=i.ProjectID AND ot.AdmissionNo=i.AdmissionNo
+                          AND ISNULL(ot.Status, 0) NOT IN (4, 5))
                      THEN 1 ELSE 0 END AS bit) AS IsSurgical
             FROM dbo.INP_Admission i WITH (NOLOCK)
             LEFT JOIN dbo.INP_DischargeSummary ds WITH (NOLOCK)
@@ -175,7 +184,8 @@ public static class FactsExtract
                    ds.DaysStayed,
                    CAST(CASE WHEN EXISTS (
                         SELECT 1 FROM dbo.INP_OTReservation ot WITH (NOLOCK)
-                        WHERE ot.SetupID=i.SetupID AND ot.ProjectID=i.ProjectID AND ot.AdmissionNo=i.AdmissionNo)
+                        WHERE ot.SetupID=i.SetupID AND ot.ProjectID=i.ProjectID AND ot.AdmissionNo=i.AdmissionNo
+                          AND ISNULL(ot.Status, 0) NOT IN (4, 5))
                      THEN 1 ELSE 0 END AS bit) AS IsSurgical
             FROM dbo.HIS_InvoiceMain m WITH (NOLOCK)
             INNER JOIN dbo.INP_Admission i WITH (NOLOCK)
@@ -621,6 +631,56 @@ public static class FactsExtract
     /// Refunds for the pack's encounters (any refund date), plus refunds dated in the window
     /// that have no encounter link yet. Not revenue lines.
     /// </summary>
+    /// <summary>
+    /// INP_AdmissionRequest rows raised in the window, plus older ones that changed in it (edited, or admitted in it), so a
+    /// request picks up its admission or its cancellation on a later day's sync. Each row carries the admission it became
+    /// (INP_Admission.AdmissionRequestNo) as that IP episode's number. No patient details.
+    /// </summary>
+    private static async Task AdmissionRequestsAsync(HisConnection db, Settings s, Codes c, CsvZipWriter pack)
+    {
+        using var csv = pack.Create("46_AdmissionRequest.csv",
+            "hospitalCode", "requestNo", "requestedAt", "expectedAdmissionAt", "hisStatus", "isActive", "source",
+            "appointmentNo", "assessmentNo", "isEmergency", "hisClinicId", "admissionEncounterNo", "sourceSystem", "sourceRef");
+        int n = 0, admitted = 0;
+        var seen = new HashSet<int>();
+        await db.QueryAsync("""
+            SELECT r.AdmissionRequestNo, r.AdmissionRequestDate, r.ExpectedAdmissionDate, r.Status, r.IsActive,
+                   r.AppointmentNo, r.AssessmentNo, r.EmergencyAdmissionReq, r.ClinicID, a.AdmissionNo
+            FROM dbo.INP_AdmissionRequest r WITH (NOLOCK)
+            OUTER APPLY (SELECT TOP 1 i.AdmissionNo FROM dbo.INP_Admission i WITH (NOLOCK)
+                         WHERE i.SetupID=r.SetupID AND i.ProjectID=r.ProjectID AND i.AdmissionRequestNo=r.AdmissionRequestNo
+                         ORDER BY i.AdmissionNo) a
+            WHERE r.SetupID=@SetupId AND r.ProjectID=@ProjectId
+              AND ((r.AdmissionRequestDate >= @From AND r.AdmissionRequestDate < @To)
+                OR (r.EditedOn >= @From AND r.EditedOn < @To)
+                OR EXISTS (SELECT 1 FROM dbo.INP_Admission x WITH (NOLOCK)
+                           WHERE x.SetupID=r.SetupID AND x.ProjectID=r.ProjectID AND x.AdmissionRequestNo=r.AdmissionRequestNo
+                             AND x.AdmissionDate >= @From AND x.AdmissionDate < @To))
+            """, s.BindPeriod, r =>
+        {
+            var no = HisConnection.I(r, "AdmissionRequestNo");
+            if (no <= 0 || !seen.Add(no)) return;
+            var requested = HisConnection.Dt(r, "AdmissionRequestDate");
+            if (requested is null) return;
+            var expected = HisConnection.Dt(r, "ExpectedAdmissionDate");
+            var appointment = HisConnection.Ni(r, "AppointmentNo");
+            var assessment = HisConnection.Ni(r, "AssessmentNo");
+            var admission = HisConnection.Ni(r, "AdmissionNo");
+            if (admission is > 0) admitted++;
+            csv.Write(
+                c.Hospital, $"{no}", Maps.DateTime(requested.Value),
+                expected is { Year: > 1900 } e ? Maps.DateTime(e) : "",
+                HisConnection.S(r, "Status"), Flag(r, "IsActive"),
+                assessment is > 0 ? "ER" : "OPD",
+                appointment is > 0 ? $"{appointment}" : "", assessment is > 0 ? $"{assessment}" : "",
+                Flag(r, "EmergencyAdmissionReq"), HisConnection.S(r, "ClinicID"),
+                admission is > 0 ? c.IpEncounter(admission.Value) : "",
+                "VIDA-HIS", $"ADMREQ-{no}");
+            n++;
+        });
+        pack.Note($"AdmissionRequest: {n} INP_AdmissionRequest rows raised, edited or admitted in the window ({admitted} with an admission).");
+    }
+
     private static async Task RefundsAsync(HisConnection db, Settings s, Codes c, CsvZipWriter pack)
     {
         using var csv = pack.Create("37_RefundTransaction.csv",
@@ -767,7 +827,8 @@ public static class FactsExtract
                ds.DaysStayed,
                CAST(CASE WHEN EXISTS (
                     SELECT 1 FROM dbo.INP_OTReservation ot WITH (NOLOCK)
-                    WHERE ot.SetupID=i.SetupID AND ot.ProjectID=i.ProjectID AND ot.AdmissionNo=i.AdmissionNo)
+                    WHERE ot.SetupID=i.SetupID AND ot.ProjectID=i.ProjectID AND ot.AdmissionNo=i.AdmissionNo
+                          AND ISNULL(ot.Status, 0) NOT IN (4, 5))
                  THEN 1 ELSE 0 END AS bit) AS IsSurgical
         FROM #ip k
         INNER JOIN dbo.INP_Admission i WITH (NOLOCK)

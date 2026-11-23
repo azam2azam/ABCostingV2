@@ -119,7 +119,7 @@ function pct(a: number, b: number | null | undefined): number | null {
 
             <section class="card">
               <h3>Facts</h3>
-              <p class="muted">Add the dates to sync. The worker syncs them in small batches of encounters, oldest date first. The last date you can add is yesterday ({{ yesterday() }}).</p>
+              <p class="muted">Add the dates to sync. The worker syncs them in small batches of episodes, oldest date first. The last date you can add is yesterday ({{ yesterday() }}).</p>
               @if (canEdit()) {
                 <div class="fields">
                   <label class="field">From
@@ -208,7 +208,7 @@ function pct(a: number, b: number | null | undefined): number | null {
           @if (d.days.length) {
             <section class="card">
               <h3>Fact days</h3>
-              <p class="muted">Each day is listed once, then synced in batches of encounters. An ER visit and the appointment it is billed through stay in one batch.</p>
+              <p class="muted">Each day is listed once, then synced in batches of episodes. An ER visit and the appointment it is billed through stay in one batch.</p>
               <v-table [rows]="d.days" [columns]="dayCols" caption="Fact days" [pageSize]="10" />
             </section>
           }
@@ -329,7 +329,7 @@ export class HisSync {
   dayCols: Col<HisSyncDay>[] = [
     { key: 'date', label: 'Date', sub: r => r.error ?? null, minWidth: '10rem' },
     { key: 'status', label: 'Status', type: 'chip', value: r => this.label(r.status), chip: r => this.kindOf(r.status) },
-    { key: 'encounters', label: 'Encounters', type: 'num', dp: 0 },
+    { key: 'encounters', label: 'Episodes', type: 'num', dp: 0 },
     { key: 'batches', label: 'Batches', type: 'num', dp: 0 },
     { key: 'progress', label: 'Progress', type: 'bar', value: r => pct(r.synced + r.failed, r.encounters) ?? (r.status === 'DONE' ? 100 : 0), sortable: false },
     { key: 'synced', label: 'Synced', type: 'num', dp: 0 },

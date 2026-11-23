@@ -94,7 +94,7 @@ public sealed partial class ReadQueries
             showRevenue ? x.ec.OperatingMargin : 0, showRevenue ? x.ec.MarginPct : 0, x.ec.CostPerDay)).ToArray();
         // FR-0.8: unmasked access to identifiable records is audited.
         if (auditPhi && phi && result.Length > 0)
-            await audit.WriteAsync(p, "VIEW_PHI", "Encounter", null, $"{result.Length} encounters, {s.Run.Code}",
+            await audit.WriteAsync(p, "VIEW_PHI", "Encounter", null, $"{result.Length} episodes, {s.Run.Code}",
                 metadata: new { encounters = result.Select(r => r.EncounterNo).Take(200).ToArray() }, ct: ct);
         return new EncounterPage(result, total, page, size, !phi);
     }
@@ -108,15 +108,15 @@ public sealed partial class ReadQueries
 
     public async Task<EncounterDetail> EncounterAsync(ScopedRun s, Principal p, Guid id, CancellationToken ct)
     {
-        var enc = await db.Encounters.AsNoTracking().FirstOrDefaultAsync(e => e.Id == id, ct) ?? throw AppError.NotFound("Encounter");
+        var enc = await db.Encounters.AsNoTracking().FirstOrDefaultAsync(e => e.Id == id, ct) ?? throw AppError.NotFound("Episode");
         var hosp = await db.Hospitals.AsNoTracking().FirstAsync(h => h.Id == enc.HospitalId, ct);
-        if (!p.HasHospital(hosp.Code)) throw AppError.OutOfScope($"Encounter {enc.EncounterNo}");
-        if (enc.HospitalId != s.Hospital.Id) throw AppError.NotCosted($"Encounter {enc.EncounterNo} is not in run {s.Run.Code}.");
+        if (!p.HasHospital(hosp.Code)) throw AppError.OutOfScope($"Episode {enc.EncounterNo}");
+        if (enc.HospitalId != s.Hospital.Id) throw AppError.NotCosted($"Episode {enc.EncounterNo} is not in run {s.Run.Code}.");
         var dept = await db.Departments.AsNoTracking().FirstAsync(d => d.Id == enc.DepartmentId, ct);
-        if (!p.HasDepartment(dept.CatalogCode)) throw AppError.OutOfScope($"Encounter {enc.EncounterNo}");
+        if (!p.HasDepartment(dept.CatalogCode)) throw AppError.OutOfScope($"Episode {enc.EncounterNo}");
 
         var row = (await EncountersAsync(s, p, new EncounterQuery { EncounterId = id, PageSize = 5 }, ct, auditPhi: false)).Rows.FirstOrDefault(r => r.Id == id)
-            ?? throw AppError.NotCosted($"Encounter {enc.EncounterNo} was not costed in run {s.Run.Code}.");
+            ?? throw AppError.NotCosted($"Episode {enc.EncounterNo} was not costed in run {s.Run.Code}.");
         var comps = await db.CostComponents.AsNoTracking().Where(c => c.RunId == s.Run.Id && c.Scope == "ENCOUNTER" && c.ScopeId == id).ToListAsync(ct);
         var std = await db.ProcedureCosts.AsNoTracking().Where(c => c.RunId == s.Run.Id && c.CostType == "STANDARD").ToDictionaryAsync(c => c.ProcedureId, c => c.UnitCost, ct);
         var services = (await (from sv in db.EncounterServices.AsNoTracking()

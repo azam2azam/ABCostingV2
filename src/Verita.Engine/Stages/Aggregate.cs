@@ -84,6 +84,8 @@ public static class Aggregate
         AddDim("hospital", ctx.HospitalId.ToString(), ctx.HospitalName, actual.EncounterTotals.Keys);
         foreach (var g in ctx.Encounters.Where(e => actual.EncounterTotals.ContainsKey(e.Id)).GroupBy(e => e.EncType))
             AddDim("encounterType", g.Key, string.IsNullOrWhiteSpace(g.Key) ? "Not assigned" : g.Key, g.Select(e => e.Id));
+        foreach (var g in ctx.Encounters.Where(e => actual.EncounterTotals.ContainsKey(e.Id)).GroupBy(e => CareArea.Of(e.EncType, e.IsSurgical)))
+            AddDim("careArea", g.Key, g.Key, g.Select(e => e.Id));
 
         var lossMaking = output.PackageCosts.Count(p => p.OperatingMargin < 0m);
         return new StepResult(output.PackageCosts.Count + output.DrgSummaries.Count + output.DimensionCosts.Count, 0m, 0m, "SUCCESS",

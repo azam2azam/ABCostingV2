@@ -29,6 +29,7 @@ export const routes: Routes = [
       { path: '', pathMatch: 'full', redirectTo: 'dashboard' },
       r('dashboard', overview, 'Dashboard'),
       r('ip-dashboard', overview, 'IpDashboard'),
+      r('or-dashboard', overview, 'OrDashboard'),
       r('op-dashboard', overview, 'OpDashboard'),
       r('er-dashboard', overview, 'ErDashboard'),
       r('assistant', assistant, 'AssistantPage'),

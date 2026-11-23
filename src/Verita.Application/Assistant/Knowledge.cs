@@ -19,8 +19,8 @@ public static class Knowledge
             "Cost consumed by the patient's care itself: staff time, drugs, consumables and equipment used on a procedure. In a costing-model run it is the contracted price × the procedure type's Margin Cost %.", "procedure-costing"),
         new("indirect-cost", "Indirect cost", ["indirect costs", "indirect"],
             "Support cost carried onto a procedure as a share of its contracted price: the procedure type's Overhead %.", "indirect-costing"),
-        new("overhead", "Overheads", ["overheads", "encounter overhead", "encounter overheads"],
-            "Encounter-level overheads: cost-centre costs spread over encounters rather than over individual procedures.", "indirect-costing"),
+        new("overhead", "Overheads", ["overheads", "episode overhead", "episode overheads", "encounter overhead", "encounter overheads"],
+            "Episode-level overheads: cost-centre costs spread over episodes rather than over individual procedures.", "indirect-costing"),
         new("unit-cost", "Unit cost", ["cost per unit", "cost per case"],
             "The cost of one occurrence of a procedure or activity: its total cost divided by its volume in the run."),
         new("cost-driver", "Cost driver", ["driver", "drivers", "cost drivers", "allocation basis"],
@@ -46,7 +46,7 @@ public static class Knowledge
         new("published-run", "Published run", ["publish", "published", "publication"],
             "A run that passed its checks and four-eye approval. It is immutable; to correct a period you create a new run. Integrations and default screens read only published runs."),
         new("costing-model", "Costing model", ["costing version", "costing models", "version"],
-            "A versioned set of costing definitions (Margin Cost % and Overhead % by procedure type, encounter overheads) with effective dates and approval history.", "costing-models"),
+            "A versioned set of costing definitions (Margin Cost % and Overhead % by procedure type, episode overheads) with effective dates and approval history.", "costing-models"),
         new("package", "Package", ["packages", "bundle", "bundled episode"],
             "A bundled episode billed at a contracted price. Its cost is the cost of its component procedures; its margin is the price minus that cost.", "packages"),
         new("drg", "DRG", ["drgs", "diagnosis related group"],
@@ -100,7 +100,7 @@ public static class Knowledge
             ["On a machine that can reach the HIS SQL Server, run the HIS Extract Utility (tools/HisExtract). Confirm the connection, the SetupID and the ProjectID. It only reads from HIS.",
              "Run probe first to see this project's row counts.",
              "Run catalogue once: hospital, departments, cost centres, doctors, procedures and prices, packages, DRGs and payers go into a …-catalogue.zip.",
-             "Run facts for each month (it asks From/To): patients, encounters, invoice lines, revenue, refunds and package items go into one …-{yyyy-MM}-facts.zip per month.",
+             "Run facts for each month (it asks From/To): patients, episodes, invoice lines, revenue, refunds and package items go into one …-{yyyy-MM}-facts.zip per month.",
              "Copy the zips to where VERITA runs. Open Data → Data Import and choose the catalogue zip first.",
              "VERITA reads the pack and shows its SetupID, ProjectID, month and tables. Choose the VERITA hospital; the one whose SetupID/ProjectID match is marked (HIS match). The first import binds that hospital to the pack's SetupID/ProjectID, and packs from another HIS project are refused for it afterwards.",
              "Click Validate: it runs the real load and rolls it back, listing every failed row with the reason. Then click Proceed.",
@@ -142,11 +142,11 @@ public static class Knowledge
             ["A draft costing model version exists for the hospital (published versions are read-only)."]),
         new("set-indirect-costing", "Set indirect costing and overheads",
             ["set indirect costing", "indirect costing", "indirect costing values", "set overhead", "overhead percentage", "overhead %", "set overheads",
-             "encounter overheads", "indirect cost percentage", "edit indirect costing"],
+             "episode overheads", "encounter overheads", "indirect cost percentage", "edit indirect costing"],
             ["Pick the hospital in the context bar.",
              "Open Configuration → Indirect Costing and choose the draft costing version.",
              "Under Procedure/activity overheads, set each type's Overhead (%): indirect cost = contracted price × Overhead %. Expand a type to set one procedure differently.",
-             "Under encounter overheads, add a line per cost centre with an Overhead % or a fixed Overhead (SAR) spread over encounters.",
+             "Under episode overheads, add a line per cost centre with an Overhead % or a fixed Overhead (SAR) spread over episodes.",
              "Click Save."],
             "indirect-costing", "costing.view",
             ["A draft costing model version exists for the hospital (published versions are read-only)."]),
@@ -174,7 +174,7 @@ public static class Knowledge
         new("procedure", "Procedure", ["procedure", "procedures"]),
         new("package", "Package", ["package", "packages"]),
         new("drg", "DRG", ["drg", "drgs"]),
-        new("encounterType", "Encounter type", ["encounter type", "visit type", "inpatient", "outpatient", "ip op", "admission type"]),
+        new("encounterType", "Episode type", ["episode type", "encounter type", "visit type", "inpatient", "outpatient", "ip op", "admission type"]),
         new("segment", "Patient segment", ["segment", "segments", "patient segment", "nationality"]),
         new("hospital", "Hospital", ["hospitals", "by hospital", "facility"]),
         new("resource", "Resource", ["resource", "resources"]),
@@ -189,8 +189,9 @@ public static class Knowledge
             var aliases = new List<string> { n.Label, n.Path.Replace('-', ' ') };
             // Extra phrases so "open inpatient dashboard" / "open Summary" resolve after the Dashboard rename.
             if (n.Path == "dashboard") aliases.AddRange(["summary dashboard", "the summary", "run summary"]);
-            else if (n.Path == "ip-dashboard") aliases.AddRange(["inpatient dashboard", "ip summary", "inpatient summary"]);
-            else if (n.Path == "op-dashboard") aliases.AddRange(["outpatient dashboard", "op summary", "outpatient summary"]);
+            else if (n.Path == "ip-dashboard") aliases.AddRange(["inpatient dashboard", "ip dashboard", "ip summary", "inpatient summary"]);
+            else if (n.Path == "or-dashboard") aliases.AddRange(["operating room dashboard", "operation room dashboard", "theatre dashboard", "surgery dashboard"]);
+            else if (n.Path == "op-dashboard") aliases.AddRange(["outpatient dashboard", "op dashboard", "op summary", "outpatient summary"]);
             else if (n.Path == "er-dashboard") aliases.AddRange(["emergency dashboard", "er summary", "emergency summary"]);
             yield return new("nav", n.Path, n.Label, aliases.ToArray(), n.Permission);
         }

@@ -98,7 +98,7 @@ public sealed class ClaudeIntentRouter(HttpClient http, IOptions<IntentRouterOpt
         "Disambiguation rules (they win over the intent list):\n" +
         "- Losing money, a loss, lose/losing, negative or low margin, unprofitable, profit, \"which X lose\" or \"which X are making a loss\" about procedures, departments, payers, insurers, physicians or any breakdown: profitability.by. " +
         "Only when it is about packages, use package.losing.\n" +
-        "- Most expensive, cheapest, costliest, unit cost ranking, most performed, busiest, by volume, by encounters, by revenue or by total cost for a list of procedures with no mention of losing or profit: procedure.top.\n" +
+        "- Most expensive, cheapest, costliest, unit cost ranking, most performed, busiest, by volume, by episodes, by revenue or by total cost for a list of procedures with no mention of losing or profit: procedure.top.\n" +
         "- The word 'procedure' alone does not mean procedure.top; judge what is being asked about them.\n" +
         "- A question about one named procedure or package's cost: procedure.cost or package.cost.\n\n" +
         "Intents (id: label. What it answers. Typical words and phrases. Examples):\n" +
