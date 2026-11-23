@@ -96,8 +96,8 @@ public static class Reconcile
         // FR-7.10: each residual is its own line; a positive is never netted against a negative.
         foreach (var r in residuals.OrderByDescending(r => r.Amount))
             Line(r.Label, "RESIDUAL", r.Bucket, -r.Amount, $"{r.Explanation} Owner: {Catalogue.ResidualOwner[r.Bucket]}.");
-        Line("Cost attributed to patient encounters", "RESULT", null, -patient,
-            $"Sum of {actual.EncounterTotals.Count:N0} encounter cost records produced by this run.");
+        Line("Cost attributed to patient episodes", "RESULT", null, -patient,
+            $"Sum of {actual.EncounterTotals.Count:N0} episode cost records produced by this run.");
         Line("Unexplained difference", "UNEXPLAINED", null, -unexplained,
             within
                 ? $"Within the {Fmt.Sar(materiality, 2)} materiality threshold."

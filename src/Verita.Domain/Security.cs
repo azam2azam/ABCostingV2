@@ -83,9 +83,10 @@ public static class Security
     [
         new("Dashboard", [
             new("dashboard", "Summary", "dashboard.view", "Direct cost, indirect cost, overheads, revenue and margin for one costed run — each figure opens the screen that explains it. Includes period vs 6-month trends and stacked profitability charts."),
-            new("ip-dashboard", "IP Dashboard", "dashboard.view", "Inpatient (IP) cost, revenue and margin for one costed run — limited to IP encounters."),
-            new("op-dashboard", "OP Dashboard", "dashboard.view", "Outpatient (OP) cost, revenue and margin for one costed run — OP encounters only (ER has its own dashboard)."),
-            new("er-dashboard", "ER Dashboard", "dashboard.view", "Emergency (ER) cost, revenue and margin for one costed run — limited to ER encounters."),
+            new("ip-dashboard", "IPD Dashboard", "dashboard.view", "Inpatient (IPD) cost, revenue and margin for one costed run — admissions without an operation (OR has its own dashboard)."),
+            new("or-dashboard", "OR Dashboard", "dashboard.view", "Operating room (OR) cost, revenue and margin for one costed run — admissions with a theatre booking that went ahead."),
+            new("op-dashboard", "OPD Dashboard", "dashboard.view", "Outpatient (OPD) cost, revenue and margin for one costed run — OP episodes only (ER has its own dashboard)."),
+            new("er-dashboard", "ER Dashboard", "dashboard.view", "Emergency (ER) cost, revenue and margin for one costed run — limited to ER episodes."),
         ]),
         new("Catalogue", [
             new("departments", "Departments", "costing.view", "The hospital's departments from the catalogue. When a calculation has been run for the period, cases, revenue and cost are shown too."),
@@ -94,7 +95,7 @@ public static class Security
             new("procedures", "Procedure/Activity", "costing.view", "Standard and actual cost per procedure/activity, fully decomposed into its cost components."),
             new("cost-centres", "Cost Centres", "masterdata.view", "The financial units money lands in, their step-down sequence and their closing balances."),
             new("resources", "Resources", "masterdata.view", "Everything that costs money and is consumed, with effective-dated rates and capacity models."),
-            new("patient-encounters", "Patient Encounters", "patient.view", "Patient encounters and what was invoiced for each, with the source reference of every line."),
+            new("patient-encounters", "Patient Episodes", "patient.view", "Patient episodes and what was invoiced for each, with the source reference of every line."),
             new("his-invoicing", "HIS Invoicing", "revenue.view", "Invoices as held in the HIS."),
         ]),
         new("Configuration", [

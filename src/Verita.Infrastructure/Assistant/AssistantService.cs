@@ -40,7 +40,7 @@ public sealed class AssistantService(IDbContextFactory<VeritaDbContext> factory,
     {
         ["hospital"] = "Hospital", ["period"] = "Period", ["procedure"] = "Procedure", ["package"] = "Package", ["dimension"] = "By",
         ["limit"] = "Show", ["order"] = "Order", ["metric"] = "Ranked", ["nav"] = "Screen", ["term"] = "Term", ["howto"] = "Task",
-        ["compare"] = "Compared with", ["measure"] = "Ranked by", ["encType"] = "Encounter type",
+        ["compare"] = "Compared with", ["measure"] = "Ranked by", ["encType"] = "Episode type",
     };
 
     // ── Threads ──────────────────────────────────────────────────────────────────────
@@ -383,7 +383,7 @@ public sealed class AssistantService(IDbContextFactory<VeritaDbContext> factory,
 
     /// <summary>The breakdowns the dashboards offer, in the order of their tabs: dimension key and how a question names it.</summary>
     private static readonly (string Key, string Phrase)[] DashboardDims =
-        [("department", "department"), ("encounterType", "encounter type"), ("segment", "patient segment"), ("insurer", "insurer"), ("physician", "physician"), ("resource", "resource")];
+        [("department", "department"), ("encounterType", "episode type"), ("segment", "patient segment"), ("insurer", "insurer"), ("physician", "physician"), ("resource", "resource")];
 
     /// <summary>
     /// Follow-up buttons. On the dashboard intents they are the breakdowns the matching dashboard

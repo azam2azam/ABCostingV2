@@ -11,12 +11,12 @@ import { packageTileInfo } from '../shared/tile-info';
 
 /** The Departments list row, as far as this screen needs it. */
 interface DepartmentRow { id: string; code: string; name: string; packages?: number }
-/** A department's package row: the Packages list's figures for the department's encounters only, with what the package price covered. */
+/** A department's package row: the Packages list's figures for the department's episodes only, with what the package price covered. */
 type DeptPackage = PackageRow & { consumablesCovered?: string | number | null; medicineCovered?: string | number | null };
 interface DepartmentDetail {
   department: DepartmentRow;
   packages?: DeptPackage[] | null;
-  /** Each package's figures split by the encounter doctor (id, code and name are the doctor's), by package id. */
+  /** Each package's figures split by the episode doctor (id, code and name are the doctor's), by package id. */
   packageDoctors?: Record<string, PackageRow[]> | null;
 }
 
@@ -29,7 +29,7 @@ function rawOf(p: DeptPackage): Figures {
   };
 }
 
-/** One package's figures on the department's encounters. */
+/** One package's figures on the department's episodes. */
 function statOf(p: DeptPackage, doctors: PackageRow[]): Stat {
   return {
     ...figuresOf(rawOf(p)),
@@ -44,7 +44,7 @@ function statOf(p: DeptPackage, doctors: PackageRow[]): Stat {
   selector: 'v-compare-packages',
   imports: [RouterLink, CompareGrid, CompareToggles, ...UI],
   template: `
-    <v-page title="Compare packages" purpose="Packages billed on one department's encounters, side by side: volume, what they consumed and billed, what HIS claimed, and length of stay.">
+    <v-page title="Compare packages" purpose="Packages billed on one department's episodes, side by side: volume, what they consumed and billed, what HIS claimed, and length of stay.">
       <a actions class="btn" [routerLink]="departmentId() ? ['/departments', departmentId()] : ['/departments']" [queryParams]="{ department: null, packages: null }" queryParamsHandling="merge">Back to {{ departmentId() ? 'department' : 'departments' }}</a>
       <v-state [loading]="deptsRes.isLoading() && !deptsRes.value()" [error]="deptsRes.error()">
         @if (deptsRes.value()) {
@@ -73,7 +73,7 @@ function statOf(p: DeptPackage, doctors: PackageRow[]): Stat {
                 </div>
                 <v-compare-grid [class.reloading]="res.isLoading()" [cols]="cols()" [options]="all()" [bench]="bench()" [perCase]="perCase()"
                   noun="Package" spreadCaption="Cases per doctor" avgLabel="department average" (pick)="pickPackage($event.index, $event.key)" />
-                @if (!all().length) { <p class="muted center">No packages billed on this department's encounters in {{ r.meta.period }}.</p> }
+                @if (!all().length) { <p class="muted center">No packages billed on this department's episodes in {{ r.meta.period }}.</p> }
               }
             </v-state>
           }
@@ -83,7 +83,7 @@ function statOf(p: DeptPackage, doctors: PackageRow[]): Stat {
   `,
   styles: COMPARE_PAGE_STYLES,
 })
-/** Side by side comparison of up to four packages on one department's encounters, from the run-stored package lines. */
+/** Side by side comparison of up to four packages on one department's episodes, from the run-stored package lines. */
 export class ComparePackages {
   private route = inject(ActivatedRoute);
   private router = inject(Router);
@@ -108,7 +108,7 @@ export class ComparePackages {
     return d && d.department.id === this.departmentId() ? d : null;
   });
 
-  /** Every package on the department's encounters, most cases first. */
+  /** Every package on the department's episodes, most cases first. */
   all = computed<Stat[]>(() => {
     const d = this.current();
     if (!d) return [];

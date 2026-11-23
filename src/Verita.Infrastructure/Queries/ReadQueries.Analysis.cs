@@ -10,7 +10,7 @@ public sealed partial class ReadQueries
     // ═══ Profitability (FR-5.15 – FR-5.17) ═══════════════════════════════════════════
 
     public static readonly string[] Dimensions =
-        ["hospital", "department", "resource", "serviceLine", "physician", "payer", "insurer", "procedure", "package", "drg", "noBillable", "billable", "encounterType", "segment"];
+        ["hospital", "department", "resource", "serviceLine", "physician", "payer", "insurer", "procedure", "package", "drg", "noBillable", "billable", "encounterType", "careArea", "segment"];
 
     public sealed record ProfitRow(string Key, string Label, int Encounters, decimal Volume, decimal Revenue, decimal Direct, decimal Indirect,
         decimal Overhead, decimal Total, decimal Contribution, decimal Operating, decimal MarginPct, string? Link, int? Services = null);
@@ -22,17 +22,19 @@ public sealed partial class ReadQueries
                 select new { p.Id, Insurer = i.Id, i.Name }).ToListAsync(ct))
         .ToDictionary(x => x.Id, x => ((string?)x.Insurer.ToString(), (string?)x.Name));
 
-    public async Task<ProfitDto> ProfitabilityAsync(ScopedRun s, Principal p, string dimension, CancellationToken ct, string? encType = null)
+    public async Task<ProfitDto> ProfitabilityAsync(ScopedRun s, Principal p, string dimension, CancellationToken ct, string? encType = null, string? careArea = null)
     {
         if (!Dimensions.Contains(dimension)) throw AppError.InvalidDimension(dimension, Dimensions);
+        _ = Slice(encType, careArea);  // rejects an unknown care area
+        var filterArea = !string.IsNullOrWhiteSpace(careArea);
         var showRevenue = p.Can("revenue.view");
         var rid = s.Run.Id;
-        var idle = string.IsNullOrWhiteSpace(encType)
+        var idle = string.IsNullOrWhiteSpace(encType) && !filterArea
             ? await db.ResidualBuckets.AsNoTracking().Where(b => b.RunId == rid && b.Bucket == "UNUSED_CAPACITY").SumAsync(b => (decimal?)b.Amount, ct) ?? 0m
             : 0m;
         List<ProfitRow> rows;
         ProfitRow? wholeRun = null;
-        var filterEnc = !string.IsNullOrWhiteSpace(encType);
+        var filterEnc = !string.IsNullOrWhiteSpace(encType) || filterArea;
 
         ProfitRow Make(string key, string label, int n, decimal vol, decimal rev, decimal d, decimal i, decimal o, string? link)
         {
@@ -55,7 +57,9 @@ public sealed partial class ReadQueries
                            select new { pr.Id, pr.Name, pc.Volume, pc.Revenue, pc.DirectCost, pc.IndirectCost, pc.OverheadCost }).ToListAsync(ct))
                 .Select(x => Make(x.Id.ToString(), x.Name, encounters.GetValueOrDefault(x.Id), x.Volume, x.Revenue, x.DirectCost, x.IndirectCost, x.OverheadCost, $"procedures/{x.Id}")).ToList();
         }
-        else if (!filterEnc && s.Run.CostingMethod == CostingModelPipeline.Method)
+        // Runs from before the care area split hold no careArea rows: add those up from the encounters instead.
+        else if (!filterEnc && s.Run.CostingMethod == CostingModelPipeline.Method
+                 && (dimension != "careArea" || await db.RunDimensionCosts.AnyAsync(x => x.RunId == rid && x.Dimension == "careArea", ct)))
         {
             // Prepared by the run: read, never re-added.
             string? StoredLink(string k) => k.Length == 0 ? null : dimension switch
@@ -81,7 +85,8 @@ public sealed partial class ReadQueries
         else
         {
             var facts = await EncounterFacts(rid, ct);
-            if (filterEnc) facts = facts.Where(f => f.EncType == encType).ToList();
+            if (filterArea) facts = facts.Where(f => f.Area == careArea).ToList();
+            else if (filterEnc) facts = facts.Where(f => f.EncType == encType).ToList();
             var doctorResource = dimension == "resource" ? await db.Providers.AsNoTracking().ToDictionaryAsync(x => x.Id, x => x.ResourceId, ct) : [];
             var payerInsurer = dimension == "insurer" ? await InsurerByPayerAsync(ct) : [];
             var labels = dimension switch
@@ -109,9 +114,10 @@ public sealed partial class ReadQueries
                 "package" => f => f.PackageId?.ToString() ?? "",
                 "drg" => f => f.DrgId?.ToString() ?? "",
                 "encounterType" => f => f.EncType,
+                "careArea" => f => f.Area,
                 _ => f => f.Segment,
             };
-            string Label(string k) => dimension is "encounterType" or "segment" ? k
+            string Label(string k) => dimension is "encounterType" or "careArea" or "segment" ? k
                 : Guid.TryParse(k, out var g) ? labels.GetValueOrDefault(g, k) : "Not assigned";
             string? Link(string k) => dimension switch
             {

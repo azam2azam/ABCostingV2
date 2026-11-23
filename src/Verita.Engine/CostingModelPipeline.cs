@@ -4,7 +4,7 @@ using Verita.Domain.Entities;
 namespace Verita.Engine;
 
 public sealed record ModelEncounter(Guid Id, Guid DepartmentId, Guid? ServiceLineId, Guid? ProviderId, Guid PayerId, Guid? DrgId, Guid? PackageId,
-    string EncType, string Segment, int LengthOfStay);
+    string EncType, string Segment, int LengthOfStay, bool IsSurgical = false);
 public sealed record ModelLine(Guid EncounterId, Guid ProcedureId, Guid CostCenterId, Guid? ProviderId, decimal Quantity, string SourceRef, bool ZeroPrice = false);
 public sealed record ModelRevenue(Guid EncounterId, string SourceRef, decimal Net, bool ZeroPrice = false);
 public sealed record ModelProcedure(Guid Id, string Name, bool Medicine, string ProcType, decimal Price);
@@ -158,7 +158,7 @@ public sealed class CostingModelPipeline(IStageSink sink)
             var values = ctx.Encounters.ToDictionary(e => e.Id, e => linesByEncounter.TryGetValue(e.Id, out var lines)
                 ? lines.Sum(l => LineCost(ctx, l, [], []).Value) : 0m);
             var total = values.Values.Sum(v => OverheadOf(ctx, v));
-            return (values, new StepResult(0, 0m, 0m, "SUCCESS", $"Encounter level overheads come to {Fmt.Sar(total)}.",
+            return (values, new StepResult(0, 0m, 0m, "SUCCESS", $"Episode level overheads come to {Fmt.Sar(total)}.",
                 new Dictionary<string, object?> { ["overhead"] = Money.R4(total) }));
         }, ct);
         await sink.StatusAsync("CALCULATED", ct);
@@ -189,7 +189,7 @@ public sealed class CostingModelPipeline(IStageSink sink)
         }
         var withLines = ctx.Lines.Select(l => l.EncounterId).ToHashSet();
         var empty = ctx.Encounters.Count(e => !withLines.Contains(e.Id));
-        if (empty > 0) Add("DQ-ENC-NO-SERVICE", "Encounter", $"{ctx.PeriodCode} encounters", $"{empty} encounter(s) recorded no services at all.", empty.ToString());
+        if (empty > 0) Add("DQ-ENC-NO-SERVICE", "Encounter", $"{ctx.PeriodCode} episodes", $"{empty} episode(s) recorded no services at all.", empty.ToString());
         var procedures = billedProcedures.Select(ctx.Procedures.GetValueOrDefault).OfType<ModelProcedure>().ToList();
         var noPct = procedures.Count(p => DirectPct(ctx, p) is null);
         if (noPct > 0) Add("DQ-MODEL-NO-MARGIN", "Procedure", $"{ctx.PeriodCode} procedures",
@@ -198,7 +198,7 @@ public sealed class CostingModelPipeline(IStageSink sink)
         if (noPrice > 0) Add("DQ-MODEL-NO-PRICE", "Procedure", $"{ctx.PeriodCode} procedures",
             $"{noPrice} billed procedure(s) have no contracted price effective in {ctx.PeriodCode}, so they cost SAR 0.", noPrice.ToString());
         return (output.Issues.Count, new StepResult(output.Issues.Count, 0m, 0m, output.Issues.Count > 0 ? "WARNING" : "SUCCESS",
-            $"{output.Issues.Count} data-quality warning(s) for {ctx.Encounters.Count} encounters and {ctx.Lines.Count} service lines."));
+            $"{output.Issues.Count} data-quality warning(s) for {ctx.Encounters.Count} episodes and {ctx.Lines.Count} service lines."));
     }
 
     private static ((decimal Cost, decimal Revenue, decimal Direct, decimal Indirect, decimal Overhead), StepResult) Aggregate(CostingModelContext ctx,
@@ -272,7 +272,7 @@ public sealed class CostingModelPipeline(IStageSink sink)
                      {
                          ("hospital", ctx.HospitalId.ToString()), ("department", e.DepartmentId.ToString()), ("serviceLine", e.ServiceLineId?.ToString() ?? ""),
                          ("physician", e.ProviderId?.ToString() ?? ""), ("payer", e.PayerId.ToString()), ("package", e.PackageId?.ToString() ?? ""),
-                         ("drg", e.DrgId?.ToString() ?? ""), ("encounterType", e.EncType), ("segment", e.Segment),
+                         ("drg", e.DrgId?.ToString() ?? ""), ("encounterType", e.EncType), ("careArea", CareArea.Of(e.EncType, e.IsSurgical)), ("segment", e.Segment),
                      })
                 Add(dimension, key, e.Id, revenue, direct, indirect, overhead);
         }
@@ -290,7 +290,7 @@ public sealed class CostingModelPipeline(IStageSink sink)
             var total = Money.R4(direct + indirect + overhead);
             var label = key.Length == 0 ? "Not assigned"
                 : dimension == "hospital" ? ctx.HospitalName
-                : dimension is "encounterType" or "segment" ? key
+                : dimension is "encounterType" or "careArea" or "segment" ? key
                 : labels.GetValueOrDefault(dimension)?.GetValueOrDefault(key) ?? key;
             output.DimensionCosts.Add(new RunDimensionCost
             {
@@ -355,6 +355,6 @@ public sealed class CostingModelPipeline(IStageSink sink)
         var totals = (Cost: output.EncounterCosts.Sum(c => c.TotalCost), Revenue: output.EncounterCosts.Sum(c => c.Revenue),
             Direct: output.EncounterCosts.Sum(c => c.DirectCost), Indirect: output.EncounterCosts.Sum(c => c.IndirectCost), Overhead: output.EncounterCosts.Sum(c => c.OverheadCost));
         return (totals, new StepResult(output.RowCount, totals.Cost, totals.Cost, "SUCCESS",
-            $"{output.EncounterCosts.Count} encounters costed at {Fmt.Sar(totals.Cost)} against {Fmt.Sar(totals.Revenue)} of revenue."));
+            $"{output.EncounterCosts.Count} episodes costed at {Fmt.Sar(totals.Cost)} against {Fmt.Sar(totals.Revenue)} of revenue."));
     }
 }

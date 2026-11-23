@@ -104,6 +104,9 @@ export interface TileInfo {
   values?: string | null;
 }
 
+/** One part of a tile's figure. */
+export interface TilePart { key: string; label: string; value: string | number | null; link?: string | null; }
+
 @Component({
   selector: 'v-tile',
   imports: [RouterLink, Icon, ...PIPES],
@@ -133,6 +136,16 @@ export interface TileInfo {
         } @else { {{ text() }} }
       </div>
       @if (note()) { <div class="note">{{ note() }}</div> }
+      @if (parts()?.length) {
+        <dl class="parts">
+          @for (p of parts(); track p.key) {
+            <dt>{{ p.label }}</dt>
+            <dd class="num">
+              @if (p.link) { <a [routerLink]="p.link" queryParamsHandling="preserve">{{ fmt(p.value) }}</a> } @else { {{ fmt(p.value) }} }
+            </dd>
+          }
+        </dl>
+      }
     </div>
   `,
   styles: `.tile { position: relative; height: 100%; background: var(--surface); backdrop-filter: blur(14px); border: 1px solid var(--border);
@@ -144,6 +157,11 @@ export interface TileInfo {
            .value a { color: inherit; }
            .value.compact { font-size: 16px; font-weight: 600; letter-spacing: 0; line-height: 1.3; white-space: normal; overflow-wrap: break-word; }
            .note { color: var(--text-3); font-size: 12.5px; margin-top: 4px; }
+           .parts { display: grid; grid-template-columns: max-content 1fr max-content 1fr; gap: 3px 8px; margin: 10px 0 0; padding-top: 8px;
+                    border-top: 1px solid var(--border); font-size: 12.5px; }
+           .parts dt { color: var(--text-3); font-weight: 600; }
+           .parts dd { margin: 0; color: var(--text-2); font-weight: 600; text-align: left; }
+           .parts dd a { color: inherit; }
            .label { display: flex; align-items: center; gap: 6px; }
            .tile.open { z-index: 20; }
            .info-btn { display: inline-flex; align-items: center; justify-content: center; padding: 2px; margin: -2px 0; border: 0; border-radius: 50%;
@@ -190,10 +208,15 @@ export class Tile {
   blankZero = input(false, { transform: booleanAttribute });
   /** A smaller value, for text such as a name. */
   compact = input(false, { transform: booleanAttribute });
+  /** A split of the figure shown under it, e.g. by care area; each part in the tile's unit. */
+  parts = input<TilePart[] | null>(null);
   text = computed(() => {
     const v = this.value();
+    if (this.blankZero() && v !== null && v !== undefined && !Number(v)) return '';
+    return this.fmt(v);
+  });
+  fmt(v: string | number | null | undefined): string {
     if (v === null || v === undefined) return '—';
-    if (this.blankZero() && !Number(v)) return '';
     if (this.unit() === 'SAR') {
       const digits = String(v).replace('-', '').split('.')[0].length;
       return digits > 5 ? formatMoney(String(v), { compact: true }) : formatMoney(String(v), { dp: digits > 3 ? 0 : 2 });
@@ -201,7 +224,7 @@ export class Tile {
     if (this.unit() === 'id') return String(v);
     if (this.unit() === '%') return `${formatDec(String(v), 1)}%`;
     return formatDec(String(v), 0);
-  });
+  }
   cls = computed(() => {
     const d = this.direction();
     return d === 'higher-better' ? directionClass(String(this.value()), 'higher') : '';

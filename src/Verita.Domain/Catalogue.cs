@@ -142,8 +142,8 @@ public static class Catalogue
         new(1, "VALIDATE", "Validate source data", false),
         new(2, "DIRECT_COST", "Direct costing", true),
         new(3, "INDIRECT_COST", "Indirect costing", true),
-        new(4, "ENCOUNTER_OVERHEAD", "Encounter level overheads", true),
-        new(5, "AGGREGATE", "Prepare encounter, procedure and dashboard results", true),
+        new(4, "ENCOUNTER_OVERHEAD", "Episode level overheads", true),
+        new(5, "AGGREGATE", "Prepare episode, procedure and dashboard results", true),
     ];
 
     public static readonly string[] StepStatuses = ["PENDING", "RUNNING", "SUCCESS", "WARNING", "FAILED"];

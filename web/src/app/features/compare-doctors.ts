@@ -67,7 +67,7 @@ function statOf(d: DoctorRow, price: number, coveredLos: number): Stat {
                   <v-tile label="Claimed" [value]="totals()?.claimed ?? null" [info]="info.claims" />
                 </div>
                 <v-compare-grid [class.reloading]="res.isLoading()" [cols]="cols()" [options]="all()" [bench]="bench()" [perCase]="perCase()"
-                  noun="Doctor" spreadCaption="Consumables per encounter" avgLabel="package average" (pick)="pickDoctor($event.index, $event.key)" />
+                  noun="Doctor" spreadCaption="Consumables per episode" avgLabel="package average" (pick)="pickDoctor($event.index, $event.key)" />
                 @if (!all().length) { <p class="muted center">No billed package lines in {{ r.meta.period }}.</p> }
               }
             </v-state>

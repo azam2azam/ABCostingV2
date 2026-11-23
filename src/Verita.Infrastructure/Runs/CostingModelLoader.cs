@@ -40,7 +40,7 @@ public sealed class CostingModelLoader(VeritaDbContext db)
         var encounters = await (from e in inRun
                                 join p in db.Patients on e.PatientId equals p.Id
                                 orderby e.EncounterNo
-                                select new ModelEncounter(e.Id, e.DepartmentId, e.ServiceLineId, e.ProviderId, e.PayerId, e.DrgId, e.PackageId, e.EncType, p.Segment, e.LengthOfStay))
+                                select new ModelEncounter(e.Id, e.DepartmentId, e.ServiceLineId, e.ProviderId, e.PayerId, e.DrgId, e.PackageId, e.EncType, p.Segment, e.LengthOfStay, e.IsSurgical))
             .ToListAsync(ct);
         var revenue = await (from r in fromHis ? counted : db.RevenueTransactions.AsNoTracking()
                              join e in inRun on r.EncounterId equals e.Id

@@ -90,6 +90,8 @@ public sealed partial class ReadQueries
         public bool Desc { get; init; } = true;
         public string? Search { get; init; }
         public string? EncType { get; init; }
+        /// <summary>IPD, OR, OPD or ER (see <see cref="CareArea"/>).</summary>
+        public string? CareArea { get; init; }
         /// <summary>Encounters that billed this package as an invoice procedure (HIS IsPackage line).</summary>
         public Guid? BilledPackageId { get; init; }
         // A member's id or code, or NotAssigned for encounters with none.
@@ -108,7 +110,7 @@ public sealed partial class ReadQueries
     public const string NotAssigned = "none";
     public sealed record FilterOption(string Value, string Label);
     public sealed record PatientEncounterFilters(FilterOption[] ServiceLines, FilterOption[] Departments, FilterOption[] Resources, FilterOption[] Physicians,
-        FilterOption[] Payers, FilterOption[] Insurers, FilterOption[] Drgs, FilterOption[] EncounterTypes, FilterOption[] Segments);
+        FilterOption[] Payers, FilterOption[] Insurers, FilterOption[] Drgs, FilterOption[] EncounterTypes, FilterOption[] Segments, FilterOption[]? CareAreas = null);
 
     public sealed record PatientEncounterRow(Guid Id, string EncounterNo, string Mrn, string Patient, string Segment, string EncType, string Department,
         string Payer, string? Insurer, string? Physician, DateTime AdmitAt, DateTime? DischargeAt, int LengthOfStay, int Services, decimal Gross, decimal Discount, decimal Net, decimal? Cost = null,
@@ -125,7 +127,9 @@ public sealed partial class ReadQueries
         /// <summary>Billed value of medicine consumed (charge, not cost).</summary>
         decimal Medicine = 0,
         /// <summary>VAT on the counted lines (lines refunded in full left out, as for Materials and Medicine); Net + Vat is Invoice Billed.</summary>
-        decimal Vat = 0);
+        decimal Vat = 0,
+        /// <summary>IPD, OR, OPD or ER.</summary>
+        string? CareArea = null);
     public sealed record PatientEncounterPage(PatientEncounterRow[] Rows, int Total, int Page, int PageSize, bool PhiMasked);
     public sealed record PatientEncounterLine(string? Procedure, Guid? ProcedureId, decimal? Quantity, string? CostCentre, string? Physician, string? Payer,
         DateTime? PerformedAt, decimal? Gross, decimal? Discount, decimal? Net, string SourceRef, decimal? Cost = null, string? ProcedureCode = null, bool IsPackage = false, decimal? Refunded = null,
@@ -185,6 +189,7 @@ public sealed partial class ReadQueries
         public string FullName { get; init; } = "";
         public string Segment { get; init; } = "";
         public string EncType { get; init; } = "";
+        public bool IsSurgical { get; init; }
         public string Department { get; init; } = "";
         public string Payer { get; init; } = "";
         public string? Physician { get; init; }
@@ -309,7 +314,7 @@ public sealed partial class ReadQueries
                     where e.HospitalId == s.Hospital.Id
                     select new EncounterBase
                     {
-                        Id = e.Id, EncounterNo = e.EncounterNo, Mrn = pt.Mrn, FullName = pt.FullName, Segment = pt.Segment, EncType = e.EncType, Department = d.Name, Payer = py.Name,
+                        Id = e.Id, EncounterNo = e.EncounterNo, Mrn = pt.Mrn, FullName = pt.FullName, Segment = pt.Segment, EncType = e.EncType, IsSurgical = e.IsSurgical, Department = d.Name, Payer = py.Name,
                         Physician = pr != null ? pr.Name : null, AdmitAt = e.AdmitAt, DischargeAt = e.DischargeAt, LengthOfStay = e.LengthOfStay, DepartmentId = e.DepartmentId,
                         ServiceLineId = e.ServiceLineId, ServiceLine = sl != null ? sl.Name : null, ResourceId = pr != null ? pr.ResourceId : null, Resource = rs != null ? rs.Name : null,
                         ProviderId = e.ProviderId, PayerId = e.PayerId, InsurerId = py.InsurerId, InsurerName = ins != null ? ins.Name : null, DrgId = e.DrgId, DrgCode = g != null ? g.Code : null, DrgName = g != null ? g.Name : null,
@@ -386,7 +391,8 @@ public sealed partial class ReadQueries
                 Medicine: Money.R4(materials.GetValueOrDefault(x.Id).Medicine),
                 Claimed: Money.R4(claimed.GetValueOrDefault(x.Id)),
                 DoctorBilled: Money.R4(doctorBilled.GetValueOrDefault(x.Id)),
-                Vat: Money.R4(b.Vat));
+                Vat: Money.R4(b.Vat),
+                CareArea: CareArea.Of(x.EncType, x.IsSurgical));
         }).ToArray();
     }
 
@@ -400,6 +406,15 @@ public sealed partial class ReadQueries
             query = query.Where(x => x.EncounterNo.Contains(term) || x.Mrn.Contains(term));
         }
         if (!string.IsNullOrWhiteSpace(q.EncType)) query = query.Where(x => x.EncType == q.EncType);
+        query = q.CareArea switch
+        {
+            null or "" => query,
+            CareArea.Or => query.Where(x => x.EncType == "IP" && x.IsSurgical),
+            CareArea.Ipd => query.Where(x => x.EncType == "IP" && !x.IsSurgical),
+            CareArea.Er => query.Where(x => x.EncType == "ER"),
+            CareArea.Opd => query.Where(x => x.EncType != "IP" && x.EncType != "ER"),
+            _ => throw AppError.Invalid($"Unknown care area {q.CareArea}. Use IPD, OR, OPD or ER."),
+        };
         if (!string.IsNullOrWhiteSpace(q.Segment)) query = query.Where(x => x.Segment == q.Segment);
         if (Parse(q.Department) is { } department) query = query.Where(x => x.DepartmentId == department);
         if (Parse(q.Payer) is { } payer) query = query.Where(x => x.PayerId == payer);
@@ -459,7 +474,7 @@ public sealed partial class ReadQueries
         var phi = p.Can("phi.view");
         // FR-0.8: unmasked access to identifiable records is audited. Every role sees the MRN here.
         if (result.Length > 0)
-            await audit.WriteAsync(p, "VIEW_PHI", "Encounter", null, $"{result.Length} encounters, {s.Hospital.Code} {s.Period.Code}",
+            await audit.WriteAsync(p, "VIEW_PHI", "Encounter", null, $"{result.Length} episodes, {s.Hospital.Code} {s.Period.Code}",
                 metadata: new { encounters = result.Select(r => r.EncounterNo).Take(200).ToArray() }, ct: ct);
         return new PatientEncounterPage(result, total, page, size, !phi);
     }
@@ -482,7 +497,7 @@ public sealed partial class ReadQueries
         // in SQL, which is far cheaper than the names; the names come from the small lookup tables after.
         var ids = await q.Select(x => new
         {
-            x.ServiceLineId, x.DepartmentId, x.ResourceId, x.ProviderId, x.PayerId, x.InsurerId, x.DrgId, x.EncType, x.Segment,
+            x.ServiceLineId, x.DepartmentId, x.ResourceId, x.ProviderId, x.PayerId, x.InsurerId, x.DrgId, x.EncType, x.IsSurgical, x.Segment,
         }).Distinct().ToListAsync(ct);
         var slIds = ids.Where(x => x.ServiceLineId != null).Select(x => x.ServiceLineId!.Value).Distinct().ToList();
         var deptIds = ids.Select(x => x.DepartmentId).Distinct().ToList();
@@ -507,7 +522,7 @@ public sealed partial class ReadQueries
             x.PayerId, Payer = payerNames.GetValueOrDefault(x.PayerId) ?? "",
             x.InsurerId, InsurerName = x.InsurerId is { } i ? insNames.GetValueOrDefault(i) : null,
             x.DrgId, DrgCode = x.DrgId is { } g ? drgNames.GetValueOrDefault(g)?.Code : null, DrgName = x.DrgId is { } g2 ? drgNames.GetValueOrDefault(g2)?.Name : null,
-            x.EncType, x.Segment,
+            x.EncType, x.IsSurgical, x.Segment,
         }).ToList();
         var serviceLines = held.Select(x => new { x.ServiceLineId, x.ServiceLine }).Distinct().ToList();
         var departments = held.Select(x => new { x.DepartmentId, x.Department }).Distinct().ToList();
@@ -532,7 +547,8 @@ public sealed partial class ReadQueries
             Options(insurers.Select(x => (x.InsurerId?.ToString(), x.InsurerName)), true),
             anyDrg ? Options(drgs.Select(x => (x.DrgId?.ToString(), x.DrgCode is null ? null : $"{x.DrgCode} {x.DrgName}")), true) : [],
             Options(types.Select(x => ((string?)x, (string?)x))),
-            Options(segments.Select(x => ((string?)x, (string?)x))));
+            Options(segments.Select(x => ((string?)x, (string?)x))),
+            CareArea.All.Where(a => held.Any(x => CareArea.Of(x.EncType, x.IsSurgical) == a)).Select(a => new FilterOption(a, a)).ToArray());
     }
 
     /// <summary>INV-2-7-1 and REV-2-7-1 are the same invoice line.</summary>
@@ -543,7 +559,7 @@ public sealed partial class ReadQueries
     public async Task<PatientEncounterDetail> PatientEncounterAsync(ScopedRun s, Principal p, Guid id, CancellationToken ct)
     {
         var deptCodes = await db.Departments.AsNoTracking().ToDictionaryAsync(d => d.Id, d => d.CatalogCode, ct);
-        var row = await EncounterBases(s, p, deptCodes).FirstOrDefaultAsync(x => x.Id == id, ct) ?? throw AppError.NotFound("Encounter");
+        var row = await EncounterBases(s, p, deptCodes).FirstOrDefaultAsync(x => x.Id == id, ct) ?? throw AppError.NotFound("Episode");
         var encounter = (await EncounterRowsAsync([row], s, p, ct))[0];
 
         var services = await (from sv in CountedServices(s)
@@ -834,7 +850,7 @@ public sealed partial class ReadQueries
                 // HIS holds no charge per item: a record's BilledAmount is its invoice line's amount, copied onto every item on the line.
                 null,
                 g.Any(x => x.Item.PrescribedQty != null) ? Money.R4(g.Sum(x => x.Item.PrescribedQty ?? 0m)) : null,
-                g.Count(x => x.Item.ServiceRef != null) == g.Count() ? "Procedure line" : g.Any(x => x.Item.ServiceRef != null) ? "Partly to a procedure line" : "Encounter",
+                g.Count(x => x.Item.ServiceRef != null) == g.Count() ? "Procedure line" : g.Any(x => x.Item.ServiceRef != null) ? "Partly to a procedure line" : "Episode",
                 g.Count(), covered && showMoney ? Money.R4(g.Sum(x => x.Covered ?? 0m)) : null))
             .OrderByDescending(x => x.Quantity).ToArray();
         ChargeItem[] Items(bool medicine) => Group(split.Where(x => (x.Item.Category == "MEDICINE") == medicine), false);
@@ -918,7 +934,7 @@ public sealed partial class ReadQueries
     public async Task<HisEncounterSource> PatientEncounterHisSourceAsync(ScopedRun s, Principal p, Guid id, CancellationToken ct)
     {
         var deptCodes = await db.Departments.AsNoTracking().ToDictionaryAsync(d => d.Id, d => d.CatalogCode, ct);
-        if (!await EncounterBases(s, p, deptCodes).AnyAsync(x => x.Id == id, ct)) throw AppError.NotFound("Encounter");
+        if (!await EncounterBases(s, p, deptCodes).AnyAsync(x => x.Id == id, ct)) throw AppError.NotFound("Episode");
         var e = await (from x in db.Encounters.AsNoTracking()
                        join pa in db.Patients on x.PatientId equals pa.Id
                        join d in db.Departments on x.DepartmentId equals d.Id

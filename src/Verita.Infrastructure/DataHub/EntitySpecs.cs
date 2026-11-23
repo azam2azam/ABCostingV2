@@ -103,7 +103,7 @@ public static class EntitySpecs
             [R("patientMrn", "PatientId", typeof(Patient), "Mrn"), Hosp, R("departmentCode", "DepartmentId", typeof(Department)),
              R("serviceLineCode", "ServiceLineId", typeof(ServiceLine), opt: true), R("payerCode", "PayerId", typeof(Payer)),
              R("drgCode", "DrgId", typeof(Drg), opt: true), R("packageCode", "PackageId", typeof(Package), opt: true), R("providerCode", "ProviderId", typeof(Provider), opt: true)]),
-        new("EncounterService", typeof(EncounterService), "Monthly data", "Service delivered in an encounter.", ["EncounterId", "SourceRef"],
+        new("EncounterService", typeof(EncounterService), "Monthly data", "Service delivered in an episode.", ["EncounterId", "SourceRef"],
             [R("encounterNo", "EncounterId", typeof(Encounter), "EncounterNo"), R("procedureCode", "ProcedureId", typeof(Procedure)),
              R("costCentreCode", "CostCenterId", typeof(CostCenter)), R("providerCode", "ProviderId", typeof(Provider), opt: true)]),
         new("ActivityTransaction", typeof(ActivityTransaction), "Monthly data", "Optional measured Activity×Resource volume. HIS extract no longer invents these from clocks — prefer StaffTime, EncounterTransfer and ConsumptionItem.", ["EncounterId", "SourceSystem", "SourceRef"],
@@ -127,6 +127,8 @@ public static class EntitySpecs
             [Hosp, R("encounterNo", "EncounterId", typeof(Encounter), "EncounterNo", opt: true), R("payerCode", "PayerId", typeof(Payer), opt: true)]),
         new("NphiesClaimLine", typeof(NphiesClaimLine), "Monthly data", "NPHIES adjudication per procedure (HIS_NPHIESClaimProcedure_Log): submitted, approved, reason code and rejection remarks, as stored.", ["HospitalId", "SourceRef"],
             [Hosp, R("encounterNo", "EncounterId", typeof(Encounter), "EncounterNo", opt: true), R("payerCode", "PayerId", typeof(Payer), opt: true)]),
+        new("AdmissionRequest", typeof(AdmissionRequest), "Monthly data", "HIS INP_AdmissionRequest: a request to admit, raised from an OP clinic or the ER, with the admission it became.", ["HospitalId", "SourceRef"],
+            [Hosp]),
         new("NphiesPayment", typeof(NphiesPayment), "Monthly data", "NPHIES payment reconciliation line (HIS_NPHIESPaymentReconciliation_Detail + header) naming a claim of the pack, as stored.", ["HospitalId", "SourceRef"],
             [Hosp]),
 

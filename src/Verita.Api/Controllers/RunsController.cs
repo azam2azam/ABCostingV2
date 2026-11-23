@@ -116,8 +116,15 @@ public sealed class RunsController(RunService runs, RunQueue queue, VeritaDbCont
     /// <summary>Facts held for a hospital's period: rows and estimated storage per entity, and the runs that block deleting them.</summary>
     [HttpGet("periods/{id:guid}/facts")]
     [Authorize(Policy = "masterdata.view")]
-    public async Task<PeriodFactsDto> PeriodFacts(Guid id, [FromQuery] string hospital, [FromServices] PeriodFactsService facts, CancellationToken ct) =>
-        await facts.SummaryAsync(await Me(), id, hospital, ct);
+    public async Task<PeriodFactsDto> PeriodFacts(Guid id, [FromQuery] string hospital, [FromServices] PeriodFactsService facts, CancellationToken ct,
+        [FromQuery] bool counts = true) =>
+        await facts.SummaryAsync(await Me(), id, hospital, ct, counts);
+
+    /// <summary>The period's record count per entity, in one query; the page asks for these after it shows.</summary>
+    [HttpGet("periods/{id:guid}/facts/counts")]
+    [Authorize(Policy = "masterdata.view")]
+    public async Task<PeriodFactCount[]> PeriodFactCounts(Guid id, [FromQuery] string hospital, [FromServices] PeriodFactsService facts, CancellationToken ct) =>
+        await facts.CountsAsync(await Me(), id, hospital, ct);
 
     /// <summary>Delete one entity's facts for the period (and what depends on it), or every fact when entity is omitted. Refused while a calculation run uses them.</summary>
     [HttpDelete("periods/{id:guid}/facts")]

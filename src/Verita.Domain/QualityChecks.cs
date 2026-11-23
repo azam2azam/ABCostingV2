@@ -26,12 +26,12 @@ public static class QualityChecks
         new("DQ-DURATION-IMPOSSIBLE", "Implausible activity duration", "Source data", "WARNING", "Is any recorded duration per occurrence beyond three times the activity's declared maximum?"),
         new("DQ-UTIL-ZERO", "Resource with zero utilisation", "Capacity", "WARNING", "Is the hospital paying for capacity nothing consumed?", AfterCapacity: true),
         new("DQ-UTIL-OVER", "Resource used beyond practical capacity", "Capacity", "WARNING", "Is any resource being worked beyond the capacity it is modelled at?", AfterCapacity: true),
-        new("DQ-CONSUMPTION-ABNORMAL", "Abnormal resource consumption", "Clinical", "WARNING", "Did any encounter consume a resource far outside the normal range?", AfterCapacity: true),
+        new("DQ-CONSUMPTION-ABNORMAL", "Abnormal resource consumption", "Clinical", "WARNING", "Did any episode consume a resource far outside the normal range?", AfterCapacity: true),
         new("DQ-ACT-NO-RECIPE", "Activity with no standard recipe", "Master data", "WARNING", "Does every direct activity declare the resources it consumes?"),
         new("DQ-MODEL-NO-MARGIN", "Procedure with no Margin Cost %", "Master data", "WARNING", "Does every billed procedure have a Margin Cost % under the run's costing model?"),
         new("DQ-MODEL-NO-PRICE", "Procedure with no contracted price", "Master data", "WARNING", "Does every billed procedure have a contracted price effective in the period?"),
-        new("DQ-ENC-NO-SERVICE", "Encounter with no services", "Source data", "WARNING", "Did any encounter arrive with no clinical activity at all?"),
-        new("DQ-ENC-NO-REVENUE", "Encounter with cost but no revenue", "Revenue", "WARNING", "Has any episode been costed with nothing billed against it?"),
+        new("DQ-ENC-NO-SERVICE", "Episode with no services", "Source data", "WARNING", "Did any episode arrive with no clinical activity at all?"),
+        new("DQ-ENC-NO-REVENUE", "Episode with cost but no revenue", "Revenue", "WARNING", "Has any episode been costed with nothing billed against it?"),
     ];
 
     public static Check Get(string code) => All.First(c => c.Code == code);

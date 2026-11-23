@@ -3210,6 +3210,27 @@ CREATE TABLE [NphiesClaimLine] (
 );
 GO
 
+CREATE TABLE [AdmissionRequest] (
+    [Id] uniqueidentifier NOT NULL,
+    [HospitalId] uniqueidentifier NOT NULL,
+    [RequestNo] nvarchar(30) NOT NULL,
+    [RequestedAt] datetime2 NOT NULL,
+    [ExpectedAdmissionAt] datetime2 NULL,
+    [HisStatus] int NULL,
+    [IsActive] bit NULL,
+    [Source] nvarchar(10) NOT NULL,
+    [AppointmentNo] nvarchar(30) NULL,
+    [AssessmentNo] nvarchar(30) NULL,
+    [IsEmergency] bit NULL,
+    [HisClinicId] nvarchar(30) NULL,
+    [AdmissionEncounterNo] nvarchar(60) NULL,
+    [SourceSystem] nvarchar(40) NOT NULL,
+    [SourceRef] nvarchar(60) NOT NULL,
+    CONSTRAINT [PK_AdmissionRequest] PRIMARY KEY ([Id]),
+    CONSTRAINT [FK_AdmissionRequest_Hospital_HospitalId] FOREIGN KEY ([HospitalId]) REFERENCES [Hospital] ([Id])
+);
+GO
+
 CREATE TABLE [NphiesPayment] (
     [Id] uniqueidentifier NOT NULL,
     [HospitalId] uniqueidentifier NOT NULL,
@@ -3353,6 +3374,12 @@ CREATE INDEX [IX_NphiesPayment_HospitalId_ClaimRequestIdentifier] ON [NphiesPaym
 GO
 
 CREATE UNIQUE INDEX [IX_NphiesPayment_HospitalId_SourceRef] ON [NphiesPayment] ([HospitalId], [SourceRef]);
+GO
+
+CREATE UNIQUE INDEX [IX_AdmissionRequest_HospitalId_SourceRef] ON [AdmissionRequest] ([HospitalId], [SourceRef]);
+GO
+
+CREATE INDEX [IX_AdmissionRequest_HospitalId_RequestedAt] ON [AdmissionRequest] ([HospitalId], [RequestedAt]);
 GO
 
 CREATE INDEX [IX_SettlementLine_EncounterId] ON [SettlementLine] ([EncounterId]);

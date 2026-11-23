@@ -68,7 +68,8 @@ public static class OpenPeriods
         foreach (var month in Months(from, toInclusive))
         {
             var end = month.AddMonths(1).AddDays(-1);
-            if (owned.Any(p => p.StartDate <= end && p.EndDate >= month)) continue;
+            // A custom period (e.g. Ramadan) over part of the month does not stand in for the month.
+            if (owned.Any(p => (p.StartDate <= month && p.EndDate >= end) || (PeriodCalendar.IsMonth(p) && p.StartDate <= end && p.EndDate >= month))) continue;
             var code = month.ToString("yyyy MMM", CultureInfo.InvariantCulture);
             if (!codes.Add(code)) continue;
             db.Periods.Add(new Period
