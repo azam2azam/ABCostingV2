@@ -141,15 +141,97 @@ public sealed class FactsWorker(SyncStore store, PackRunner packs, ILogger<Facts
             if (next.Value >= store.Today)
                 return await PausedAsync(h, range, $"{next:yyyy-MM-dd} is today or later and is not synced yet.", ct);
 
-            open = new HisSyncDay { Id = Guid.NewGuid(), HospitalId = h.Id, RangeId = range.Id, Date = next.Value };
-            db.HisSyncDays.Add(open);
-            await db.SaveChangesAsync(ct);
+            // A day has one row per hospital. "Sync again" reopens it for only the parts it lacks (or skips it when it is up to date);
+            // a day never synced is read in full either way.
+            var known = await db.HisSyncDays.FirstOrDefaultAsync(d => d.HospitalId == h.Id && d.Date == next.Value, ct);
+            if (known is not null)
+            {
+                if (await ReopenAsync(db, h, range, known, ct)) return true;
+                open = known;
+            }
+            else
+            {
+                open = new HisSyncDay { Id = Guid.NewGuid(), HospitalId = h.Id, RangeId = range.Id, Date = next.Value };
+                db.HisSyncDays.Add(open);
+                await db.SaveChangesAsync(ct);
+            }
         }
         else if (open.Date >= store.Today)
             return await PausedAsync(h, range, $"{open.Date:yyyy-MM-dd} is today or later and is not synced yet.", ct);
 
         return await RunDayAsync(db, h, range, open, ct);
     }
+
+    /// <summary>
+    /// Take a day already in the table into this range. What it holds is its recorded parts (a day synced before parts
+    /// were kept holds the baseline; one with errors or failed holds nothing, so it is read again in full). Up to date:
+    /// the day is counted and nothing is read (true). Otherwise it reads only the missing parts, reusing its list of
+    /// episodes when it has one so HIS is not asked for it again (false: the caller runs the day).
+    /// </summary>
+    private async Task<bool> ReopenAsync(Verita.Infrastructure.Data.VeritaDbContext db, SyncHospital h, HisSyncRange range, HisSyncDay day, CancellationToken ct)
+    {
+        var held = day.Status switch
+        {
+            "DONE" => day.Sections is null ? new Dictionary<string, int>(FactSections.Baseline) : FactSections.Parse(day.Sections),
+            "DONE_WITH_ERRORS" => FactSections.Parse(day.Sections),
+            _ => [],
+        };
+        var missing = FactSections.Missing(held);
+        day.RangeId = range.Id;
+        if (missing.Count == 0)
+        {
+            day.Sections = FactSections.Format(held);
+            day.Needs = "";
+            range.DaysDone++;
+            await db.SaveChangesAsync(ct);
+            await store.LogAsync(h.Id, Kind, "INFO", $"{day.Date:yyyy-MM-dd} is up to date; nothing to read.", factDate: day.Date, ct: ct);
+            return true;
+        }
+
+        day.Sections = held.Count == 0 ? null : FactSections.Format(held);
+        day.Needs = held.Count == 0 ? null : FactSections.Format(missing);
+        day.Synced = 0; day.Failed = 0; day.Attempts = 0; day.Error = null;
+        day.StartedAt = null; day.FinishedAt = null;
+        var reads = Parts(day);
+        day.RefundsDone = reads is not null && !reads.Any(p => !FactSections.PerEpisode.Contains(p));
+        var perEpisode = reads is null || reads.Any(FactSections.PerEpisode.Contains);
+        var listed = day.Encounters > 0 && await db.HisSyncEncounters.AnyAsync(e => e.DayId == day.Id, ct);
+        if (perEpisode && listed && reads is not null)
+        {
+            // Reuse the day's list: every episode goes back to pending for the parts that are read.
+            await db.HisSyncEncounters.Where(e => e.DayId == day.Id)
+                .ExecuteUpdateAsync(u => u.SetProperty(e => e.Status, "PENDING").SetProperty(e => e.Attempts, 0)
+                    .SetProperty(e => e.Error, (string?)null).SetProperty(e => e.SyncedAt, (DateTime?)null), ct);
+            day.Status = "RUNNING";
+        }
+        else if (perEpisode)
+        {
+            // No usable list (never listed, or reading in full): list the day again.
+            await db.HisSyncEncounters.Where(e => e.DayId == day.Id).ExecuteDeleteAsync(ct);
+            day.Encounters = 0; day.Batches = 0;
+            day.Status = "PENDING";
+        }
+        else
+        {
+            // Only day-wide parts (refunds, admission requests): no batches.
+            await db.HisSyncEncounters.Where(e => e.DayId == day.Id && e.Status != "SYNCED")
+                .ExecuteUpdateAsync(u => u.SetProperty(e => e.Status, "SYNCED"), ct);
+            day.Status = "RUNNING";
+        }
+        await db.SaveChangesAsync(ct);
+        await store.LogAsync(h.Id, Kind, "INFO",
+            reads is null ? $"{day.Date:yyyy-MM-dd}: synced again in full (it had errors or no record of what it holds)."
+                : $"{day.Date:yyyy-MM-dd}: reading only {FactSections.Describe(reads)}.",
+            factDate: day.Date, ct: ct);
+        return false;
+    }
+
+    /// <summary>The parts this run of the day reads; null reads all of them.</summary>
+    private static IReadOnlySet<string>? Parts(HisSyncDay day) =>
+        day.Needs is null ? null : FactSections.Parse(day.Needs).Keys.ToHashSet(StringComparer.Ordinal);
+
+    private static IReadOnlySet<string>? PartsOf(HisSyncDay day, bool perEpisode) =>
+        Parts(day) is { } all ? all.Where(p => FactSections.PerEpisode.Contains(p) == perEpisode).ToHashSet(StringComparer.Ordinal) : null;
 
     /// <summary>Catalogue gates, once per day before it is listed. Not between batches.</summary>
     private static async Task<string?> CatalogueBlockedAsync(Verita.Infrastructure.Data.VeritaDbContext db, SyncHospital h, CancellationToken ct)
@@ -253,6 +335,10 @@ public sealed class FactsWorker(SyncStore store, PackRunner packs, ILogger<Facts
 
         day.Status = day.Failed > 0 || day.Error is not null ? "DONE_WITH_ERRORS" : "DONE";
         day.FinishedAt = DateTime.UtcNow;
+        // Record what the day now holds. With errors it keeps only what it held before, so "Sync again" reads the rest.
+        if (day.Status == "DONE")
+            day.Sections = FactSections.Format(FactSections.Merge(FactSections.Parse(day.Sections),
+                day.Needs is null ? FactSections.Current : FactSections.Parse(day.Needs)));
         range.DaysDone++;
         await db.SaveChangesAsync(ct);
         await store.LogAsync(h.Id, Kind, day.Status == "DONE" ? "INFO" : "WARN",
@@ -355,6 +441,7 @@ public sealed class FactsWorker(SyncStore store, PackRunner packs, ILogger<Facts
                 s = Day(h, day.Date);
                 s.Batch = new FactBatch([], [], [], links);
                 s.Part = FactsPart.DayRefunds;
+                s.Sections = PartsOf(day, perEpisode: false);
                 s.OnProgress = step => Progress(h, range, day, $"{day.Date:yyyy-MM-dd}: refunds — {step}", ct, day.Batches);
                 var read = await ReadPackAsync(h, s, "refunds", ct);
                 pack = read.Pack;
@@ -401,6 +488,7 @@ public sealed class FactsWorker(SyncStore store, PackRunner packs, ILogger<Facts
         var s = Day(h, day.Date);
         s.Batch = batch;
         s.Part = FactsPart.Batch;
+        s.Sections = PartsOf(day, perEpisode: true);
         s.OnProgress = step => Progress(h, range, day, $"{day.Date:yyyy-MM-dd}: batch {batchesDone + 1} of {day.Batches} — {step}", ct, batchesDone);
         var fresh = await ReadPackAsync(h, s, $"batch {batchNo}", ct);
         return (s, fresh.Pack, fresh.Seconds, false);
@@ -427,6 +515,7 @@ public sealed class FactsWorker(SyncStore store, PackRunner packs, ILogger<Facts
                 var s = Day(h, day.Date);
                 s.Batch = BatchOf(rows);
                 s.Part = FactsPart.Batch;
+                s.Sections = PartsOf(day, perEpisode: true);
                 _ahead.Add(new ReadAhead
                 {
                     HospitalId = h.Id, DayId = day.Id, BatchNo = n, Refund = false, Settings = s,
@@ -442,6 +531,7 @@ public sealed class FactsWorker(SyncStore store, PackRunner packs, ILogger<Facts
                 var s = Day(h, day.Date);
                 s.Batch = new FactBatch([], [], [], links);
                 s.Part = FactsPart.DayRefunds;
+                s.Sections = PartsOf(day, perEpisode: false);
                 _ahead.Add(new ReadAhead
                 {
                     HospitalId = h.Id, DayId = day.Id, BatchNo = 0, Refund = true, Settings = s,

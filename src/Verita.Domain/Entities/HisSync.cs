@@ -32,6 +32,8 @@ public class HisSyncRange
     public DateOnly ToDate { get; set; }
     /// <summary>QUEUED, RUNNING, DONE, DONE_WITH_ERRORS, FAILED, CANCELLED.</summary>
     public string Status { get; set; } = "QUEUED";
+    /// <summary>SYNC (first sync of the dates) or RESYNC ("Sync again": each day reads only the parts it lacks).</summary>
+    public string Mode { get; set; } = "SYNC";
     public int DaysTotal { get; set; }
     public int DaysDone { get; set; }
     public DateTime RequestedAt { get; set; }
@@ -100,6 +102,10 @@ public class HisSyncDay
     /// <summary>Failed attempts to list the day's encounters or to write its own refunds.</summary>
     public int Attempts { get; set; }
     public bool RefundsDone { get; set; }
+    /// <summary>The fact parts and versions the day holds, e.g. "encounters:2,billing:1" (HisExtract.FactSections); null before versions were kept.</summary>
+    public string? Sections { get; set; }
+    /// <summary>The parts this run of the day reads; null reads them all (a first sync).</summary>
+    public string? Needs { get; set; }
     public DateTime? StartedAt { get; set; }
     public DateTime? FinishedAt { get; set; }
     public string? Error { get; set; }

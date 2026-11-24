@@ -16,6 +16,8 @@ interface HisSyncSettings {
 interface HisSyncRange {
   id: string; fromDate: string; toDate: string; status: string; daysTotal: number; daysDone: number;
   requestedAt: string; requestedBy: string; startedAt?: string | null; finishedAt?: string | null; error?: string | null;
+  /** SYNC, or RESYNC for "Sync again" (each day reads only what it lacks). */
+  mode?: string;
 }
 interface HisSyncWorker {
   kind: 'CATALOGUE' | 'FACTS'; status: string; alive: boolean; step?: string | null; rangeId?: string | null; currentDate?: string | null;
@@ -26,7 +28,15 @@ interface HisSyncLog { id: string; at: string; kind: string; level: string; mess
 interface HisSyncDay {
   id: string; rangeId: string; date: string; status: string; encounters: number; batches: number; synced: number; failed: number;
   startedAt?: string | null; finishedAt?: string | null; error?: string | null;
+  /** Parts the day holds, e.g. "encounters:2,billing:1"; what its last run read ("" = up to date, null = everything). */
+  sections?: string | null; needs?: string | null;
 }
+/** Names of the fact parts (HisExtract.FactSections). */
+const PART_NAMES: Record<string, string> = {
+  encounters: 'episodes', billing: 'billing', consumption: 'consumption', refunds: 'refunds', admissionRequests: 'admission requests',
+};
+const partList = (text: string | null | undefined) =>
+  (text ?? '').split(',').map(x => x.split(':')[0].trim()).filter(Boolean).map(k => PART_NAMES[k] ?? k).join(', ');
 interface HisSyncCatalogueTable { entity: string; rows: number; created: number; updated: number; unchanged: number; rejected: number; }
 interface HisSyncCatalogueChange {
   id: string; detectedAt: string; status: string; created: number; updated: number; unchanged: number; rejected: number;
@@ -334,6 +344,11 @@ export class HisSync {
     { key: 'progress', label: 'Progress', type: 'bar', value: r => pct(r.synced + r.failed, r.encounters) ?? (r.status === 'DONE' ? 100 : 0), sortable: false },
     { key: 'synced', label: 'Synced', type: 'num', dp: 0 },
     { key: 'failed', label: 'Failed', type: 'num', dp: 0, blankZero: true, bad: r => r.failed > 0 },
+    {
+      key: 'needs', label: 'Last run read', sortable: false,
+      value: r => r.needs === '' ? 'Nothing (up to date)' : r.needs ? partList(r.needs) : 'Everything',
+      sub: r => r.sections ? `Holds: ${partList(r.sections)}` : null,
+    },
     { key: 'finishedAt', label: 'Finished', value: r => when(r.finishedAt) },
   ];
 
@@ -348,6 +363,7 @@ export class HisSync {
   rangeCols = computed<Col<HisSyncRange>[]>(() => {
     const cols: Col<HisSyncRange>[] = [
       { key: 'fromDate', label: 'Dates', value: r => r.fromDate === r.toDate ? r.fromDate : `${r.fromDate} – ${r.toDate}`, minWidth: '13rem', sub: r => r.error ?? null },
+      { key: 'mode', label: 'Kind', value: r => r.mode === 'RESYNC' ? 'Sync again' : 'Sync' },
       { key: 'daysTotal', label: 'Days', type: 'num', dp: 0 },
       { key: 'status', label: 'Status', type: 'chip', value: r => this.label(r.status), chip: r => this.kindOf(r.status) },
       { key: 'progress', label: 'Progress', type: 'bar', value: r => pct(r.daysDone, r.daysTotal) ?? 0, sortable: false },
@@ -357,6 +373,7 @@ export class HisSync {
     ];
     if (this.canEdit()) {
       cols.push({ key: 'remove', label: '', type: 'button', sortable: false, button: r => r.status === 'QUEUED' && !r.startedAt && !r.daysDone ? 'Remove' : null, onButton: r => void this.removeRange(r) });
+      cols.push({ key: 'again', label: '', type: 'button', sortable: false, button: r => (r.status === 'DONE' || r.status === 'DONE_WITH_ERRORS') && !this.pendingOver(r) ? 'Sync again' : null, onButton: r => void this.syncAgain(r) });
     }
     return cols;
   });
@@ -425,12 +442,30 @@ export class HisSync {
 
   addRange(): Promise<void> {
     return this.act(async () => {
-      const r = await firstValueFrom(this.api.post<HisSyncRange>(`his-sync/ranges?hospital=${encodeURIComponent(this.ctx.hospitalParam()!)}`,
-        { fromDate: this.from(), toDate: this.to() }));
+      const r = await this.postRange(this.from(), this.to(), false);
       this.from.set('');
       this.to.set('');
       return `Added ${r.fromDate} – ${r.toDate} (${r.daysTotal} day${r.daysTotal === 1 ? '' : 's'}) to sync.`;
     });
+  }
+
+  /** True while a queued or running range covers any of these dates (Sync again would be refused). */
+  private pendingOver(r: HisSyncRange): boolean {
+    return (this.data()?.ranges ?? []).some(x => (x.status === 'QUEUED' || x.status === 'RUNNING') && x.fromDate <= r.toDate && x.toDate >= r.fromDate);
+  }
+
+  /** "Sync again" on a synced range in Fact dates: each day reads only what it lacks; days that are up to date are skipped. */
+  syncAgain(range: HisSyncRange): Promise<void> {
+    if (!confirm(`Sync ${range.fromDate} – ${range.toDate} again? Each day reads from HIS only the data it does not have yet; days that are up to date are skipped.`)) return Promise.resolve();
+    return this.act(async () => {
+      const r = await this.postRange(range.fromDate, range.toDate, true);
+      return `Added ${r.fromDate} – ${r.toDate} to sync again.`;
+    });
+  }
+
+  private postRange(fromDate: string, toDate: string, resync: boolean): Promise<HisSyncRange> {
+    return firstValueFrom(this.api.post<HisSyncRange>(`his-sync/ranges?hospital=${encodeURIComponent(this.ctx.hospitalParam()!)}`,
+      { fromDate, toDate, resync }));
   }
 
   applyChange(c: HisSyncCatalogueChange): Promise<void> {

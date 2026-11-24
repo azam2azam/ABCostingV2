@@ -216,6 +216,7 @@ public sealed class VeritaDbContext(DbContextOptions<VeritaDbContext> options) :
         mb.Entity<HisSyncSetting>().Property(x => x.UpdatedBy).HasMaxLength(256);
         mb.Entity<HisSyncRange>().HasOne<Hospital>().WithMany().HasForeignKey(x => x.HospitalId).OnDelete(DeleteBehavior.Cascade);
         mb.Entity<HisSyncRange>().Property(x => x.Status).HasMaxLength(32);
+        mb.Entity<HisSyncRange>().Property(x => x.Mode).HasMaxLength(16).HasDefaultValue("SYNC");
         mb.Entity<HisSyncRange>().Property(x => x.RequestedBy).HasMaxLength(256);
         mb.Entity<HisSyncRange>().HasIndex(x => new { x.HospitalId, x.FromDate });
         mb.Entity<HisSyncWorker>().HasOne<Hospital>().WithMany().HasForeignKey(x => x.HospitalId).OnDelete(DeleteBehavior.Cascade);
@@ -231,6 +232,8 @@ public sealed class VeritaDbContext(DbContextOptions<VeritaDbContext> options) :
         mb.Entity<HisSyncDay>().HasOne<Hospital>().WithMany().HasForeignKey(x => x.HospitalId).OnDelete(DeleteBehavior.Cascade);
         mb.Entity<HisSyncDay>().HasOne<HisSyncRange>().WithMany().HasForeignKey(x => x.RangeId).OnDelete(DeleteBehavior.NoAction);
         mb.Entity<HisSyncDay>().Property(x => x.Status).HasMaxLength(32);
+        mb.Entity<HisSyncDay>().Property(x => x.Sections).HasMaxLength(400);
+        mb.Entity<HisSyncDay>().Property(x => x.Needs).HasMaxLength(400);
         mb.Entity<HisSyncDay>().HasIndex(x => new { x.HospitalId, x.Date }).IsUnique();
         mb.Entity<HisSyncEncounter>().HasOne<HisSyncDay>().WithMany().HasForeignKey(x => x.DayId).OnDelete(DeleteBehavior.Cascade);
         mb.Entity<HisSyncEncounter>().Property(x => x.Type).HasMaxLength(2);
