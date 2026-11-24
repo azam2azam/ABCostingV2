@@ -34,6 +34,9 @@ public sealed class Settings
     /// Null for the CLI, which extracts whole days. <see cref="From"/>/<see cref="To"/> stay the day either way.
     /// </summary>
     public FactBatch? Batch { get; set; }
+    /// <summary>The parts of the facts to read (<see cref="FactSections"/>); null reads everything.</summary>
+    public IReadOnlySet<string>? Sections { get; set; }
+    public bool Wants(string section) => Sections is null || Sections.Contains(section);
     /// <summary>What a facts run writes: the whole day, one batch of its encounters, or the day's own refunds.</summary>
     public FactsPart Part { get; set; } = FactsPart.Day;
     /// <summary>Lookups that do not change between batches of one day (item names), kept by the sync worker.</summary>

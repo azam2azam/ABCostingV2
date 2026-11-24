@@ -27,6 +27,7 @@
   <ItemGroup>
     <ProjectReference Include="..\..\src\Verita.Engine\Verita.Engine.csproj" />
     <ProjectReference Include="..\..\src\Verita.Infrastructure\Verita.Infrastructure.csproj" />
+    <ProjectReference Include="..\..\tools\HisExtract\HisExtract.csproj" />
   </ItemGroup>
 
 </Project>

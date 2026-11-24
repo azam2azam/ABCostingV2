@@ -10,7 +10,7 @@ public sealed record HisSyncSettingDto(bool CatalogueEnabled, string CatalogueTi
     DateTime? CatalogueLastRunAt, DateTime? UpdatedAt, string? UpdatedBy);
 
 public sealed record HisSyncRangeDto(Guid Id, string FromDate, string ToDate, string Status, int DaysTotal, int DaysDone,
-    DateTime RequestedAt, string RequestedBy, DateTime? StartedAt, DateTime? FinishedAt, string? Error);
+    DateTime RequestedAt, string RequestedBy, DateTime? StartedAt, DateTime? FinishedAt, string? Error, string Mode = "SYNC");
 
 public sealed record HisSyncWorkerDto(string Kind, string Status, bool Alive, string? Step, Guid? RangeId, string? CurrentDate,
     int BatchesDone, int? BatchesTotal, int RecordsDone, int? RecordsTotal, DateTime? StartedAt, DateTime? HeartbeatAt,
@@ -18,8 +18,9 @@ public sealed record HisSyncWorkerDto(string Kind, string Status, bool Alive, st
 
 public sealed record HisSyncLogDto(Guid Id, DateTime At, string Kind, string Level, string Message, string? Detail, string? FactDate, string Actor);
 
+/// <summary>Sections: the fact parts the day holds ("encounters:2,billing:1"); Needs: the parts its last run read ("" = up to date, null = all).</summary>
 public sealed record HisSyncDayDto(Guid Id, Guid RangeId, string Date, string Status, int Encounters, int Batches, int Synced, int Failed,
-    DateTime? StartedAt, DateTime? FinishedAt, string? Error);
+    DateTime? StartedAt, DateTime? FinishedAt, string? Error, string? Sections = null, string? Needs = null);
 
 public sealed record HisSyncCatalogueTableDto(string Entity, int Rows, int Created, int Updated, int Unchanged, int Rejected);
 
@@ -32,7 +33,8 @@ public sealed record HisSyncDto(string Hospital, string HospitalName, string? Hi
     HisSyncDayDto[] Days, HisSyncCatalogueChangeDto[] CatalogueChanges);
 
 public sealed record HisSyncSettingsBody(bool CatalogueEnabled, string CatalogueTime);
-public sealed record HisSyncRangeBody(string FromDate, string ToDate);
+/// <summary>Resync: "Sync again" — the dates may already be synced; each day reads only the parts it lacks.</summary>
+public sealed record HisSyncRangeBody(string FromDate, string ToDate, bool Resync = false);
 
 /// <summary>
 /// The VERITA side of HIS sync: settings, the catalogue "sync now" request and the fact date ranges a
@@ -87,7 +89,7 @@ public sealed class HisSyncService(IDbContextFactory<VeritaDbContext> factory, I
             log.Select(x => new HisSyncLogDto(x.Id, x.At, x.Kind, x.Level, x.Message, x.Detail, x.FactDate?.ToString("yyyy-MM-dd"), x.Actor)).ToArray(),
             errors,
             days.Select(d => new HisSyncDayDto(d.Id, d.RangeId, d.Date.ToString("yyyy-MM-dd"), d.Status, d.Encounters, d.Batches, d.Synced, d.Failed,
-                d.StartedAt, d.FinishedAt, d.Error)).ToArray(),
+                d.StartedAt, d.FinishedAt, d.Error, d.Sections, d.Needs)).ToArray(),
             changes.Select(c =>
             {
                 var f = c.ImportFileId is { } id && fileState.TryGetValue(id, out var x) ? x : null;
@@ -148,22 +150,28 @@ public sealed class HisSyncService(IDbContextFactory<VeritaDbContext> factory, I
 
         await using var db = await factory.CreateDbContextAsync(ct);
         var h = await HospitalAsync(db, p, hospital, ct);
+        // A first sync may not overlap any range; "Sync again" may cover synced dates, but not dates still queued or running.
+        var blocking = body.Resync ? ["QUEUED", "RUNNING"] : Covering;
         var overlap = await db.HisSyncRanges.AsNoTracking()
-            .Where(x => x.HospitalId == h.Id && Covering.Contains(x.Status) && x.FromDate <= to && x.ToDate >= from)
+            .Where(x => x.HospitalId == h.Id && blocking.Contains(x.Status) && x.FromDate <= to && x.ToDate >= from)
             .OrderBy(x => x.FromDate).FirstOrDefaultAsync(ct);
         if (overlap is not null)
-            throw AppError.Conflict("RANGE_OVERLAP",
-                $"{overlap.FromDate:yyyy-MM-dd} – {overlap.ToDate:yyyy-MM-dd} is already {(overlap.Status is "DONE" or "DONE_WITH_ERRORS" ? "synced" : "queued")}. Choose dates outside it.");
+            throw AppError.Conflict("RANGE_OVERLAP", overlap.Status is "DONE" or "DONE_WITH_ERRORS"
+                ? $"{overlap.FromDate:yyyy-MM-dd} – {overlap.ToDate:yyyy-MM-dd} is already synced. Choose dates outside it, or use Sync again to read only what those days lack."
+                : $"{overlap.FromDate:yyyy-MM-dd} – {overlap.ToDate:yyyy-MM-dd} is already queued. Wait for it to finish first.");
 
         var r = new HisSyncRange
         {
             Id = Guid.NewGuid(), HospitalId = h.Id, FromDate = from, ToDate = to, DaysTotal = days,
-            RequestedAt = DateTime.UtcNow, RequestedBy = p.Email,
+            RequestedAt = DateTime.UtcNow, RequestedBy = p.Email, Mode = body.Resync ? "RESYNC" : "SYNC",
         };
         db.HisSyncRanges.Add(r);
-        Log(db, h.Id, "FACTS", "INFO", $"Facts {from:yyyy-MM-dd} – {to:yyyy-MM-dd} added to sync ({days} day{(days == 1 ? "" : "s")}).", p.Email);
+        Log(db, h.Id, "FACTS", "INFO", body.Resync
+            ? $"Facts {from:yyyy-MM-dd} – {to:yyyy-MM-dd} added to sync again ({days} day{(days == 1 ? "" : "s")}; each day reads only what it lacks)."
+            : $"Facts {from:yyyy-MM-dd} – {to:yyyy-MM-dd} added to sync ({days} day{(days == 1 ? "" : "s")}).", p.Email);
         await db.SaveChangesAsync(ct);
-        await audit.WriteAsync(p, "CREATE", "HisSyncRange", r.Id.ToString(), $"HIS facts {from:yyyy-MM-dd} – {to:yyyy-MM-dd} · {h.Code}", ct: ct);
+        await audit.WriteAsync(p, "CREATE", "HisSyncRange", r.Id.ToString(),
+            $"HIS facts {(body.Resync ? "sync again " : "")}{from:yyyy-MM-dd} – {to:yyyy-MM-dd} · {h.Code}", ct: ct);
         return Dto(r);
     }
 
@@ -246,5 +254,5 @@ public sealed class HisSyncService(IDbContextFactory<VeritaDbContext> factory, I
         db.HisSyncLogs.Add(new HisSyncLog { Id = Guid.NewGuid(), HospitalId = hospitalId, At = DateTime.UtcNow, Kind = kind, Level = level, Message = message, Actor = actor });
 
     private static HisSyncRangeDto Dto(HisSyncRange r) => new(r.Id, r.FromDate.ToString("yyyy-MM-dd"), r.ToDate.ToString("yyyy-MM-dd"), r.Status,
-        r.DaysTotal, r.DaysDone, r.RequestedAt, r.RequestedBy, r.StartedAt, r.FinishedAt, r.Error);
+        r.DaysTotal, r.DaysDone, r.RequestedAt, r.RequestedBy, r.StartedAt, r.FinishedAt, r.Error, r.Mode);
 }

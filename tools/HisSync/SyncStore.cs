@@ -176,11 +176,15 @@ public sealed class SyncStore(IDbContextFactory<VeritaDbContext> factory, Verita
             await using var db = await factory.CreateDbContextAsync(ct);
             _ = await db.HisSyncDays.AnyAsync(ct);
             _ = await db.HisSyncCatalogueChanges.AnyAsync(ct);
+            // Columns and tables from later update scripts (deploy/iis/sql/updates): reading them fails until the script ran.
+            _ = await db.HisSyncDays.Select(d => d.Sections).FirstOrDefaultAsync(ct);
+            _ = await db.HisSyncRanges.Select(r => r.Mode).FirstOrDefaultAsync(ct);
+            _ = await db.AdmissionRequests.AnyAsync(ct);
             return true;
         }
         catch (SqlException ex)
         {
-            log.LogWarning("HIS sync tables are not in the VERITA database yet ({Message}). Run the schema script (deploy/iis/sql) against the VERITA database.", ex.Message);
+            log.LogWarning("HIS sync tables or columns are not in the VERITA database yet ({Message}). Run the schema script and the update scripts (deploy/iis/sql, deploy/iis/sql/updates) against the VERITA database.", ex.Message);
             return false;
         }
     }
